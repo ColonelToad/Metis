@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, warn};
+use std::sync::Arc;
 
 /// Trading signal from Python ML model
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,14 +83,15 @@ impl SignalServer {
     where
         F: Fn(TradingSignal) -> Result<ExecutionResponse> + Send + Sync + 'static,
     {
+        use std::sync::Arc;
         let listener = TcpListener::bind(self.addr).await?;
         info!("Signal server listening on {}", self.addr);
-
+        let handler = Arc::new(handler);
         loop {
             match listener.accept().await {
                 Ok((stream, peer_addr)) => {
                     info!("Accepted connection from {}", peer_addr);
-                    let handler = &handler;
+                    let handler = Arc::clone(&handler);
                     tokio::spawn(async move {
                         if let Err(e) = Self::handle_connection(stream, handler).await {
                             error!("Connection error: {}", e);
@@ -103,9 +105,9 @@ impl SignalServer {
         }
     }
 
-    async fn handle_connection<F>(mut stream: TcpStream, handler: &F) -> Result<()>
+    async fn handle_connection<F>(mut stream: TcpStream, handler: Arc<F>) -> Result<()>
     where
-        F: Fn(TradingSignal) -> Result<ExecutionResponse>,
+        F: Fn(TradingSignal) -> Result<ExecutionResponse> + Send + Sync + 'static,
     {
         loop {
             // Read message length (4 bytes)
@@ -123,18 +125,26 @@ impl SignalServer {
             let signal: TradingSignal = rmp_serde::from_slice(&msg_buf)?;
             info!("Received signal: {} ({:?})", signal.signal_id, signal.direction);
 
-            // Process signal
-            let response = handler(signal);
+            // Process signal and always serialize ExecutionResponse
+            let response = match handler(signal) {
+                Ok(resp) => resp,
+                Err(e) => ExecutionResponse {
+                    signal_id: String::from("error"),
+                    status: ExecutionStatus::Error,
+                    avg_fill_price: None,
+                    filled_quantity: 0.0,
+                    latency_ms: 0,
+                    error_message: Some(format!("Handler error: {}", e)),
+                },
+            };
 
             // Send response
             let response_bytes = rmp_serde::to_vec(&response)?;
             let response_len = (response_bytes.len() as u32).to_be_bytes();
-            
             stream.write_all(&response_len).await?;
             stream.write_all(&response_bytes).await?;
             stream.flush().await?;
         }
-
         Ok(())
     }
 }

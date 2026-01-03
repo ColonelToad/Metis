@@ -1,3 +1,5 @@
+mod csv_parser;
+pub use csv_parser::CsvTickParser;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use ordered_float::OrderedFloat;
@@ -257,6 +259,9 @@ mod tests {
         book.process_event(event).unwrap();
         
         assert_eq!(book.best_bid(), Some((2.500, 100.0)));
+
+
+
         assert_eq!(book.best_ask(), Some((2.505, 150.0)));
         assert_eq!(book.mid_price(), Some(2.5025));
         

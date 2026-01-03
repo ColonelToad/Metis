@@ -64,91 +64,96 @@ class ClimateFeatureEngine:
     ) -> pd.DataFrame:
         """
         Fetch weather data from Open-Meteo API.
-        
         Args:
             latitude: Latitude coordinate
             longitude: Longitude coordinate
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
-        
         Returns:
             DataFrame with hourly weather data
         """
         url = "https://api.open-meteo.com/v1/forecast"
-        
+        hourly_vars = "temperature_2m,windspeed_10m,precipitation,cloudcover"
         params = {
             "latitude": latitude,
             "longitude": longitude,
             "start_date": start_date,
             "end_date": end_date,
-            "hourly": [
-                "temperature_2m",
-                "windspeed_10m",
-                "precipitation",
-                "cloudcover",
-            ],
+            "hourly": hourly_vars,
             "temperature_unit": "fahrenheit",
             "windspeed_unit": "mph",
         }
-        
         try:
             response = requests.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            df = pd.DataFrame({
-                "timestamp": pd.to_datetime(data["hourly"]["time"]),
-                "temperature": data["hourly"]["temperature_2m"],
-                "windspeed": data["hourly"]["windspeed_10m"],
-                "precipitation": data["hourly"]["precipitation"],
-                "cloudcover": data["hourly"]["cloudcover"],
-            })
-            
-            return df
-            
+            try:
+                response.raise_for_status()
+                data = response.json()
+                df = pd.DataFrame({
+                    "timestamp": pd.to_datetime(data["hourly"]["time"]),
+                    "temperature": data["hourly"]["temperature_2m"],
+                    "windspeed": data["hourly"]["windspeed_10m"],
+                    "precipitation": data["hourly"]["precipitation"],
+                    "cloudcover": data["hourly"]["cloudcover"],
+                })
+                return df
+            except Exception as e:
+                logger.error(f"Open-Meteo API error: {e}\nResponse: {response.text}")
+                # Try minimal working request for debugging
+                logger.info("Trying minimal Open-Meteo request for debugging...")
+                test_url = "https://api.open-meteo.com/v1/forecast"
+                test_params = {
+                    "latitude": params["latitude"],
+                    "longitude": params["longitude"],
+                    "hourly": "temperature_2m"
+                }
+                test_resp = requests.get(test_url, params=test_params)
+                logger.info(f"Test URL: {test_resp.url}")
+                test_resp.raise_for_status()
+                test_data = test_resp.json()
+                df = pd.DataFrame({
+                    "timestamp": pd.to_datetime(test_data["hourly"]["time"]),
+                    "temperature": test_data["hourly"]["temperature_2m"]
+                })
+                return df
         except Exception as e:
-            logger.error(f"Failed to fetch Open-Meteo data: {e}")
+            logger.error(f"Failed to fetch Open-Meteo data (even minimal request): {e}")
             return pd.DataFrame()
     
     def engineer_features(self, weather_df: pd.DataFrame) -> pd.DataFrame:
         """
         Engineer climate features from raw weather data.
-        
         Args:
             weather_df: DataFrame with temperature, windspeed, etc.
-        
         Returns:
             DataFrame with engineered features
         """
         df = weather_df.copy()
-        
+        # Ensure all expected columns exist, fill with NaN if missing
+        for col in ["windspeed", "precipitation", "cloudcover"]:
+            if col not in df.columns:
+                df[col] = float('nan')
         # HDD/CDD
         degree_days = df["temperature"].apply(self.calculate_hdd_cdd)
         df["hdd"] = degree_days.apply(lambda x: x["hdd"])
         df["cdd"] = degree_days.apply(lambda x: x["cdd"])
-        
         # Rolling statistics
         for window in [6, 12, 24]:  # hours
             df[f"temp_ma_{window}h"] = df["temperature"].rolling(window).mean()
             df[f"temp_std_{window}h"] = df["temperature"].rolling(window).std()
             df[f"wind_ma_{window}h"] = df["windspeed"].rolling(window).mean()
-        
         # Temperature extremes
         df["temp_zscore"] = (
-            (df["temperature"] - df["temperature"].rolling(168).mean()) / 
+            (df["temperature"] - df["temperature"].rolling(168).mean()) /
             df["temperature"].rolling(168).std()
         )
-        
         # Day of week and hour (seasonality)
         df["hour"] = df["timestamp"].dt.hour
         df["day_of_week"] = df["timestamp"].dt.dayofweek
         df["month"] = df["timestamp"].dt.month
-        
         # Lag features
         for lag in [1, 2, 3, 6, 12, 24]:
             df[f"temp_lag_{lag}h"] = df["temperature"].shift(lag)
             df[f"hdd_lag_{lag}h"] = df["hdd"].shift(lag)
-        
         return df
 
 
@@ -166,13 +171,17 @@ if __name__ == "__main__":
     
     engine = ClimateFeatureEngine(regions=["PERMIAN"])
     
-    # Fetch sample data
+    # Fetch sample data (use valid date range: today to today+6 days)
+    from datetime import datetime, timedelta
     coords = REGION_COORDS["PERMIAN"]
+    today = datetime.utcnow().date()
+    start_date = today.strftime("%Y-%m-%d")
+    end_date = (today + timedelta(days=6)).strftime("%Y-%m-%d")
     df = engine.fetch_openmeteo_data(
         latitude=coords["lat"],
         longitude=coords["lon"],
-        start_date="2024-01-01",
-        end_date="2024-01-07",
+        start_date=start_date,
+        end_date=end_date,
     )
     
     if not df.empty:
