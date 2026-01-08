@@ -15,9 +15,8 @@ Metis is a production-oriented quantitative trading system that combines climate
 - **Rust 1.75+**: Low-latency execution engine, order book simulator, FIX client
 - **Node.js 20+**: React frontend tooling
 - **Tauri 2.0**: Desktop application framework
-- **TimescaleDB**: Time-series database for market data
-- **PostgreSQL 15**: Relational data storage
-- **Vector DB**: Milvus or Weaviate for RAG
+- **LanceDB (default)**: Local vector database for RAG
+- **PostgreSQL (optional)**: Relational/time-series storage (Timescale extension optional)
 
 ## Project Structure
 ```
@@ -39,7 +38,7 @@ metis/
 ├── ui/                    # Tauri + React frontend
 │   ├── src-tauri/         # Rust backend
 │   └── src/               # React components
-└── infrastructure/        # Docker, DB schemas, deployment
+└── infrastructure/        # Optional DB schemas (no Docker)
 ```
 
 ## Quick Start
@@ -48,23 +47,21 @@ metis/
 - Python 3.11+
 - Rust 1.75+ (install via rustup)
 - Node.js 20+
-- Docker & Docker Compose
+- LanceDB (Python), optional PostgreSQL
 - Git
 
 ### Initial Setup (First 3 Days)
 
-#### Day 1: Data Infrastructure
+#### Day 1: Data & Research Environment
 ```bash
-# Start databases
-cd infrastructure
-docker-compose up -d
-
 # Install Python dependencies
-cd ../research
+cd research
 pip install -r requirements.txt
 
-# Test data ingestion
-python data_ingest/test_connection.py
+# Install RAG dependencies
+python -m pip install lancedb pyarrow sentence-transformers loguru
+
+# Optional: configure local PostgreSQL (set DB_URL in .env)
 ```
 
 #### Day 2: Rust Order Book Parser
@@ -100,7 +97,7 @@ python train_baseline_lstm.py --data-source open-meteo
 - [ ] Rust execution layer <5% TWAP tracking error
 - [ ] RAG retrieval 90%+ accuracy on signal explanations
 - [ ] Full UI with synchronized playback
-- [ ] Reproducible setup with Docker Compose
+- [ ] Reproducible setup without Docker (LanceDB default)
 - [ ] Technical writeup with performance profiling
 
 ## Development Roadmap

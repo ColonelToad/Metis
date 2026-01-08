@@ -8,9 +8,22 @@ import json
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
+import os
+import sys
 from sentence_transformers import SentenceTransformer
-from pymilvus import connections, Collection, CollectionSchema, FieldSchema, DataType, utility
+try:
+    from pymilvus import connections, Collection, CollectionSchema, FieldSchema, DataType, utility
+except Exception:
+    connections = None
+    Collection = None
+    CollectionSchema = None
+    FieldSchema = None
+    DataType = None
+    utility = None
 from loguru import logger
+from pathlib import Path as _Path
+sys.path.append(str(_Path(__file__).resolve().parents[1]))
+from rag.vectorstore.lancedb_store import LanceVectorStore
 
 
 @dataclass
@@ -28,13 +41,14 @@ class Document:
 class RAGPipeline:
     """
     RAG pipeline for retrieving relevant policy/climate documents.
-    Uses Milvus for vector storage and sentence-transformers for embeddings.
+    Uses LanceDB (default) or Milvus for vector storage and sentence-transformers for embeddings.
     """
     
     def __init__(
         self,
         collection_name: str = "metis_documents",
         embedding_model: str = "all-MiniLM-L6-v2",
+        vector_backend: str = None,  # "lance" (default) or "milvus"
         milvus_host: str = "localhost",
         milvus_port: int = 19530,
     ):
@@ -42,12 +56,24 @@ class RAGPipeline:
         self.embedding_model = SentenceTransformer(embedding_model)
         self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
         
-        # Connect to Milvus
-        connections.connect("default", host=milvus_host, port=milvus_port)
-        logger.info(f"Connected to Milvus at {milvus_host}:{milvus_port}")
-        
-        # Initialize collection
-        self._init_collection()
+        # Backend selection
+        self.vector_backend = (vector_backend or os.getenv("VECTOR_BACKEND", "lance")).lower()
+        self.collection = None
+        self.lance = None
+
+        if self.vector_backend == "milvus":
+            if connections is None:
+                raise RuntimeError("Milvus backend selected but pymilvus is not installed. Install pymilvus or set VECTOR_BACKEND=lance.")
+            connections.connect("default", host=milvus_host, port=19530)
+            logger.info(f"Connected to Milvus at {milvus_host}:{milvus_port}")
+            self._init_collection()
+        else:
+            # Default to LanceDB; pick mode-specific path
+            mode = os.getenv("METIS_MODE", "DEV").upper()
+            base_dir = _Path(__file__).resolve().parents[1]
+            db_dir = base_dir / ("data/lance" if mode == "REAL" else "data/dev/lance")
+            self.lance = LanceVectorStore(db_dir, self.collection_name, self.embedding_dim)
+            logger.info(f"Connected to LanceDB at {db_dir}")
     
     def _init_collection(self):
         """Initialize Milvus collection for document embeddings."""
@@ -93,19 +119,30 @@ class RAGPipeline:
         try:
             # Generate embedding
             embedding = self.embedding_model.encode(doc.content)
-            
-            # Insert into Milvus
-            entities = [
-                [doc.doc_id],
-                [embedding.tolist()],
-                [doc.title],
-                [doc.content[:10000]],  # Truncate if too long
-                [doc.source],
-                [doc.published_date.isoformat()],
-                [doc.url or ""],
-            ]
-            
-            self.collection.insert(entities)
+
+            if self.vector_backend == "milvus":
+                entities = [
+                    [doc.doc_id],
+                    [embedding.tolist()],
+                    [doc.title],
+                    [doc.content[:10000]],
+                    [doc.source],
+                    [doc.published_date.isoformat()],
+                    [doc.url or ""],
+                ]
+                self.collection.insert(entities)
+            else:
+                self.lance.upsert([
+                    {
+                        "id": doc.doc_id,
+                        "embedding": embedding.tolist(),
+                        "title": doc.title,
+                        "content": doc.content[:10000],
+                        "source": doc.source,
+                        "published_date": doc.published_date.isoformat(),
+                        "url": doc.url or "",
+                    }
+                ])
             logger.debug(f"Indexed document: {doc.doc_id}")
             return True
             
@@ -132,13 +169,26 @@ class RAGPipeline:
             dates = [doc.published_date.isoformat() for doc in batch]
             urls = [doc.url or "" for doc in batch]
             
-            entities = [ids, embeddings.tolist(), titles, contents, sources, dates, urls]
-            
-            self.collection.insert(entities)
+            if self.vector_backend == "milvus":
+                entities = [ids, embeddings.tolist(), titles, contents, sources, dates, urls]
+                self.collection.insert(entities)
+            else:
+                payload = []
+                for j, doc in enumerate(batch):
+                    payload.append({
+                        "id": doc.doc_id,
+                        "embedding": embeddings[j].tolist(),
+                        "title": doc.title,
+                        "content": doc.content[:10000],
+                        "source": doc.source,
+                        "published_date": doc.published_date.isoformat(),
+                        "url": doc.url or "",
+                    })
+                self.lance.upsert(payload)
             logger.info(f"Indexed batch {i // batch_size + 1}: {len(batch)} documents")
         
-        # Flush to ensure data is persisted
-        self.collection.flush()
+        if self.vector_backend == "milvus":
+            self.collection.flush()
     
     def retrieve(
         self,
@@ -160,37 +210,34 @@ class RAGPipeline:
         # Generate query embedding
         query_embedding = self.embedding_model.encode(query)
         
-        # Build search expression
-        expr = None
-        if source_filter:
-            expr = f'source == "{source_filter}"'
-        
-        # Search
-        search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
-        results = self.collection.search(
-            data=[query_embedding.tolist()],
-            anns_field="embedding",
-            param=search_params,
-            limit=top_k,
-            expr=expr,
-            output_fields=["title", "content", "source", "published_date", "url"]
-        )
-        
-        # Format results
-        retrieved_docs = []
-        for hits in results:
-            for hit in hits:
-                retrieved_docs.append({
-                    "doc_id": hit.id,
-                    "score": float(hit.distance),
-                    "title": hit.entity.get("title"),
-                    "content": hit.entity.get("content"),
-                    "source": hit.entity.get("source"),
-                    "published_date": hit.entity.get("published_date"),
-                    "url": hit.entity.get("url"),
-                })
-        
-        return retrieved_docs
+        if self.vector_backend == "milvus":
+            expr = None
+            if source_filter:
+                expr = f'source == "{source_filter}"'
+            search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
+            results = self.collection.search(
+                data=[query_embedding.tolist()],
+                anns_field="embedding",
+                param=search_params,
+                limit=top_k,
+                expr=expr,
+                output_fields=["title", "content", "source", "published_date", "url"]
+            )
+            retrieved_docs = []
+            for hits in results:
+                for hit in hits:
+                    retrieved_docs.append({
+                        "doc_id": hit.id,
+                        "score": float(hit.distance),
+                        "title": hit.entity.get("title"),
+                        "content": hit.entity.get("content"),
+                        "source": hit.entity.get("source"),
+                        "published_date": hit.entity.get("published_date"),
+                        "url": hit.entity.get("url"),
+                    })
+            return retrieved_docs
+        else:
+            return self.lance.search(query_embedding.tolist(), top_k=top_k, source_filter=source_filter)
     
     def generate_explanation(
         self,
