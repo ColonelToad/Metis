@@ -10,6 +10,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+import time
 
 # Add project root for imports
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -30,10 +31,11 @@ SERIES_IDS = {
     'PCE': 'personal_consumption',
 }
 
-def fetch_fred_series(series_id, start_date):
-    """Fetch a single FRED series"""
+def fetch_fred_series(series_id, start_date, max_retries=3):
+    """Fetch a single FRED series with retry logic"""
     if not rc.require_real_mode(f"FRED {series_id}"):
         return pd.DataFrame()
+    
     url = f"https://api.stlouisfed.org/fred/series/observations"
     params = {
         'series_id': series_id,
@@ -42,15 +44,35 @@ def fetch_fred_series(series_id, start_date):
         'observation_start': start_date.strftime('%Y-%m-%d')
     }
     
-    response = requests.get(url, params=params)
-    response.raise_for_status()
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            
+            data = response.json()
+            df = pd.DataFrame(data['observations'])
+            df['timestamp'] = pd.to_datetime(df['date'])
+            df['value'] = pd.to_numeric(df['value'], errors='coerce')
+            
+            return df[['timestamp', 'value']]
+        
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code >= 500:
+                # Server error - retry with exponential backoff
+                wait_time = 2 ** attempt  # 1s, 2s, 4s
+                print(f"FRED server error for {series_id} (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                # Client error (4xx) - don't retry
+                print(f"FRED client error for {series_id}: {e}")
+                return pd.DataFrame()
+        
+        except Exception as e:
+            print(f"Failed to fetch {series_id}: {e}")
+            return pd.DataFrame()
     
-    data = response.json()
-    df = pd.DataFrame(data['observations'])
-    df['timestamp'] = pd.to_datetime(df['date'])
-    df['value'] = pd.to_numeric(df['value'], errors='coerce')
-    
-    return df[['timestamp', 'value']]
+    print(f"Failed to fetch {series_id} after {max_retries} attempts")
+    return pd.DataFrame()
 
 if __name__ == "__main__":
     rc.log_mode("FRED")

@@ -43,15 +43,13 @@ def fetch_traffic_near_node(node_name, coords, radius_km=20):
         print("Warning: TOMTOM_API_KEY not set in .env")
         return None
     
-    # Use Flow API to get traffic speeds
-    url = "https://api.tomtom.com/traffic/services/4/flowSegmentData/json"
+    # Use Flow Segment Data API v4
+    # Format: /traffic/services/{versionNumber}/flowSegmentData/{style}/{zoom}/{format}
+    url = f"https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json"
     
     params = {
         'key': TOMTOM_API_KEY,
         'point': f"{coords['lat']},{coords['lon']}",
-        'thickness': 10,  # 10km radius
-        'minZoom': 10,
-        'maxZoom': 18,
         'unit': 'KMPH'
     }
     
@@ -62,28 +60,28 @@ def fetch_traffic_near_node(node_name, coords, radius_km=20):
         data = response.json()
         
         if 'flowSegmentData' in data:
-            segments = data['flowSegmentData']
+            flow = data['flowSegmentData']
             
-            # Aggregate traffic metrics
-            speeds = [s.get('currentSpeed', 0) for s in segments]
-            free_flows = [s.get('freeFlowSpeed', 0) for s in segments]
+            # Extract speed metrics
+            current_speed = flow.get('currentSpeed', 0)
+            free_flow_speed = flow.get('freeFlowSpeed', 0)
+            current_travel_time = flow.get('currentTravelTime', 0)
+            free_flow_travel_time = flow.get('freeFlowTravelTime', 0)
             
-            if speeds:
-                avg_speed = sum(speeds) / len(speeds)
-                avg_free_flow = sum(free_flows) / len(free_flows)
-                congestion_level = 1.0 - (avg_speed / avg_free_flow) if avg_free_flow > 0 else 0
-                
-                return {
-                    'timestamp': datetime.now(),
-                    'node': node_name,
-                    'region': coords['region'],
-                    'lat': coords['lat'],
-                    'lon': coords['lon'],
-                    'avg_speed_kmph': avg_speed,
-                    'free_flow_speed_kmph': avg_free_flow,
-                    'congestion_level': congestion_level,
-                    'num_segments': len(segments),
-                }
+            congestion_level = 1.0 - (current_speed / free_flow_speed) if free_flow_speed > 0 else 0
+            
+            return {
+                'timestamp': datetime.now(),
+                'node': node_name,
+                'region': coords['region'],
+                'lat': coords['lat'],
+                'lon': coords['lon'],
+                'current_speed_kmph': current_speed,
+                'free_flow_speed_kmph': free_flow_speed,
+                'congestion_level': congestion_level,
+                'current_travel_time_sec': current_travel_time,
+                'free_flow_travel_time_sec': free_flow_travel_time,
+            }
         
     except Exception as e:
         print(f"Error fetching traffic for {node_name}: {e}")
@@ -114,7 +112,7 @@ if __name__ == "__main__":
         
         if traffic_data:
             all_traffic.append(traffic_data)
-            print(f"{node_name:30} Congestion: {traffic_data['congestion_level']:.2%} | Speed: {traffic_data['avg_speed_kmph']:.1f} km/h")
+            print(f"{node_name:30} Congestion: {traffic_data['congestion_level']:.2%} | Speed: {traffic_data['current_speed_kmph']:.1f} km/h")
         else:
             print(f"{node_name:30} [Failed to fetch]")
     

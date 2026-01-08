@@ -1,0 +1,290 @@
+/* Trading Platform Styles */
+.app {
+  width: 100vw;
+  height: 100vh;
+  background: #0a0a0a;
+  color: #e0e0e0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background: #111;
+  border-bottom: 1px solid #222;
+  flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+  color: #00ff88;
+}
+
+.mode-badge {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mode-badge[data-mode="dev"] {
+  background: #ff6b6b33;
+  color: #ff6b6b;
+  border: 1px solid #ff6b6b;
+}
+
+.mode-badge[data-mode="real"] {
+  background: #00ff8833;
+  color: #00ff88;
+  border: 1px solid #00ff88;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.refresh-btn {
+  padding: 8px 16px;
+  background: #00ff88;
+  color: #000;
+  border: none;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  background: #00dd77;
+  transform: translateY(-1px);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.last-update {
+  font-size: 12px;
+  color: #666;
+}
+
+/* Grid Layout */
+.main-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 2fr 1fr;
+  gap: 1px;
+  background: #222;
+  padding: 1px;
+  overflow: hidden;
+}
+
+.panel {
+  background: #0f0f0f;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chart-panel {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.news-panel {
+  grid-column: 2;
+  grid-row: 1 / 3;
+}
+
+.data-panel {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #151515;
+  border-bottom: 1px solid #222;
+  flex-shrink: 0;
+}
+
+.panel-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  color: #888;
+}
+
+/* Chart Panel */
+.chart-panel {
+  padding: 16px;
+}
+
+/* Data Grid */
+.data-grid-container {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.data-grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-grid thead {
+  background: #151515;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.data-grid th {
+  padding: 12px 16px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+  border-bottom: 1px solid #222;
+}
+
+.data-grid td {
+  padding: 12px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.data-grid .price {
+  font-weight: 600;
+  color: #00ff88;
+}
+
+.data-grid .positive {
+  color: #00ff88;
+}
+
+.data-grid .negative {
+  color: #ff6b6b;
+}
+
+/* News Feed */
+.news-feed {
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.news-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  background: #151515;
+  border-radius: 4px;
+  border-left: 3px solid #333;
+  transition: all 0.2s;
+}
+
+.news-item:hover {
+  background: #1a1a1a;
+}
+
+.news-item.alert {
+  border-left-color: #ff6b6b;
+}
+
+.news-item.signal {
+  border-left-color: #00ff88;
+}
+
+.news-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  padding-top: 2px;
+}
+
+.news-content {
+  flex: 1;
+}
+
+.news-title {
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+  color: #e0e0e0;
+}
+
+.news-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+}
+
+.news-time {
+  color: #666;
+}
+
+.news-sentiment {
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+
+.news-sentiment.bullish {
+  background: #00ff8833;
+  color: #00ff88;
+}
+
+.news-sentiment.bearish {
+  background: #ff6b6b33;
+  color: #ff6b6b;
+}
+
+.news-sentiment.neutral {
+  background: #66666633;
+  color: #888;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
