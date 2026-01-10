@@ -1,0 +1,63 @@
+         182708 function calls (178772 primitive calls) in 1.798 seconds
+
+   Ordered by: cumulative time
+   List reduced from 1482 to 50 due to restriction <50>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        6    0.000    0.000    1.798    0.300 C:\Users\legot\Metis\research\profiling\profile_features.py:21(time_section)
+        1    0.010    0.010    0.945    0.945 C:\Users\legot\Metis\research\features\engineer_features.py:277(engineer_features)
+        2    0.003    0.002    0.583    0.291 C:\Users\legot\Metis\research\features\engineer_features.py:88(load_eia_features)
+        2    0.003    0.001    0.418    0.209 C:\Users\legot\Metis\research\features\engineer_features.py:156(load_fred_features)
+       12    0.001    0.000    0.363    0.030 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py:10840(merge)
+       12    0.001    0.000    0.362    0.030 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\reshape\merge.py:135(merge)
+        1    0.000    0.000    0.313    0.313 C:\Users\legot\Metis\research\profiling\profile_features.py:40(<lambda>)
+       12    0.011    0.001    0.309    0.026 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\io\sql.py:572(read_sql)
+       12    0.005    0.000    0.287    0.024 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\reshape\merge.py:882(get_result)
+       12    0.000    0.000    0.286    0.024 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\io\sql.py:1791(read_query)
+  201/153    0.010    0.000    0.263    0.002 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py:4282(__setitem__)
+        2    0.002    0.001    0.261    0.131 C:\Users\legot\Metis\research\features\engineer_features.py:48(load_price_data)
+       12    0.002    0.000    0.239    0.020 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\reshape\merge.py:825(_reindex_and_concat)
+      200    0.003    0.000    0.238    0.001 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py:4525(_set_item)
+        2    0.003    0.001    0.221    0.111 C:\Users\legot\Metis\research\features\engineer_features.py:236(load_congress_features)
+        1    0.000    0.000    0.211    0.211 C:\Users\legot\Metis\research\profiling\profile_features.py:41(<lambda>)
+      200    0.003    0.000    0.202    0.001 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py:4492(_set_item_mgr)
+       62    0.002    0.000    0.190    0.003 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\managers.py:576(copy)
+       22    0.169    0.008    0.182    0.008 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\tools\numeric.py:47(to_numeric)
+       14    0.000    0.000    0.176    0.013 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\reshape\concat.py:157(concat)
+       14    0.002    0.000    0.171    0.012 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\reshape\concat.py:622(get_result)
+       12    0.001    0.000    0.163    0.014 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\tools\datetimes.py:678(to_datetime)
+      175    0.014    0.000    0.160    0.001 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\managers.py:317(apply)
+       12    0.000    0.000    0.150    0.012 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\concat.py:94(concatenate_managers)
+       12    0.000    0.000    0.148    0.012 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\sqlalchemy\engine\result.py:1319(fetchall)
+       12    0.038    0.003    0.148    0.012 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\sqlalchemy\engine\result.py:543(_allrows)
+       12    0.000    0.000    0.145    0.012 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\concat.py:202(_maybe_reindex_columns_na_proxy)
+        2    0.001    0.001    0.145    0.072 C:\Users\legot\Metis\research\features\engineer_features.py:200(load_tomtom_features)
+      177    0.039    0.000    0.120    0.001 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\series.py:392(__init__)
+       51    0.010    0.000    0.117    0.002 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\managers.py:1801(_consolidate_inplace)
+        1    0.001    0.001    0.116    0.116 C:\Users\legot\Metis\research\profiling\profile_features.py:43(<lambda>)
+       12    0.001    0.000    0.113    0.009 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\tools\datetimes.py:316(_convert_listlike_datetimes)
+      299    0.008    0.000    0.111    0.000 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py:4073(__getitem__)
+       12    0.000    0.000    0.110    0.009 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\sqlalchemy\engine\cursor.py:2251(_fetchall_impl)
+       12    0.004    0.000    0.110    0.009 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\sqlalchemy\engine\cursor.py:1191(fetchall)
+      140    0.003    0.000    0.107    0.001 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\frame.py:4481(_iset_item_mgr)
+       12    0.105    0.009    0.105    0.009 {method 'fetchall' of 'sqlite3.Cursor' objects}
+       12    0.001    0.000    0.103    0.009 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\io\sql.py:196(_wrap_result)
+       22    0.001    0.000    0.103    0.005 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\managers.py:2278(_consolidate)
+       66    0.005    0.000    0.097    0.001 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\managers.py:1366(insert)
+      188    0.020    0.000    0.096    0.001 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\indexes\base.py:475(__new__)
+      140    0.042    0.000    0.094    0.001 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\managers.py:1085(iset)
+       62    0.003    0.000    0.090    0.001 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\generic.py:7164(fillna)
+       12    0.032    0.003    0.089    0.007 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\io\sql.py:162(_convert_arrays_to_dataframe)
+       49    0.048    0.001    0.087    0.002 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\managers.py:2295(_merge_blocks)
+       12    0.016    0.001    0.087    0.007 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\tools\datetimes.py:128(_guess_datetime_format_for_array)
+       38    0.003    0.000    0.084    0.002 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\internals\managers.py:642(reindex_indexer)
+      409    0.030    0.000    0.084    0.000 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\construction.py:517(sanitize_array)
+       12    0.001    0.000    0.081    0.007 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\tools\datetimes.py:211(_maybe_cache)
+       74    0.002    0.000    0.081    0.001 C:\Users\legot\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\generic.py:7083(_pad_or_backfill)
+
+
+
+
+[PROFILE] Timings (s):
+price=0.142, eia=0.313, fred=0.211, tomtom=0.070, congress=0.116, total=0.945
+peak_memory=47.1 MB

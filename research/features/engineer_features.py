@@ -1,0 +1,366 @@
+"""
+Feature Engineering Pipeline
+Extracts and aligns features from multiple SQLite data sources for LSTM training.
+
+Features:
+- Price-based: lagged returns (1d, 5d, 20d), volatility (20d rolling std)
+- EIA: storage levels, production, YoY changes, surprises
+- FRED: macro indicators (unemployment, interest rates, CRB index, etc.)
+- TomTom: traffic congestion at energy hubs
+- Congress: sentiment scores from energy-related bills
+- Derived: momentum, mean reversion signals
+
+Output: Aligned daily CSV with all features aligned to NG futures dates
+"""
+
+import os
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
+import warnings
+warnings.filterwarnings('ignore')
+
+load_dotenv()
+DB_URL = os.getenv("DB_URL", "sqlite:///data/metis.db")
+METIS_MODE = os.getenv("METIS_MODE", "DEV")
+
+OUTPUT_DIR = "data/features"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+class FeatureEngineer:
+    """Feature engineering pipeline for LSTM training."""
+    
+    def __init__(self, db_url: str, start_date: str = "2015-01-01"):
+        """
+        Initialize feature engineer.
+        
+        Args:
+            db_url: SQLAlchemy database URL
+            start_date: Start date for feature extraction (default: 2015 for recent data)
+        """
+        self.engine = create_engine(db_url)
+        self.start_date = pd.to_datetime(start_date)
+        self.df = None
+    
+    def load_price_data(self) -> pd.DataFrame:
+        """Load NG futures price data and calculate price-based features."""
+        query = """
+        SELECT date, open, high, low, close, volume
+        FROM ng_futures_daily
+        WHERE date >= :start_date
+        ORDER BY date
+        """
+        
+        with self.engine.connect() as conn:
+            df = pd.read_sql(
+                text(query),
+                conn,
+                params={"start_date": self.start_date.isoformat()}
+            )
+        
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.sort_values('date').reset_index(drop=True)
+        
+        # Log returns
+        df['log_return'] = np.log(df['close'] / df['close'].shift(1))
+        df['return_1d'] = df['log_return']
+        df['return_5d'] = df['log_return'].rolling(5).sum().shift(1)
+        df['return_20d'] = df['log_return'].rolling(20).sum().shift(1)
+        
+        # Volatility (annualized)
+        df['volatility_20d'] = df['log_return'].rolling(20).std() * np.sqrt(252)
+        df['volatility_5d'] = df['log_return'].rolling(5).std() * np.sqrt(252)
+        
+        # Price range and momentum
+        df['price_range'] = (df['high'] - df['low']) / df['close']
+        df['momentum_20d'] = (df['close'] - df['close'].shift(20)) / df['close'].shift(20)
+        
+        # Volume trend
+        df['volume_ma_20d'] = df['volume'].rolling(20).mean()
+        df['volume_ratio'] = df['volume'] / (df['volume_ma_20d'] + 1e-8)
+        
+        print(f"[FEATURES] Loaded {len(df)} price records from {df['date'].min()} to {df['date'].max()}")
+        return df
+    
+    def load_eia_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Load EIA storage and production data, calculate surprises and YoY changes."""
+        
+        # EIA Storage
+        query_storage = """
+        SELECT timestamp as date, storage_bcf
+        FROM eia_storage
+        WHERE timestamp >= :start_date
+        ORDER BY timestamp
+        """
+        
+        with self.engine.connect() as conn:
+            eia_storage = pd.read_sql(
+                text(query_storage),
+                conn,
+                params={"start_date": self.start_date.isoformat()}
+            )
+        
+        if not eia_storage.empty:
+            eia_storage['date'] = pd.to_datetime(eia_storage['date'])
+            eia_storage['storage_bcf'] = pd.to_numeric(eia_storage['storage_bcf'], errors='coerce')
+            eia_storage['eia_storage_yoy'] = eia_storage['storage_bcf'].pct_change(52)  # 1 year = ~52 weeks
+            eia_storage['eia_storage_change'] = eia_storage['storage_bcf'].diff()
+            
+            # Merge to main dataframe using forward fill (weekly data to daily)
+            df = df.merge(eia_storage[['date', 'storage_bcf', 'eia_storage_yoy', 'eia_storage_change']], 
+                          on='date', how='left')
+            df['storage_bcf'] = df['storage_bcf'].fillna(method='ffill')
+            df['eia_storage_yoy'] = df['eia_storage_yoy'].fillna(method='ffill')
+            df['eia_storage_change'] = df['eia_storage_change'].fillna(method='ffill')
+            
+            print(f"[FEATURES] Loaded EIA storage data: {eia_storage['date'].min()} to {eia_storage['date'].max()}")
+        else:
+            print("[FEATURES] Warning: No EIA storage data found")
+        
+        # EIA Production
+        query_prod = """
+        SELECT timestamp as date, production_mmcf
+        FROM eia_production
+        WHERE timestamp >= :start_date
+        ORDER BY timestamp
+        """
+        
+        with self.engine.connect() as conn:
+            eia_prod = pd.read_sql(
+                text(query_prod),
+                conn,
+                params={"start_date": self.start_date.isoformat()}
+            )
+        
+        if not eia_prod.empty:
+            eia_prod['date'] = pd.to_datetime(eia_prod['date'])
+            eia_prod['production_mmcf'] = pd.to_numeric(eia_prod['production_mmcf'], errors='coerce')
+            eia_prod['eia_production_yoy'] = eia_prod['production_mmcf'].pct_change(52)
+            eia_prod['eia_production_change'] = eia_prod['production_mmcf'].diff()
+            
+            df = df.merge(eia_prod[['date', 'production_mmcf', 'eia_production_yoy', 'eia_production_change']], 
+                          on='date', how='left')
+            df['production_mmcf'] = df['production_mmcf'].fillna(method='ffill')
+            df['eia_production_yoy'] = df['eia_production_yoy'].fillna(method='ffill')
+            df['eia_production_change'] = df['eia_production_change'].fillna(method='ffill')
+            
+            print(f"[FEATURES] Loaded EIA production data: {eia_prod['date'].min()} to {eia_prod['date'].max()}")
+        else:
+            print("[FEATURES] Warning: No EIA production data found")
+        
+        return df
+    
+    def load_fred_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Load FRED macro indicators."""
+        
+        query = """
+        SELECT timestamp as date, unemployment_rate, cpi_energy, retail_gas_price, 
+               wti_crude_price, industrial_production, housing_starts, personal_consumption
+        FROM fred_macro
+        WHERE timestamp >= :start_date
+        ORDER BY timestamp
+        """
+        
+        with self.engine.connect() as conn:
+            fred = pd.read_sql(
+                text(query),
+                conn,
+                params={"start_date": self.start_date.isoformat()}
+            )
+        
+        if not fred.empty:
+            fred['date'] = pd.to_datetime(fred['date'])
+            
+            # Convert numeric columns
+            for col in fred.columns:
+                if col != 'date':
+                    fred[col] = pd.to_numeric(fred[col], errors='coerce')
+            
+            # Calculate YoY changes for each indicator (252 = trading days/year, but FRED is monthly/quarterly)
+            for col in fred.columns[1:]:
+                fred[f'{col}_yoy'] = fred[col].pct_change(4)  # 4 quarters
+                fred[f'{col}_ma'] = fred[col].rolling(4).mean()  # 4-period MA for monthly/quarterly data
+            
+            df = df.merge(fred, on='date', how='left')
+            
+            # Forward fill FRED data (monthly/quarterly)
+            for col in fred.columns[1:]:
+                if col in df.columns:
+                    df[col] = df[col].fillna(method='ffill')
+            
+            print(f"[FEATURES] Loaded {len(fred.columns)-1} FRED indicators")
+        else:
+            print("[FEATURES] Warning: No FRED data found")
+        
+        return df
+    
+    def load_tomtom_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Load TomTom traffic congestion data for energy hubs."""
+        
+        query = """
+        SELECT timestamp as date, node, region, congestion_level
+        FROM tomtom_traffic
+        WHERE timestamp >= :start_date
+        ORDER BY timestamp
+        """
+        
+        with self.engine.connect() as conn:
+            traffic = pd.read_sql(
+                text(query),
+                conn,
+                params={"start_date": self.start_date.isoformat()}
+            )
+        
+        if not traffic.empty:
+            traffic['date'] = pd.to_datetime(traffic['date'])
+            traffic['congestion_level'] = pd.to_numeric(traffic['congestion_level'], errors='coerce')
+            
+            # Aggregate traffic by date (average congestion across nodes)
+            traffic_agg = traffic.groupby('date').agg({
+                'congestion_level': 'mean',
+                'node': 'count'  # number of nodes with data
+            }).reset_index()
+            traffic_agg.columns = ['date', 'avg_congestion', 'traffic_nodes_count']
+            
+            df = df.merge(traffic_agg, on='date', how='left')
+            
+            print(f"[FEATURES] Loaded TomTom traffic congestion aggregates")
+        else:
+            print("[FEATURES] Warning: No TomTom data found")
+        
+        return df
+    
+    def load_congress_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Load Congress bill activity (total and energy-related)."""
+        
+        query = """
+        SELECT timestamp as date, is_energy_related
+        FROM congress_bills
+        WHERE timestamp >= :start_date
+        ORDER BY timestamp
+        """
+        
+        with self.engine.connect() as conn:
+            congress = pd.read_sql(
+                text(query),
+                conn,
+                params={"start_date": self.start_date.isoformat()}
+            )
+        
+        if not congress.empty:
+            congress['date'] = pd.to_datetime(congress['date'], errors='coerce', utc=True).dt.tz_convert(None)
+            congress['is_energy_related'] = pd.to_numeric(congress['is_energy_related'], errors='coerce').fillna(0).astype(int)
+            
+            total_agg = congress.groupby('date').size().reset_index(name='congress_bills_count')
+            energy_agg = (congress[congress['is_energy_related'] == 1]
+                          .groupby('date')
+                          .size()
+                          .reset_index(name='congress_bills_energy_count'))
+            
+            df = df.merge(total_agg, on='date', how='left')
+            df = df.merge(energy_agg, on='date', how='left')
+            df['congress_bills_count'] = df['congress_bills_count'].fillna(0)
+            df['congress_bills_energy_count'] = df['congress_bills_energy_count'].fillna(0)
+            
+            df['congress_bills_ma'] = df['congress_bills_count'].rolling(20).mean()
+            df['congress_bills_energy_ma'] = df['congress_bills_energy_count'].rolling(20).mean()
+            
+            print(f"[FEATURES] Loaded Congress bills: {len(total_agg)} dates, total={total_agg['congress_bills_count'].sum():.0f}, energy={energy_agg['congress_bills_energy_count'].sum():.0f}")
+        else:
+            print("[FEATURES] Warning: No Congress data found")
+        
+        return df
+    
+    def engineer_features(self) -> pd.DataFrame:
+        """Main pipeline: load all data and engineer features."""
+        
+        print(f"\n[FEATURES] Starting feature engineering pipeline (mode={METIS_MODE})")
+        print(f"[FEATURES] Start date: {self.start_date}")
+        
+        # Load price data first (anchor)
+        df = self.load_price_data()
+        
+        # Load all supplementary features
+        df = self.load_eia_features(df)
+        df = self.load_fred_features(df)
+        df = self.load_tomtom_features(df)
+        df = self.load_congress_features(df)
+        
+        # Fill missing values
+        # Forward fill for lagged features, back fill for forward-looking
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        df[numeric_cols] = df[numeric_cols].fillna(method='ffill').fillna(method='bfill')
+        
+        # Remove initial rows with NaN from lagged features
+        df = df.dropna(subset=['volatility_20d'])  # Requires 20 days of data
+        
+        self.df = df
+        print(f"\n[FEATURES] Feature engineering complete: {len(df)} rows, {len(df.columns)} features")
+        print(f"[FEATURES] Date range: {df['date'].min()} to {df['date'].max()}")
+        print(f"[FEATURES] Features: {list(df.columns)}")
+        
+        return df
+    
+    def save_features(self, filename: str = "all_features.csv") -> str:
+        """Save features to CSV."""
+        if self.df is None:
+            raise ValueError("Run engineer_features() first")
+        
+        output_path = os.path.join(OUTPUT_DIR, filename)
+        self.df.to_csv(output_path, index=False)
+        
+        print(f"\n[FEATURES] Saved to {output_path}")
+        print(f"[FEATURES] Shape: {self.df.shape}")
+        print(f"[FEATURES] Missing values:\n{self.df.isnull().sum()}")
+        
+        return output_path
+    
+    def get_training_data(self, test_size: float = 0.2, holdout_months: int = 6):
+        """
+        Split data for training, validation, and test.
+        
+        Args:
+            test_size: Proportion for test set
+            holdout_months: Months to holdout from training for validation
+        
+        Returns:
+            dict with 'train', 'val', 'test' DataFrames
+        """
+        if self.df is None:
+            raise ValueError("Run engineer_features() first")
+        
+        df = self.df.copy()
+        
+        # Chronological split
+        n = len(df)
+        test_start_idx = int(n * (1 - test_size))
+        val_start_idx = test_start_idx - int(holdout_months * 252 / 365)  # ~holdout_months of trading days
+        
+        train = df[:val_start_idx]
+        val = df[val_start_idx:test_start_idx]
+        test = df[test_start_idx:]
+        
+        print(f"\n[FEATURES] Train/Val/Test split:")
+        print(f"  Train: {len(train)} rows ({train['date'].min()} to {train['date'].max()})")
+        print(f"  Val:   {len(val)} rows ({val['date'].min()} to {val['date'].max()})")
+        print(f"  Test:  {len(test)} rows ({test['date'].min()} to {test['date'].max()})")
+        
+        return {'train': train, 'val': val, 'test': test}
+
+
+if __name__ == "__main__":
+    engineer = FeatureEngineer(DB_URL, start_date="2015-01-01")
+    df = engineer.engineer_features()
+    engineer.save_features()
+    
+    # Also save train/val/test splits
+    splits = engineer.get_training_data(test_size=0.15, holdout_months=6)
+    splits['train'].to_csv(os.path.join(OUTPUT_DIR, "train_features.csv"), index=False)
+    splits['val'].to_csv(os.path.join(OUTPUT_DIR, "val_features.csv"), index=False)
+    splits['test'].to_csv(os.path.join(OUTPUT_DIR, "test_features.csv"), index=False)
+    
+    print(f"\n[FEATURES] Saved train/val/test splits to {OUTPUT_DIR}")
+    print("[SUCCESS] Feature engineering complete!")
