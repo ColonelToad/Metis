@@ -21,6 +21,8 @@ docs/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+*.llamafile
+llm/
 
 # Data files
 *.csv

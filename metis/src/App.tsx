@@ -1,107 +1,170 @@
+
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { TrendingUp, Activity, Database, AlertCircle } from 'lucide-react';
-import PriceChart from './components/PriceChart';
-import DataGrid from './components/DataGrid';
-import NewsFeed from './components/NewsFeed';
+import { Layout, Menu, ConfigProvider, theme as antdTheme } from 'antd';
+import OverviewScreen from './components/OverviewScreen';
+import SignalsScreen from './components/SignalsScreen';
+import PortfolioScreen from './components/PortfolioScreen';
+import ExplainerScreen from './components/ExplainerScreen';
+import SettingsScreen from './components/SettingsScreen';
+import MarketsScreen from './components/MarketsScreen';
+import GridStatusScreen from './components/GridStatusScreen';
+import ClimateScreen from './components/ClimateScreen';
+import PolicyScreen from './components/PolicyScreen';
+import BacktestScreen from './components/BacktestScreen';
+import {
+  AppstoreOutlined,
+  BulbOutlined,
+  WalletOutlined,
+  SearchOutlined,
+  SettingOutlined,
+  StockOutlined,
+  ThunderboltOutlined,
+  CloudOutlined,
+  FileProtectOutlined,
+  ExperimentOutlined
+} from '@ant-design/icons';
+import { IntlProvider } from 'react-intl';
+import enUS from 'antd/locale/en_US';
+import { LocaleProvider, useLocale } from './contexts/LocaleContext';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import CommandPalette, { createNavigationCommands, createUtilityCommands } from './components/CommandPalette';
 import './App.css';
 
-interface MarketData {
-  timestamp: string;
-  price: number;
-  spread: number;
-  volume: number;
-}
+const { Header, Sider, Content } = Layout;
 
-function App() {
-  const [mode, setMode] = useState<'DEV' | 'REAL'>('DEV');
-  const [marketData, setMarketData] = useState<MarketData[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [lastUpdate, setLastUpdate] = useState<string>('');
+const menuItems = [
+  { key: 'overview', icon: <AppstoreOutlined />, label: 'Overview' },
+  { key: 'signals', icon: <BulbOutlined />, label: 'Signals' },
+  { key: 'portfolio', icon: <WalletOutlined />, label: 'Portfolio' },
+  { key: 'explainer', icon: <SearchOutlined />, label: 'Explainer' },
+  { key: 'markets', icon: <StockOutlined />, label: 'Markets' },
+  { key: 'grid', icon: <ThunderboltOutlined />, label: 'Grid Status' },
+  { key: 'climate', icon: <CloudOutlined />, label: 'Climate' },
+  { key: 'policy', icon: <FileProtectOutlined />, label: 'Policy' },
+  { key: 'backtest', icon: <ExperimentOutlined />, label: 'Backtest' },
+  { key: 'settings', icon: <SettingOutlined />, label: 'Settings' },
+];
 
-  // Simulate fetching data from backend
-  const fetchMarketData = async () => {
-    setLoading(true);
-    try {
-      // In DEV mode, use synthetic data
-      // Later we'll wire this to invoke() Rust commands
-      const syntheticData: MarketData[] = Array.from({ length: 100 }, (_, i) => ({
-        timestamp: new Date(Date.now() - (100 - i) * 60000).toISOString(),
-        price: 2.5 + Math.sin(i / 10) * 0.3 + Math.random() * 0.1,
-        spread: 0.02 + Math.random() * 0.01,
-        volume: 10000 + Math.random() * 5000
-      }));
-      
-      setMarketData(syntheticData);
-      setLastUpdate(new Date().toLocaleTimeString());
-    } catch (error) {
-      console.error('Failed to fetch data:', error);
-    } finally {
-      setLoading(false);
+function AppContent() {
+  const [collapsed, setCollapsed] = useState(false);
+  const [selectedKey, setSelectedKey] = useState('overview');
+  const [mode] = useState<'DEV' | 'REAL'>('DEV');
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const { locale, messages, setLocale } = useLocale();
+
+  // Update clock every second
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Setup keyboard shortcuts
+  useKeyboardShortcuts([
+    { key: '1', ctrlKey: true, handler: () => setSelectedKey('overview'), description: 'Go to Overview' },
+    { key: '2', ctrlKey: true, handler: () => setSelectedKey('signals'), description: 'Go to Signals' },
+    { key: '3', ctrlKey: true, handler: () => setSelectedKey('portfolio'), description: 'Go to Portfolio' },
+    { key: '4', ctrlKey: true, handler: () => setSelectedKey('explainer'), description: 'Go to Explainer' },
+    { key: '5', ctrlKey: true, handler: () => setSelectedKey('markets'), description: 'Go to Markets' },
+    { key: '6', ctrlKey: true, handler: () => setSelectedKey('grid'), description: 'Go to Grid Status' },
+    { key: '7', ctrlKey: true, handler: () => setSelectedKey('climate'), description: 'Go to Climate' },
+    { key: '8', ctrlKey: true, handler: () => setSelectedKey('policy'), description: 'Go to Policy' },
+    { key: '9', ctrlKey: true, handler: () => setSelectedKey('backtest'), description: 'Go to Backtest' },
+    { key: '0', ctrlKey: true, handler: () => setSelectedKey('settings'), description: 'Go to Settings' },
+    { key: 'k', ctrlKey: true, handler: () => setCommandPaletteOpen(true), description: 'Command Palette' },
+    { key: 'r', ctrlKey: true, handler: () => window.location.reload(), description: 'Refresh' },
+  ]);
+
+  // Build command list for palette
+  const commands = [
+    ...createNavigationCommands(setSelectedKey),
+    ...createUtilityCommands(setLocale),
+  ];
+
+  // Render Ant Design-based screens for Overview and Signals
+  const renderContent = () => {
+    switch (selectedKey) {
+      case 'overview':
+        return <OverviewScreen />;
+      case 'signals':
+        return <SignalsScreen />;
+      case 'portfolio':
+        return <PortfolioScreen />;
+      case 'explainer':
+        return <ExplainerScreen />;
+      case 'markets':
+        return <MarketsScreen />;
+      case 'grid':
+        return <GridStatusScreen />;
+      case 'climate':
+        return <ClimateScreen />;
+      case 'policy':
+        return <PolicyScreen />;
+      case 'backtest':
+        return <BacktestScreen />;
+      case 'settings':
+        return <SettingsScreen />;
+      default:
+        return <div style={{ padding: 24 }}>Welcome to Metis</div>;
     }
   };
 
-  useEffect(() => {
-    fetchMarketData();
-    const interval = setInterval(fetchMarketData, 30000); // Update every 30s
-    return () => clearInterval(interval);
-  }, [mode]);
-
   return (
-    <div className="app">
-      {/* Header */}
-      <header className="header">
-        <div className="header-left">
-          <h1 className="title">
-            <Activity size={24} />
-            Metis Natural Gas Platform
-          </h1>
-          <span className="mode-badge" data-mode={mode.toLowerCase()}>
-            {mode} MODE
-          </span>
-        </div>
-        <div className="header-right">
-          <button 
-            className="refresh-btn"
-            onClick={fetchMarketData}
-            disabled={loading}
-          >
-            {loading ? 'Loading...' : 'Refresh Data'}
-          </button>
-          <span className="last-update">Last update: {lastUpdate}</span>
-        </div>
-      </header>
+    <ConfigProvider
+      locale={enUS}
+      theme={{ algorithm: antdTheme.darkAlgorithm }}
+    >
+      <IntlProvider locale={locale} messages={messages}>
+        <CommandPalette
+          open={commandPaletteOpen}
+          onClose={() => setCommandPaletteOpen(false)}
+          commands={commands}
+        />
+        <Layout style={{ minHeight: '100vh' }}>
+          <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} theme="dark">
+            <div style={{ height: 48, margin: 16, color: '#fff', fontWeight: 'bold', fontSize: 20, textAlign: 'center', letterSpacing: 2 }} role="banner">
+              METIS
+            </div>
+            <Menu
+              theme="dark"
+              mode="inline"
+              selectedKeys={[selectedKey]}
+              onClick={({ key }) => setSelectedKey(key)}
+              items={menuItems}
+              style={{ fontSize: 16 }}
+              role="navigation"
+              aria-label="Main navigation"
+            />
+          </Sider>
+          <Layout>
+            <Header style={{ background: '#18181c', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }} role="banner">
+              <div style={{ color: '#fff', fontSize: 22, fontWeight: 600 }}>
+                Metis Platform
+                <span style={{ marginLeft: 16, fontSize: 14, color: '#00ff88', background: '#222', borderRadius: 4, padding: '2px 8px', marginRight: 8 }} role="status" aria-live="polite">
+                  {mode} MODE
+                </span>
+              </div>
+              <div style={{ color: '#aaa', fontSize: 14 }} role="timer" aria-live="off">
+                {currentTime.toLocaleString()}
+              </div>
+            </Header>
+            <Content style={{ margin: 0, background: '#18181c', minHeight: 0, overflowY: 'auto', height: 'calc(100vh - 64px)' }} role="main" aria-label="Main content">
+              {renderContent()}
+            </Content>
+          </Layout>
+        </Layout>
+      </IntlProvider>
+    </ConfigProvider>
+  );
+}
 
-      {/* Main Grid Layout */}
-      <div className="main-grid">
-        {/* Left Panel - Price Chart */}
-        <div className="panel chart-panel">
-          <div className="panel-header">
-            <TrendingUp size={18} />
-            <h2>Natural Gas Spot Price (Henry Hub)</h2>
-          </div>
-          <PriceChart data={marketData} />
-        </div>
-
-        {/* Right Panel - News/Signals */}
-        <div className="panel news-panel">
-          <div className="panel-header">
-            <AlertCircle size={18} />
-            <h2>Market Signals & News</h2>
-          </div>
-          <NewsFeed mode={mode} />
-        </div>
-
-        {/* Bottom Panel - Data Table */}
-        <div className="panel data-panel">
-          <div className="panel-header">
-            <Database size={18} />
-            <h2>Recent Trades & Analytics</h2>
-          </div>
-          <DataGrid data={marketData.slice(-20)} />
-        </div>
-      </div>
-    </div>
+function App() {
+  return (
+    <LocaleProvider>
+      <AppContent />
+    </LocaleProvider>
   );
 }
 

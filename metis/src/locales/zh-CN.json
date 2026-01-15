@@ -1,0 +1,94 @@
+{
+  "app": {
+    "title": "Metis 平台",
+    "mode": {
+      "dev": "开发模式",
+      "real": "实盘模式"
+    }
+  },
+  "nav": {
+    "overview": "概览",
+    "signals": "信号",
+    "portfolio": "投资组合",
+    "explainer": "解释器",
+    "settings": "设置",
+    "markets": "市场",
+    "gridStatus": "电网状态",
+    "climate": "气候",
+    "policy": "政策",
+    "backtest": "回测"
+  },
+  "overview": {
+    "systemStatus": "系统状态",
+    "quickStats": "快速统计",
+    "activeSignals": "活跃信号（过去24小时）",
+    "marketHeatmap": "市场热图",
+    "riskFactors": "风险因素",
+    "recentExplanations": "最近解释（RAG）",
+    "dataFeeds": "数据源",
+    "signalGen": "信号生成",
+    "ragEngine": "RAG引擎",
+    "riskMonitor": "风险监控",
+    "dailyPL": "日盈亏",
+    "sharpe": "夏普比率",
+    "winRate": "胜率",
+    "openPos": "开仓"
+  },
+  "signals": {
+    "title": "信号",
+    "activeSignal": "活跃信号",
+    "confidence": "置信度",
+    "generated": "生成时间",
+    "entry": "入场",
+    "target": "目标",
+    "stop": "止损",
+    "reasoning": "推理",
+    "viewSupportingData": "📊 查看支持数据",
+    "fullExplanation": "🤖 完整解释",
+    "execute": "✓ 执行",
+    "signalHistory": "信号历史",
+    "signalPerformance": "信号表现（过去30天）"
+  },
+  "portfolio": {
+    "title": "投资组合",
+    "summary": "投资组合摘要",
+    "openPositions": "开仓头寸",
+    "riskMetrics": "风险指标",
+    "positionRiskBreakdown": "头寸风险分解",
+    "addPosition": "添加头寸",
+    "rebalance": "重新平衡",
+    "flattenAll": "平掉所有（紧急）",
+    "stressTest": "压力测试",
+    "greeksAnalysis": "希腊字母分析",
+    "scenarioPL": "情景盈亏 →"
+  },
+  "explainer": {
+    "title": "解释器",
+    "chainOfThought": "思维链分析",
+    "supportingDocuments": "支持文档（检索）",
+    "saveAnalysis": "💾 保存分析",
+    "exportPDF": "📄 导出PDF",
+    "regenerate": "🔄 重新生成",
+    "askFollowup": "❓ 追问"
+  },
+  "settings": {
+    "title": "设置",
+    "dataSources": "数据源",
+    "modelSettings": "模型设置",
+    "riskLimits": "风险限制",
+    "notifications": "通知和外观",
+    "save": "保存",
+    "resetDefaults": "重置为默认值",
+    "test": "测试",
+    "editKey": "编辑密钥",
+    "enableKillSwitch": "⚠️ 启用紧急开关"
+  },
+  "common": {
+    "loading": "加载中...",
+    "error": "错误",
+    "retry": "重试",
+    "cancel": "取消",
+    "save": "保存",
+    "close": "关闭"
+  }
+}

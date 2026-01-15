@@ -1,0 +1,94 @@
+{
+  "app": {
+    "title": "Metis Platform",
+    "mode": {
+      "dev": "DEV MODE",
+      "real": "REAL MODE"
+    }
+  },
+  "nav": {
+    "overview": "Overview",
+    "signals": "Signals",
+    "portfolio": "Portfolio",
+    "explainer": "Explainer",
+    "settings": "Settings",
+    "markets": "Markets",
+    "gridStatus": "Grid Status",
+    "climate": "Climate",
+    "policy": "Policy",
+    "backtest": "Backtest"
+  },
+  "overview": {
+    "systemStatus": "System Status",
+    "quickStats": "Quick Stats",
+    "activeSignals": "Active Signals (Last 24h)",
+    "marketHeatmap": "Market Heatmap",
+    "riskFactors": "Risk Factors",
+    "recentExplanations": "Recent Explanations (RAG)",
+    "dataFeeds": "Data Feeds",
+    "signalGen": "Signal Gen",
+    "ragEngine": "RAG Engine",
+    "riskMonitor": "Risk Monitor",
+    "dailyPL": "Daily P&L",
+    "sharpe": "Sharpe",
+    "winRate": "Win Rate",
+    "openPos": "Open Pos"
+  },
+  "signals": {
+    "title": "Signals",
+    "activeSignal": "Active Signal",
+    "confidence": "Confidence",
+    "generated": "Generated",
+    "entry": "Entry",
+    "target": "Target",
+    "stop": "Stop",
+    "reasoning": "Reasoning",
+    "viewSupportingData": "📊 View Supporting Data",
+    "fullExplanation": "🤖 Full Explanation",
+    "execute": "✓ Execute",
+    "signalHistory": "Signal History",
+    "signalPerformance": "Signal Performance (Last 30 Days)"
+  },
+  "portfolio": {
+    "title": "Portfolio",
+    "summary": "Portfolio Summary",
+    "openPositions": "Open Positions",
+    "riskMetrics": "Risk Metrics",
+    "positionRiskBreakdown": "Position Risk Breakdown",
+    "addPosition": "Add Position",
+    "rebalance": "Rebalance",
+    "flattenAll": "Flatten All (Emergency)",
+    "stressTest": "Stress Test",
+    "greeksAnalysis": "Greeks Analysis",
+    "scenarioPL": "Scenario P&L →"
+  },
+  "explainer": {
+    "title": "Explainer",
+    "chainOfThought": "Chain-of-Thought Analysis",
+    "supportingDocuments": "Supporting Documents (Retrieved)",
+    "saveAnalysis": "💾 Save Analysis",
+    "exportPDF": "📄 Export PDF",
+    "regenerate": "🔄 Regenerate",
+    "askFollowup": "❓ Ask Follow-up"
+  },
+  "settings": {
+    "title": "Settings",
+    "dataSources": "Data Sources",
+    "modelSettings": "Model Settings",
+    "riskLimits": "Risk Limits",
+    "notifications": "Notifications & Appearance",
+    "save": "Save",
+    "resetDefaults": "Reset to Defaults",
+    "test": "Test",
+    "editKey": "Edit Key",
+    "enableKillSwitch": "⚠️ Enable Kill Switch"
+  },
+  "common": {
+    "loading": "Loading...",
+    "error": "Error",
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "save": "Save",
+    "close": "Close"
+  }
+}
