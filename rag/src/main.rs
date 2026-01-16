@@ -27,7 +27,7 @@ async fn main() {
     
     println!("Initializing RAG pipeline (mock_mode: {})...", mock_mode);
     let rag = ExplainabilityRAG::new(
-        "./llm/Meta-Llama-3.1-8B-Instruct-Q4_K_L.gguf",
+        "./llm/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
         "mock.db",
         mock_mode,
     ).expect("Failed to initialize RAG pipeline");
