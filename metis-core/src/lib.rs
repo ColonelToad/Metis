@@ -12,12 +12,14 @@ pub mod simd;
 pub mod bridge;
 pub mod types;
 pub mod numa;
+pub mod reasoning;
 
 pub use execution::*;
 pub use fusion::*;
 pub use simd::*;
 pub use types::*;
 pub use numa::*;
+pub use reasoning::*;
 
 #[cfg(test)]
 mod tests {

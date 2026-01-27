@@ -30,7 +30,6 @@ DB_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 # API Keys (keep these secret!)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 FRED_API_KEY = os.getenv("FRED_API_KEY")
 CME_API_KEY = os.getenv("CME_API_KEY")
 DATABENTO_API_KEY = os.getenv("DATABENTO_API_KEY")

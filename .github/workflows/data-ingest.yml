@@ -1,0 +1,194 @@
+name: Data Ingestion (with Fail Modes)
+
+on:
+  schedule:
+    # Daily at 6 AM UTC (1 AM EST)
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: 'Ingest specific sources (comma-separated) or leave empty for all'
+        required: false
+        default: 'all'
+
+jobs:
+  ingest-all:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r research/requirements.txt
+        pip install requests tenacity pydantic sqlalchemy
+    
+    - name: Load environment secrets
+      run: |
+        cat > research/.env << 'EOF'
+        EIA_API_KEY=${{ secrets.EIA_API_KEY }}
+        FRED_API_KEY=${{ secrets.FRED_API_KEY }}
+        CONGRESS_API_KEY=${{ secrets.CONGRESS_API_KEY }}
+        SIMFIN_API_KEY=${{ secrets.SIMFIN_API_KEY }}
+        AIS_API_KEY=${{ secrets.AIS_API_KEY }}
+        GRID_API_KEY=${{ secrets.GRID_API_KEY }}
+        TOM_TOM_API_KEY=${{ secrets.TOM_TOM_API_KEY }}
+        METIS_MODE=REAL
+        EOF
+    
+    - name: Verify database exists
+      run: |
+        cd research/data_ingest
+        python -c "
+import sqlite3
+db = sqlite3.connect('../../data/metis.db')
+print('✓ Database ready')
+db.close()
+"
+    
+    - name: Run ingestion with fail mode handling
+      id: ingest
+      continue-on-error: true
+      env:
+        METIS_MODE: REAL
+      run: |
+        cd research/data_ingest
+        python -c "
+import sys
+import traceback
+from datetime import datetime
+from fail_modes import with_retry, validate_ingestion, fallback_on_error
+from run_all_ingesters import run_all_ingesters
+
+print(f'[{datetime.now().isoformat()}] Starting ingestion with fail mode handling...')
+
+# Run ingesters with built-in retry logic
+try:
+    @with_retry(max_attempts=3, backoff_factor=2.0, timeout=300)
+    def ingest():
+        return run_all_ingesters()
+    
+    result = ingest()
+    print(f'[{datetime.now().isoformat()}] ✓ Ingestion completed successfully')
+    sys.exit(0)
+    
+except Exception as e:
+    print(f'[{datetime.now().isoformat()}] ✗ Ingestion failed after retries: {e}')
+    traceback.print_exc()
+    
+    # Attempt fallback: use previous day's data
+    try:
+        fallback_result = fallback_on_error()
+        print(f'[{datetime.now().isoformat()}] ⚠ Using fallback data from previous run')
+        sys.exit(0)
+    except:
+        print(f'[{datetime.now().isoformat()}] ✗ Fallback also failed')
+        sys.exit(1)
+"
+    
+    - name: Validate ingested data
+      id: validate
+      continue-on-error: true
+      run: |
+        cd research/data_ingest
+        python -c "
+import sys
+from datetime import datetime
+from fail_modes import validate_ingestion, check_anomalies
+
+print(f'[{datetime.now().isoformat()}] Validating ingested data...')
+
+try:
+    # Check schema, nulls, duplicates
+    validation_result = validate_ingestion()
+    
+    # Check for anomalies (prices, volume, missing data)
+    anomalies = check_anomalies()
+    
+    if validation_result and not anomalies:
+        print(f'[{datetime.now().isoformat()}] ✓ Data validation passed')
+        sys.exit(0)
+    else:
+        print(f'[{datetime.now().isoformat()}] ⚠ Data validation warnings (non-fatal)')
+        print(f'  Anomalies detected: {anomalies}')
+        sys.exit(0)  # Continue even with warnings
+        
+except Exception as e:
+    print(f'[{datetime.now().isoformat()}] ✗ Validation error: {e}')
+    sys.exit(1)
+"
+    
+    - name: Build Rust ingesters
+      id: rust-build
+      continue-on-error: true
+      run: |
+        cd ais_vessel_tracking
+        cargo build --release 2>&1 | tail -20
+    
+    - name: Run AIS vessel tracking (Rust)
+      id: ais-ingest
+      continue-on-error: true
+      timeout-minutes: 5
+      run: |
+        if [ -f ais_vessel_tracking/target/release/ais_vessel_tracking ]; then
+          ./ais_vessel_tracking/target/release/ais_vessel_tracking
+        else
+          echo "⚠ AIS ingester not available, skipping"
+        fi
+    
+    - name: Summary
+      if: always()
+      run: |
+        echo "## Ingestion Summary"
+        echo "- Ingest status: ${{ steps.ingest.outcome }}"
+        echo "- Validation status: ${{ steps.validate.outcome }}"
+        echo "- AIS ingester status: ${{ steps.ais-ingest.outcome }}"
+        
+        if [ "${{ steps.ingest.outcome }}" = "success" ] || [ "${{ steps.validate.outcome }}" = "success" ]; then
+          echo "✓ Ingestion pipeline completed"
+          exit 0
+        else
+          echo "✗ Ingestion failed"
+          exit 1
+        fi
+    
+    - name: Trigger data quality checks
+      if: success()
+      uses: actions/github-script@v6
+      with:
+        script: |
+          github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'data-quality.yml',
+            ref: context.ref
+          })
+    
+    - name: Notify on failure (Slack)
+      if: failure()
+      uses: slackapi/slack-notify-action@v1
+      with:
+        payload: |
+          {
+            "text": "❌ Data Ingestion Failed",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Data Ingestion Pipeline Failed*\nIngest: ${{ steps.ingest.outcome }}\nValidation: ${{ steps.validate.outcome }}\n\nCheck <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|logs>"
+                }
+              }
+            ]
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

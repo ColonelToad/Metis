@@ -1,0 +1,26 @@
+{
+  "created": "2026-01-27T16:03:33.129039",
+  "contracts": [
+    "crude_oil_wti",
+    "natural_gas",
+    "heating_oil",
+    "rbob_gasoline"
+  ],
+  "symbols": {
+    "crude_oil_wti": "CL=F",
+    "natural_gas": "NG=F",
+    "heating_oil": "HO=F",
+    "rbob_gasoline": "RB=F"
+  },
+  "data_source": "Yahoo Finance",
+  "total_records": 2008,
+  "date_range": "2024-01-29 00:00:00 to 2026-01-26 00:00:00",
+  "indicators": [
+    "Close_YoY_Pct: Year-over-year price change %",
+    "Close_MTD_Pct: Daily price change %",
+    "MA_20: 20-day moving average",
+    "MA_200: 200-day moving average",
+    "Volatility_20d: 20-day rolling standard deviation",
+    "Range_Pct: Daily high-low range as % of close"
+  ]
+}

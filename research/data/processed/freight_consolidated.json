@@ -1,0 +1,34 @@
+{
+  "created": "2026-01-27T16:03:29.369638",
+  "rows": 0,
+  "columns": [
+    "Date"
+  ],
+  "date_range": "nan to nan",
+  "sources": [
+    "Container Rates",
+    "Containerized Exports",
+    "Containerized Imports",
+    "Diesel Price",
+    "Durable Goods",
+    "Inventory to Sales",
+    "Loaded Exports",
+    "Loaded Imports",
+    "Nominal Imports",
+    "Real Imports",
+    "West Coast Shipping"
+  ],
+  "source_descriptions": {
+    "Container Rates": "40ft container rates from Shanghai to LA",
+    "Containerized Exports": "US containerized exports (TEU)",
+    "Containerized Imports": "US containerized imports (TEU)",
+    "Diesel Price": "US retail diesel prices ($/gallon)",
+    "Durable Goods": "Durable goods purchases (orders indicator)",
+    "Inventory to Sales": "Business inventory to sales ratio",
+    "Loaded Exports": "Loaded export containers at select US ports",
+    "Loaded Imports": "Loaded import containers at select US ports",
+    "Nominal Imports": "US nominal goods imports (billions USD)",
+    "Real Imports": "US real goods imports (billions USD, 2017 chain-weighted)",
+    "West Coast Shipping": "West Coast container shipping rates"
+  }
+}

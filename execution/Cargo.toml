@@ -5,6 +5,7 @@ members = [
     "execution_algos",
     "fix_client",
     "signal_interface",
+    "ais_vessel_tracking",
 ]
 
 [workspace.package]

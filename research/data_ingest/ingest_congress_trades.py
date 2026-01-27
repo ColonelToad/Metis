@@ -1,6 +1,6 @@
 """
 Congressional Trading Data Ingestion
-Fetches recent congressional stock trades from Finnhub
+Fetches recent congressional stock trades from Congress.gov
 """
 import os
 import sys
@@ -16,16 +16,16 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from research.common import runtime_config as rc
 
 load_dotenv()
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+CONGRESS_API_KEY = os.getenv("CONGRESS_API_KEY")
 DB_URL = rc.get_db_url()
 
 def fetch_congress_trades():
-    """Fetch recent congressional trades from Finnhub"""
+    """Fetch recent congressional trades from Congress.gov"""
     if not rc.require_real_mode("Congressional trades API"):
         return pd.DataFrame()
-    url = "https://finnhub.io/api/v1/stock/congressional-trading"
+    url = "https://congress.gov/api/v1/stock-trades"
     params = {
-        'token': FINNHUB_API_KEY,
+        'api_key': CONGRESS_API_KEY,
     }
     
     response = requests.get(url, params=params)

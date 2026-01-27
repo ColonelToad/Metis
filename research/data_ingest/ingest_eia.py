@@ -11,9 +11,12 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 
-# Add project root for imports
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-from research.common import runtime_config as rc
+# Add parent directory (research/) to Python path if not already there
+parent_dir = str(Path(__file__).parent.parent)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from common import runtime_config as rc
 
 load_dotenv()
 EIA_API_KEY = os.getenv("EIA_API_KEY")

@@ -1,0 +1,201 @@
+name: Data Quality Checks
+
+on:
+  schedule:
+    # Run after each scheduled ingestion (6 AM UTC = 1 AM EST)
+    - cron: '15 6 * * *'  # 15 minutes after daily ingest
+  workflow_dispatch:
+
+jobs:
+  data-quality:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r research/requirements.txt
+        pip install pydantic pandas
+    
+    - name: Check data schema compliance
+      run: |
+        cd research/data_ingest
+        python -c "
+import sqlite3
+import pandas as pd
+from datetime import datetime, timedelta
+
+db = sqlite3.connect('../../data/metis.db')
+
+# Define expected schemas
+schemas = {
+    'equities_stooq': ['ticker', 'date', 'open', 'high', 'low', 'close', 'volume'],
+    'equities_simfin': ['ticker', 'date', 'pe_ratio', 'dividend_yield', 'roe', 'debt_ratio'],
+    'macro_fred': ['series_id', 'date', 'value'],
+    'futures_cme': ['symbol', 'date', 'open', 'high', 'low', 'close', 'volume', 'ma20', 'ma200'],
+    'sentiment_reddit': ['feed_id', 'timestamp', 'score', 'comments'],
+    'energy_eia': ['series_id', 'date', 'value'],
+    'energy_noaa': ['station_id', 'date', 'temp_max', 'temp_min', 'precip'],
+    'weather_nws': ['grid_point', 'timestamp', 'temp', 'precip_prob', 'wind_speed'],
+    'legislation_congress': ['bill_id', 'date', 'title', 'status'],
+    'freight_rates': ['container_type', 'date', 'rate'],
+    'vessels_ais': ['vessel_mmsi', 'timestamp', 'latitude', 'longitude', 'status'],
+}
+
+errors = []
+for table, cols in schemas.items():
+    try:
+        df = pd.read_sql_table(table, db)
+        missing_cols = set(cols) - set(df.columns)
+        if missing_cols:
+            errors.append(f'{table}: missing columns {missing_cols}')
+        print(f'✓ {table}: {len(df)} rows')
+    except Exception as e:
+        print(f'⚠ {table}: {e}')
+
+if errors:
+    for e in errors:
+        print(f'✗ {e}')
+    exit(1)
+"
+    
+    - name: Check for null values and duplicates
+      run: |
+        cd research/data_ingest
+        python -c "
+import sqlite3
+import pandas as pd
+
+db = sqlite3.connect('../../data/metis.db')
+cursor = db.cursor()
+
+tables = [
+    'equities_stooq', 'equities_simfin', 'macro_fred', 'futures_cme',
+    'sentiment_reddit', 'energy_eia', 'energy_noaa', 'weather_nws',
+    'legislation_congress', 'freight_rates', 'vessels_ais'
+]
+
+warnings = []
+for table in tables:
+    try:
+        df = pd.read_sql_query(f'SELECT * FROM {table}', db)
+        
+        # Check nulls
+        null_counts = df.isnull().sum()
+        if null_counts.any():
+            warnings.append(f'{table}: {null_counts[null_counts > 0].to_dict()}')
+        
+        # Check duplicates (assuming first column is ID or ticker+date)
+        dup_count = len(df) - len(df.drop_duplicates())
+        if dup_count > 0:
+            warnings.append(f'{table}: {dup_count} duplicate rows')
+    except:
+        pass
+
+if warnings:
+    print('Data Quality Warnings:')
+    for w in warnings:
+        print(f'  ⚠ {w}')
+"
+    
+    - name: Check data recency
+      run: |
+        cd research/data_ingest
+        python -c "
+import sqlite3
+import pandas as pd
+from datetime import datetime, timedelta
+
+db = sqlite3.connect('../../data/metis.db')
+
+# Tables with date columns
+date_tables = {
+    'equities_stooq': 'date',
+    'equities_simfin': 'date',
+    'macro_fred': 'date',
+    'futures_cme': 'date',
+    'energy_eia': 'date',
+    'energy_noaa': 'date',
+    'weather_nws': 'timestamp',
+    'vessels_ais': 'timestamp',
+}
+
+print('Data Recency Check:')
+now = datetime.now()
+stale_threshold = 7  # warn if older than 7 days
+
+for table, date_col in date_tables.items():
+    try:
+        df = pd.read_sql_query(f'SELECT MAX({date_col}) as max_date FROM {table}', db)
+        if df['max_date'][0]:
+            # Handle both date and datetime formats
+            max_date = pd.to_datetime(df['max_date'][0])
+            age = (now - max_date).days
+            status = '✓' if age <= 1 else '⚠' if age <= stale_threshold else '✗'
+            print(f'{status} {table}: {age} days old')
+    except Exception as e:
+        print(f'⚠ {table}: {e}')
+"
+    
+    - name: Run anomaly detection
+      run: |
+        cd research/data_ingest
+        python -c "
+import sqlite3
+import pandas as pd
+import numpy as np
+
+db = sqlite3.connect('../../data/metis.db')
+
+# Check for price anomalies (e.g., price changes > 20% in one day)
+df = pd.read_sql_query('''
+  SELECT ticker, date, close 
+  FROM equities_stooq 
+  ORDER BY ticker, date DESC 
+  LIMIT 1000
+''', db)
+
+anomalies = []
+for ticker in df['ticker'].unique():
+    ticker_df = df[df['ticker'] == ticker].sort_values('date')
+    if len(ticker_df) > 1:
+        ticker_df['pct_change'] = ticker_df['close'].pct_change().abs()
+        bad = ticker_df[ticker_df['pct_change'] > 0.20]
+        if len(bad) > 0:
+            anomalies.append(f'{ticker}: {len(bad)} days with >20% move')
+
+if anomalies:
+    print('Price Anomalies Detected:')
+    for a in anomalies:
+        print(f'  ⚠ {a}')
+else:
+    print('✓ No major price anomalies detected')
+"
+    
+    - name: Notify on failure
+      if: failure()
+      uses: slackapi/slack-notify-action@v1
+      with:
+        payload: |
+          {
+            "text": "❌ Data Quality Check Failed",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Data Quality Check Failed*\nCheck job logs for details"
+                }
+              }
+            ]
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        SLACK_NOTIFY_SUCCESS: false
