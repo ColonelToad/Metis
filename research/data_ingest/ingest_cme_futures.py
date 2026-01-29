@@ -259,10 +259,17 @@ def ingest_cme_futures():
         logger.info("Data summary by contract:")
         for contract in df["contract"].unique():
             contract_data = df[df["contract"] == contract]
-            latest = contract_data.iloc[-1]
-            close_val = float(latest['Close']) if not pd.isna(latest['Close']) else 0.0
-            date_val = str(latest['Date']) if not pd.isna(latest['Date']) else "N/A"
-            logger.info(f"  {contract}: {close_val:.2f} (updated {date_val})")
+            if not contract_data.empty:
+                latest = contract_data.iloc[-1]
+                try:
+                    close_val = float(latest['Close'])
+                except (ValueError, TypeError):
+                    close_val = 0.0
+                try:
+                    date_val = str(latest['Date'])
+                except (ValueError, TypeError):
+                    date_val = "N/A"
+                logger.info(f"  {contract}: {close_val:.2f} (updated {date_val})")
         
         return df
     else:
