@@ -171,26 +171,17 @@ def upsert_permits(engine, df: pd.DataFrame) -> None:
     
     ensure_table(engine)
     
-    upsert_sql = """
-    INSERT OR REPLACE INTO census_permits (
-        date, permit_count, permit_6m_rolling, permit_yoy_change, permit_bullish, timestamp
-    ) VALUES (?, ?, ?, ?, ?, ?)
-    """
+    # Use pandas to_sql with proper types
+    df_insert = df.copy()
+    df_insert['timestamp'] = datetime.now().isoformat()
     
-    records = [
-        (
-            row['date'].strftime('%Y-%m-%d') if hasattr(row['date'], 'strftime') else row['date'],
-            int(row['permit_count']) if pd.notna(row['permit_count']) else None,
-            float(row['permit_6m_rolling']) if pd.notna(row['permit_6m_rolling']) else None,
-            float(row['permit_yoy_change']) if pd.notna(row['permit_yoy_change']) else None,
-            int(row['permit_bullish']) if pd.notna(row['permit_bullish']) else 0,
-            datetime.now().isoformat(),
-        )
-        for _, row in df.iterrows()
-    ]
-    
-    with engine.begin() as conn:
-        conn.executemany(upsert_sql, records)
+    df_insert.to_sql(
+        'census_permits',
+        engine,
+        if_exists='append',
+        index=False,
+        method='multi'
+    )
     
     print(f"[CENSUS] Upserted {len(df)} permit records")
 

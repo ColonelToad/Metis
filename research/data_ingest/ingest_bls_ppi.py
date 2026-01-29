@@ -216,26 +216,17 @@ def upsert_ppi(engine, df: pd.DataFrame) -> None:
     
     ensure_table(engine)
     
-    upsert_sql = """
-    INSERT OR REPLACE INTO bls_ppi (
-        date, series_id, series_name, ppi_index, ppi_yoy_change, timestamp
-    ) VALUES (?, ?, ?, ?, ?, ?)
-    """
+    # Use pandas to_sql with proper types
+    df_insert = df.copy()
+    df_insert['timestamp'] = datetime.now().isoformat()
     
-    records = [
-        (
-            row['date'].strftime('%Y-%m-%d') if hasattr(row['date'], 'strftime') else row['date'],
-            row['series_id'],
-            row['series_name'],
-            float(row['ppi_index']) if pd.notna(row['ppi_index']) else None,
-            float(row['ppi_yoy_change']) if pd.notna(row['ppi_yoy_change']) else None,
-            datetime.now().isoformat(),
-        )
-        for _, row in df.iterrows()
-    ]
-    
-    with engine.begin() as conn:
-        conn.executemany(upsert_sql, records)
+    df_insert.to_sql(
+        'bls_ppi',
+        engine,
+        if_exists='append',
+        index=False,
+        method='multi'
+    )
     
     print(f"[BLS] Upserted {len(df)} PPI records")
 

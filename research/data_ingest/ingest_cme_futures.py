@@ -17,6 +17,7 @@ CME futures provide:
 
 import yfinance as yf
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
 import logging
@@ -160,12 +161,12 @@ def calculate_futures_indicators(df: pd.DataFrame) -> pd.DataFrame:
         
         # YoY change
         df.loc[mask, "Close_YoY_Pct"] = (
-            df.loc[mask, "Close"].pct_change(252) * 100
+            df.loc[mask, "Close"].pct_change(252, fill_method=None) * 100
         )
         
         # Month-to-date change
         df.loc[mask, "Close_MTD_Pct"] = (
-            df.loc[mask, "Close"].pct_change() * 100
+            df.loc[mask, "Close"].pct_change(fill_method=None) * 100
         )
         
         # 20-day moving average
@@ -184,10 +185,15 @@ def calculate_futures_indicators(df: pd.DataFrame) -> pd.DataFrame:
         )
         
         # High-Low range (daily volatility proxy)
-        df.loc[mask, "Range_Pct"] = (
-            (df.loc[mask, "High"] - df.loc[mask, "Low"]) / 
-            df.loc[mask, "Close"] * 100
-        )
+        # Only calculate if we have valid High and Low columns
+        if "High" in df.columns and "Low" in df.columns:
+            # Avoid division by zero
+            close_series = df.loc[mask, "Close"]
+            close_nonzero = close_series.replace(0, np.nan)
+            df.loc[mask, "Range_Pct"] = (
+                (df.loc[mask, "High"] - df.loc[mask, "Low"]) / 
+                close_nonzero * 100
+            )
     
     return df
 
@@ -254,8 +260,9 @@ def ingest_cme_futures():
         for contract in df["contract"].unique():
             contract_data = df[df["contract"] == contract]
             latest = contract_data.iloc[-1]
-            logger.info(f"  {contract}: {latest['Close']:.2f} "
-                       f"(updated {latest['Date']})")
+            close_val = float(latest['Close']) if not pd.isna(latest['Close']) else 0.0
+            date_val = str(latest['Date']) if not pd.isna(latest['Date']) else "N/A"
+            logger.info(f"  {contract}: {close_val:.2f} (updated {date_val})")
         
         return df
     else:

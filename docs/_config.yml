@@ -1,0 +1,22 @@
+theme: jekyll-theme-slate
+
+title: Metis Trading System
+description: Physical-world lead times predict energy futures prices
+
+github:
+  repository_url: https://github.com/ChrisOzc/Metis
+
+show_downloads: false
+
+plugins:
+  - jekyll-feed
+  - jekyll-sitemap
+
+permalink: /blog/:year/:month/:day/:title/
+
+defaults:
+  - scope:
+      path: "blog"
+      type: "posts"
+    values:
+      layout: "post"

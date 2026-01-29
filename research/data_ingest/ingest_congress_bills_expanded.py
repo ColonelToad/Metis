@@ -147,7 +147,7 @@ def upsert_bills(engine, df: pd.DataFrame) -> None:
     print(f"[CONGRESS] Upserted {len(df)} bills into congress_bills")
 
 
-def main(congress: int, limit: int):
+def main(congress: int = 119, limit: int = 200):
     rc.log_mode("Congress.gov Expanded")
     df = fetch_bills(congress, limit)
     if df.empty:
