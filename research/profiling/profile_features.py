@@ -39,7 +39,8 @@ def main():
     df, t_price = time_section("load_price_data", fe.load_price_data)
     df, t_eia = time_section("load_eia_features", lambda: fe.load_eia_features(df))
     df, t_fred = time_section("load_fred_features", lambda: fe.load_fred_features(df))
-    df, t_tom = time_section("load_tomtom_features", lambda: fe.load_tomtom_features(df))
+    df, t_bls = time_section("load_bls_ppi_features", lambda: fe.load_bls_ppi_features(df))
+    df, t_census = time_section("load_census_permit_features", lambda: fe.load_census_permit_features(df))
     df, t_cong = time_section("load_congress_features", lambda: fe.load_congress_features(df))
 
     # full engineer run (re-runs loaders internally, for total)
@@ -53,7 +54,7 @@ def main():
         ps = pstats.Stats(pr, stream=f).sort_stats("cumtime")
         ps.print_stats(50)
         f.write("\n\n[PROFILE] Timings (s):\n")
-        f.write(f"price={t_price:.3f}, eia={t_eia:.3f}, fred={t_fred:.3f}, tomtom={t_tom:.3f}, congress={t_cong:.3f}, total={t_total:.3f}\n")
+        f.write(f"price={t_price:.3f}, eia={t_eia:.3f}, fred={t_fred:.3f}, bls={t_bls:.3f}, census={t_census:.3f}, congress={t_cong:.3f}, total={t_total:.3f}\n")
         f.write(f"peak_memory={peak/1e6:.1f} MB\n")
 
     print(f"[PROFILE] Saved cProfile to {PROFILE_OUT}")

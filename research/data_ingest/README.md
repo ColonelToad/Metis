@@ -11,8 +11,7 @@ This directory contains ingestion scripts for heterogeneous alternative data sou
 
 ### Policy & Macro (Covered)
 - **FRED:** Macro indicators (`ingest_fred.py`)
-- **Congress.gov:** Legislative data (API key available)
-- **Finnhub:** Congressional trades (`ingest_congress_trades.py`)
+- **Congress.gov:** Energy-related bills (`ingest_congress_bills_expanded.py`)
 
 ### Supply Chain (Partial)
 - **Maritime AIS:** LNG tanker tracking (`ingest_ais_maritime.py`)
@@ -74,7 +73,7 @@ cd research
 python data_ingest/ingest_eia.py
 python data_ingest/ingest_lmp.py
 python data_ingest/ingest_fred.py
-python data_ingest/ingest_congress_trades.py
+python data_ingest/ingest_congress_bills_expanded.py
 python data_ingest/ingest_job_postings.py  # Requires Adzuna key
 python data_ingest/ingest_ais_maritime.py  # Requires MarineTraffic key
 ```

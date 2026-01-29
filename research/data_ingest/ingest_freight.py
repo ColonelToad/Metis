@@ -10,6 +10,36 @@ Consolidates multiple freight-related data sources into a unified dataset:
 - Inventory to sales ratio (monthly)
 - Nominal and real imports (monthly)
 - West Coast shipping rates (monthly)
+
+FUTURE EXTENSION: Natural Gas Tanker Tracking
+----------------------------------------------
+The AIS vessel tracking (ingest_ais_maritime.py) currently tracks LNG tanker movements.
+To extend for NG-specific flow analysis:
+
+1. Map specific LNG terminals to vessel arrival patterns:
+   - Sabine Pass, Freeport, Corpus Christi (TX exports)
+   - Cove Point (MD imports)
+   - Track: arrival date, cargo volume (mmBTU), origin, discharge port
+
+2. Calculate derived metrics:
+   - Export utilization: (vessels loading) / (terminal capacity) per week
+   - Import volume: total mmBTU arriving at US ports per week
+   - Spot prices vs. utilization correlation
+   - Backwardation signal: if import volume ↑ → near-term supply tightness
+
+3. Data sources:
+   - AIS data: FREE (MarineTraffic, AISHub)
+   - Terminal schedules: Need to scrape or API (Bloomberg, Refinitiv)
+   - Port authorities: Houston Port Authority, LA Port Authority (some publish vessel schedules)
+
+4. Challenges:
+   - Vessel-to-cargo matching (not always in AIS metadata)
+   - Multi-leg journeys (ship unloads at intermediate port)
+   - LNG vs LPG vs other cargo types in same vessel
+   - Real-time vs. scheduled data quality
+
+Current approach: Use AIS for tanker locations + aggregate import/export values from macroeconomic data.
+Next step: Connect specific vessel movements to recorded LNG terminal activity.
 """
 
 import os

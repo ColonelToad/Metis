@@ -15,15 +15,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import ingest_eia
 import ingest_lmp
 import ingest_fred
-import ingest_congress_trades
+import ingest_congress_bills_expanded
 import ingest_job_postings
 import ingest_ais_maritime
+import ingest_bls_ppi
+import ingest_census_building_permits
 
 # New data sources (Sprint Jan 27)
 import ingest_freight
 import ingest_aviation_fuel
-import ingest_reddit_sentiment
-import ingest_equities_simfin
 import ingest_cme_futures
 
 INGESTERS = [
@@ -31,15 +31,17 @@ INGESTERS = [
     ("EIA Natural Gas", ingest_eia),
     ("Grid LMP", ingest_lmp),
     ("FRED Macro", ingest_fred),
-    ("Congressional Trades", ingest_congress_trades),
+    ("Congress Bills", ingest_congress_bills_expanded),
     ("Job Postings", ingest_job_postings),
     ("Maritime AIS", ingest_ais_maritime),
+    
+    # Economic Indicators
+    ("BLS Producer Price Index", ingest_bls_ppi),
+    ("Census Building Permits", ingest_census_building_permits),
     
     # New data sources (Sprint Jan 27)
     ("Freight Data", ingest_freight),
     ("Aviation Fuel", ingest_aviation_fuel),
-    ("Reddit Sentiment", ingest_reddit_sentiment),
-    ("SimFin Equities", ingest_equities_simfin),
     ("CME Futures", ingest_cme_futures),
 ]
 
@@ -59,12 +61,10 @@ def run_all():
                 module.ingest_freight()
             elif name == "Aviation Fuel":
                 module.ingest_aviation_fuel()
-            elif name == "Reddit Sentiment":
-                module.ingest_reddit_sentiment()
-            elif name == "SimFin Equities":
-                module.ingest_equities()
             elif name == "CME Futures":
                 module.ingest_cme_futures()
+            elif name in ["BLS Producer Price Index", "Census Building Permits"]:
+                module.main()
             else:
                 module.main() if hasattr(module, 'main') else exec(open(module.__file__).read())
             results.append((name, "SUCCESS"))

@@ -40,10 +40,10 @@ jobs:
         EIA_API_KEY=${{ secrets.EIA_API_KEY }}
         FRED_API_KEY=${{ secrets.FRED_API_KEY }}
         CONGRESS_API_KEY=${{ secrets.CONGRESS_API_KEY }}
-        SIMFIN_API_KEY=${{ secrets.SIMFIN_API_KEY }}
         AIS_API_KEY=${{ secrets.AIS_API_KEY }}
         GRID_API_KEY=${{ secrets.GRID_API_KEY }}
-        TOM_TOM_API_KEY=${{ secrets.TOM_TOM_API_KEY }}
+        BLS_API_KEY=${{ secrets.BLS_API_KEY }}
+        CENSUS_API_KEY=${{ secrets.CENSUS_API_KEY }}
         METIS_MODE=REAL
         EOF
 

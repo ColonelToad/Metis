@@ -6,8 +6,9 @@ Features:
 - Price-based: lagged returns (1d, 5d, 20d), volatility (20d rolling std)
 - EIA: storage levels, production, YoY changes, surprises
 - FRED: macro indicators (unemployment, interest rates, CRB index, etc.)
-- TomTom: traffic congestion at energy hubs
-- Congress: sentiment scores from energy-related bills
+- BLS: Producer Price Index (energy cost inflation indicator)
+- Census: Building permits (forward-looking construction/energy demand)
+- Congress: energy-related bills and legislative activity
 - Derived: momentum, mean reversion signals
 
 Output: Aligned daily CSV with all features aligned to NG futures dates
@@ -197,39 +198,83 @@ class FeatureEngineer:
         
         return df
     
-    def load_tomtom_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Load TomTom traffic congestion data for energy hubs."""
+    def load_bls_ppi_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Load BLS Producer Price Index (cost inflation indicator)."""
         
         query = """
-        SELECT timestamp as date, node, region, congestion_level
-        FROM tomtom_traffic
-        WHERE timestamp >= :start_date
-        ORDER BY timestamp
+        SELECT date, series_id, ppi_index, ppi_yoy_change
+        FROM bls_ppi
+        WHERE date >= :start_date
+        ORDER BY date
         """
         
         with self.engine.connect() as conn:
-            traffic = pd.read_sql(
+            ppi = pd.read_sql(
                 text(query),
                 conn,
                 params={"start_date": self.start_date.isoformat()}
             )
         
-        if not traffic.empty:
-            traffic['date'] = pd.to_datetime(traffic['date'])
-            traffic['congestion_level'] = pd.to_numeric(traffic['congestion_level'], errors='coerce')
+        if not ppi.empty:
+            ppi['date'] = pd.to_datetime(ppi['date'])
             
-            # Aggregate traffic by date (average congestion across nodes)
-            traffic_agg = traffic.groupby('date').agg({
-                'congestion_level': 'mean',
-                'node': 'count'  # number of nodes with data
-            }).reset_index()
-            traffic_agg.columns = ['date', 'avg_congestion', 'traffic_nodes_count']
+            # Pivot to get each series as a column
+            # For each series: take the PPI index and YoY change
+            for series_id in ppi['series_id'].unique():
+                series_data = ppi[ppi['series_id'] == series_id][['date', 'ppi_index', 'ppi_yoy_change']]
+                series_data.columns = ['date', f'ppi_index_{series_id}', f'ppi_yoy_{series_id}']
+                df = df.merge(series_data, on='date', how='left')
             
-            df = df.merge(traffic_agg, on='date', how='left')
+            # Simple aggregate: average PPI across energy series
+            ppi_cols = [c for c in df.columns if c.startswith('ppi_index_')]
+            if ppi_cols:
+                df['ppi_energy_avg'] = df[ppi_cols].mean(axis=1)
+                
+                # YoY aggregate
+                ppi_yoy_cols = [c for c in df.columns if c.startswith('ppi_yoy_')]
+                if ppi_yoy_cols:
+                    df['ppi_yoy_avg'] = df[ppi_yoy_cols].mean(axis=1)
             
-            print(f"[FEATURES] Loaded TomTom traffic congestion aggregates")
+            print(f"[FEATURES] Loaded BLS PPI data ({len(ppi['series_id'].unique())} series)")
         else:
-            print("[FEATURES] Warning: No TomTom data found")
+            print("[FEATURES] Warning: No BLS PPI data found")
+        
+        return df
+    
+    def load_census_permit_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Load Census building permits (forward-looking energy demand)."""
+        
+        query = """
+        SELECT date, permit_count, permit_6m_rolling, permit_yoy_change, permit_bullish
+        FROM census_permits
+        WHERE date >= :start_date
+        ORDER BY date
+        """
+        
+        with self.engine.connect() as conn:
+            permits = pd.read_sql(
+                text(query),
+                conn,
+                params={"start_date": self.start_date.isoformat()}
+            )
+        
+        if not permits.empty:
+            permits['date'] = pd.to_datetime(permits['date'])
+            permits = permits[[
+                'date', 'permit_count', 'permit_6m_rolling', 
+                'permit_yoy_change', 'permit_bullish'
+            ]]
+            
+            df = df.merge(permits, on='date', how='left')
+            
+            # Forward-looking signal: permits lead construction by ~3-6 months
+            # Create lagged features to capture lead relationship
+            df['permit_count_lag3m'] = df['permit_count'].shift(3)
+            df['permit_bullish_lag3m'] = df['permit_bullish'].shift(3)
+            
+            print(f"[FEATURES] Loaded Census building permit data")
+        else:
+            print("[FEATURES] Warning: No Census permit data found")
         
         return df
     
@@ -286,7 +331,8 @@ class FeatureEngineer:
         # Load all supplementary features
         df = self.load_eia_features(df)
         df = self.load_fred_features(df)
-        df = self.load_tomtom_features(df)
+        df = self.load_bls_ppi_features(df)
+        df = self.load_census_permit_features(df)
         df = self.load_congress_features(df)
         
         # Fill missing values
