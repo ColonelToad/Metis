@@ -74,7 +74,8 @@ def fetch_fred_series(series_id, start_date, max_retries=3):
     print(f"Failed to fetch {series_id} after {max_retries} attempts")
     return pd.DataFrame()
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for FRED data ingestion"""
     rc.log_mode("FRED")
     # Fetch 2 years of data
     start_date = datetime.now() - timedelta(days=730)
@@ -101,3 +102,6 @@ if __name__ == "__main__":
         combined_df.to_sql('fred_macro', engine, if_exists='replace', index=False)
         
         print(f"Saved {len(combined_df)} total macro observations to database")
+
+if __name__ == "__main__":
+    main()

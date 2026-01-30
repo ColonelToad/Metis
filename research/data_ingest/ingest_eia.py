@@ -70,7 +70,8 @@ def fetch_ng_production():
     
     return df[['timestamp', 'production_mmcf', 'area-name']]
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for EIA data ingestion"""
     rc.log_mode("EIA")
     print("Fetching EIA natural gas data...")
     
@@ -92,3 +93,6 @@ if __name__ == "__main__":
         print("EIA data saved to database")
     else:
         print("No EIA data fetched (DEV mode or API unavailable)")
+
+if __name__ == "__main__":
+    main()
