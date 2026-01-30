@@ -19,7 +19,7 @@ import ingest_congress_bills_expanded
 import ingest_job_postings
 import ingest_ais_maritime
 import ingest_bls_ppi
-import ingest_census_building_permits
+import ingest_fred_building_permits
 
 # New data sources (Sprint Jan 27)
 import ingest_freight
@@ -37,7 +37,7 @@ INGESTERS = [
     
     # Economic Indicators
     ("BLS Producer Price Index", ingest_bls_ppi),
-    ("Census Building Permits", ingest_census_building_permits),
+    ("FRED Building Permits", ingest_fred_building_permits),
     
     # New data sources (Sprint Jan 27)
     ("Freight Data", ingest_freight),

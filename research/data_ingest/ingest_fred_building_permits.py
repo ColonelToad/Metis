@@ -1,14 +1,15 @@
 """
-Census Bureau Building Permits Survey Ingestion
-Fetches monthly building permit data by Metropolitan Statistical Area (MSA).
+FRED Building Permits Survey Ingestion
+Fetches monthly building permit data at the national level.
 
 Signal: 6-month rolling average of permits
 - If permits ↑ >10% YoY → bullish energy demand (12-month forward)
 - Permits lead construction activity → electricity demand increase
-- Metric: Total value of permits issued
+- Metric: Total permits issued (thousands of units)
 
-Data source: Census Bureau's Building Permits Survey (free, no key required)
-API documentation: https://api.census.gov/data/timeseries/eits/
+Data source: Federal Reserve Economic Data (FRED)
+Series: PERMIT - New Privately-Owned Housing Units Authorized
+API documentation: https://fred.stlouisfed.org/docs/api/fred/
 """
 import os
 import sys
@@ -27,80 +28,80 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from research.common import runtime_config as rc
 
 load_dotenv()
-DB_URL = rc.get_db_url()
-CENSUS_API_KEY = os.getenv("CENSUS_API_KEY", "")
 
-# Census Bureau Building Permits Survey datasets
-# BPS = Building Permits Survey (monthly aggregates by state and MSA)
-CENSUS_API_URL = "https://api.census.gov/data/timeseries/eits/bps"
+# Database URL - use absolute path to work from any directory
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DB_PATH = PROJECT_ROOT / "data" / "metis.db"
+DB_URL = f"sqlite:///{DB_PATH}"
+
+FRED_API_KEY = os.getenv("FRED_API_KEY", "")
+
+# FRED API endpoint
+FRED_API_URL = "https://api.stlouisfed.org/fred/series/observations"
+PERMIT_SERIES_ID = "PERMIT"  # National building permits (thousands of units)
 
 
 def fetch_permits_national() -> Optional[pd.DataFrame]:
     """
-    Fetch national building permits data from Census API.
+    Fetch national building permits data from FRED API.
     
-    Returns monthly data: total permits issued and total value.
+    Returns monthly data: total permits issued (in thousands of units).
     """
-    if not rc.require_real_mode("Census Building Permits API"):
+    if not rc.require_real_mode("FRED Building Permits API"):
         # Return synthetic data for DEV mode
         return generate_synthetic_permits()
     
-    if not CENSUS_API_KEY:
-        print("[CENSUS] Missing CENSUS_API_KEY - using synthetic data")
+    if not FRED_API_KEY:
+        print("[FRED] Missing FRED_API_KEY - using synthetic data")
         return generate_synthetic_permits()
     
     try:
-        # Query: NAME (geography), PERMIT (permits issued count)
-        # get parameter specifies which variables to retrieve
-        # Note: Census API variable names may have changed; common alternatives: PERMIT, BPS_AC, etc.
         params = {
-            "get": "NAME,PERMIT",  # Permits issued count
-            "key": CENSUS_API_KEY,
-            "time": "from 2015-01",  # Start from 2015
+            "series_id": PERMIT_SERIES_ID,
+            "api_key": FRED_API_KEY,
+            "file_type": "json",
+            "observation_start": "2015-01-01",  # Last 10+ years
         }
         
-        response = requests.get(CENSUS_API_URL, params=params, timeout=30)
+        response = requests.get(FRED_API_URL, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
         
-        if not data or len(data) < 2:
-            print("[CENSUS] No data returned from API")
+        # Check for API errors
+        if "error_code" in data:
+            print(f"[FRED] API error: {data.get('error_message', 'Unknown error')}")
+            return generate_synthetic_permits()
+        
+        observations = data.get("observations", [])
+        
+        if not observations:
+            print("[FRED] No data returned from API")
             return None
         
-        # API returns list of lists: [["NAME", "PERMIT", "time"], ...]
-        headers = data[0]
-        records = data[1:]
-        
-        df = pd.DataFrame(records, columns=headers)
-        
-        # Convert to proper types
-        df['PERMIT'] = pd.to_numeric(df['PERMIT'], errors='coerce')
-        df['time'] = pd.to_datetime(df['time'], format='%Y-%m')
-        
-        # Filter to national aggregate ("United States")
-        df = df[df['NAME'] == 'United States'].copy()
-        
-        if df.empty:
-            print("[CENSUS] No national data found")
-            return None
-        
-        df = df[['time', 'PERMIT']].copy()
-        df.columns = ['date', 'permit_count']
+        # Convert to DataFrame
+        df = pd.DataFrame(observations)
+        df = df[['date', 'value']].copy()
+        df['date'] = pd.to_datetime(df['date'])
+        df['value'] = pd.to_numeric(df['value'], errors='coerce')
         df = df.dropna()
+        
+        # FRED returns data in thousands - convert to actual count
+        df['permit_count'] = (df['value'] * 1000).astype(int)
+        df = df[['date', 'permit_count']].copy()
         df = df.sort_values('date')
         
-        print(f"[CENSUS] Fetched {len(df)} monthly permit records")
+        print(f"[FRED] Fetched {len(df)} monthly permit records")
         return df
         
     except requests.exceptions.HTTPError as e:
-        if "404" in str(e):
-            print(f"[CENSUS] API endpoint 404 - variable name may have changed, using synthetic data")
-            print(f"[CENSUS] To fix: verify PERMIT variable exists at https://api.census.gov/data/timeseries/eits/bps")
-        else:
-            print(f"[CENSUS] API fetch failed: {e}")
+        print(f"[FRED] API fetch failed: {e}")
+        if e.response.status_code == 400:
+            print("[FRED] Invalid API key or parameters")
+        elif e.response.status_code == 429:
+            print("[FRED] Rate limit exceeded")
         return generate_synthetic_permits()
     except Exception as e:
-        print(f"[CENSUS] API fetch failed: {e}")
+        print(f"[FRED] API fetch failed: {e}")
         return generate_synthetic_permits()
 
 
@@ -114,7 +115,7 @@ def generate_synthetic_permits() -> pd.DataFrame:
     
     dates = pd.date_range(start=start_date, end=end_date, freq='MS')
     
-    # Synthetic data: base 100k permits/month with trend and seasonality
+    # Synthetic data: base 1.4M permits/month with trend and seasonality
     trend = pd.Series(range(len(dates))) * 0.001  # Very slight uptrend
     seasonal = 0.1 * pd.Series([
         1.05 if m in [3, 4, 5] else  # Spring peak
@@ -123,7 +124,7 @@ def generate_synthetic_permits() -> pd.DataFrame:
         for m in dates.month
     ])
     
-    permits = (100_000 + trend * 100_000) * (1 + seasonal)
+    permits = (1_400_000 + trend * 100_000) * (1 + seasonal)
     permits = permits + (pd.Series(range(len(dates))) * 0.02 * 100_000).values  # Long-term growth
     
     return pd.DataFrame({
@@ -168,13 +169,13 @@ def ensure_table(engine) -> None:
     """
     with engine.begin() as conn:
         conn.execute(text(create_sql))
-    print("[CENSUS] Table ensured: census_permits")
+    print("[FRED] Table ensured: census_permits")
 
 
 def upsert_permits(engine, df: pd.DataFrame) -> None:
     """Upsert permit data into database."""
     if df.empty:
-        print("[CENSUS] No data to upsert")
+        print("[FRED] No data to upsert")
         return
     
     ensure_table(engine)
@@ -191,17 +192,17 @@ def upsert_permits(engine, df: pd.DataFrame) -> None:
         method='multi'
     )
     
-    print(f"[CENSUS] Upserted {len(df)} permit records")
+    print(f"[FRED] Upserted {len(df)} permit records")
 
 
 def main():
     """Main ingestion pipeline."""
-    rc.log_mode("Census Building Permits")
+    rc.log_mode("FRED Building Permits")
     
     # Fetch data
     df = fetch_permits_national()
     if df is None or df.empty:
-        print("[CENSUS] No permit data available")
+        print("[FRED] No permit data available")
         return
     
     # Calculate metrics
@@ -214,8 +215,8 @@ def main():
     # Log summary
     if not df.empty:
         latest = df.iloc[-1]
-        print(f"\n[CENSUS] Latest permit data:")
-        print(f"  Date: {latest['date']}")
+        print(f"\n[FRED] Latest permit data:")
+        print(f"  Date: {latest['date'].strftime('%Y-%m')}")
         print(f"  Permits: {latest['permit_count']:,.0f}")
         print(f"  6-month avg: {latest['permit_6m_rolling']:,.0f}")
         print(f"  YoY change: {latest['permit_yoy_change']:+.1f}%")
