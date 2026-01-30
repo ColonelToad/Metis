@@ -187,7 +187,7 @@ def upsert_permits(engine, df: pd.DataFrame) -> None:
     df_insert.to_sql(
         'census_permits',
         engine,
-        if_exists='append',
+        if_exists='replace',
         index=False,
         method='multi'
     )
