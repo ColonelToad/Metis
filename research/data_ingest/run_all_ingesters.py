@@ -63,7 +63,7 @@ def run_all():
                 module.ingest_aviation_fuel()
             elif name == "CME Futures":
                 module.ingest_cme_futures()
-            elif name in ["BLS Producer Price Index", "Census Building Permits"]:
+            elif name in ["BLS Producer Price Index", "FRED Building Permits"]:
                 module.main()
             else:
                 module.main() if hasattr(module, 'main') else exec(open(module.__file__).read())
@@ -77,5 +77,5 @@ def run_all():
     print("Ingestion Summary:")
     print(f"{'='*60}")
     for name, status in results:
-        status_str = "✓" if "SUCCESS" in status else "✗"
+        status_str = "[OK]" if "SUCCESS" in status else "[XX]"
         print(f"{status_str} {name:30} {status}")
