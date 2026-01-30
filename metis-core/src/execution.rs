@@ -9,6 +9,7 @@ use crate::types::Direction;
 pub struct TwapExecutor {
     total_qty: f64,
     num_children: usize,
+    #[allow(dead_code)]
     duration_secs: u32,
     child_qty: f64,
     interval_secs: u32,
@@ -60,6 +61,7 @@ impl TwapExecutor {
 /// Slippage calculator
 pub struct SlippageCalculator {
     arrival_price: f64,
+    #[allow(dead_code)]
     bid_ask_spread_bps: f64,
 }
 

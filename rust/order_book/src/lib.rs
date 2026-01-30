@@ -75,7 +75,7 @@ impl OrderBook {
     }
 
     pub fn best_bid(&self) -> Option<f64> {
-        self.bids.keys().rev().next().map(|k| self.key_to_price(*k))
+        self.bids.keys().next_back().map(|k| self.key_to_price(*k))
     }
     pub fn best_ask(&self) -> Option<f64> {
         self.asks.keys().next().map(|k| self.key_to_price(*k))
@@ -155,7 +155,7 @@ impl OrderBook {
                 Some((key, ord))
             }
             Side::Buy => {
-                let key = *self.bids.keys().rev().next()?;
+                let key = *self.bids.keys().next_back()?;
                 let level = self.bids.get_mut(&key).unwrap();
                 let ord = level.queue.front()?.clone();
                 Some((key, ord))
@@ -174,7 +174,7 @@ impl OrderBook {
                 }
             }
             Side::Buy => {
-                let key = *self.bids.keys().rev().next().unwrap();
+                let key = *self.bids.keys().next_back().unwrap();
                 let level = self.bids.get_mut(&key).unwrap();
                 level.queue.pop_front();
                 if level.queue.is_empty() {

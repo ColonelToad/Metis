@@ -40,8 +40,8 @@ impl EmbeddingEngine {
         // Deterministic mock embedding based on text hash
         let hash = text.chars().map(|c| c as u32).sum::<u32>();
         let mut embedding = vec![0.0; self.dimension];
-        for i in 0..self.dimension {
-            embedding[i] = ((hash + i as u32) % 100) as f32 / 100.0;
+        for (i, val) in embedding.iter_mut().enumerate().take(self.dimension) {
+            *val = ((hash + i as u32) % 100) as f32 / 100.0;
         }
         embedding
     }

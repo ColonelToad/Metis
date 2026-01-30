@@ -161,6 +161,12 @@ pub struct ExpectedValue {
     pub prob_loss: f64,
 }
 
+impl Default for ExpectedValue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExpectedValue {
     pub fn new() -> Self {
         Self {
@@ -200,6 +206,12 @@ pub struct RiskAssessment {
     pub event_risk_elevated: bool,
 }
 
+impl Default for RiskAssessment {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RiskAssessment {
     pub fn new() -> Self {
         Self {
@@ -214,12 +226,10 @@ impl RiskAssessment {
 
     /// Overall risk score (0.0-1.0, higher = riskier)
     pub fn risk_score(&self) -> f64 {
-        let components = vec![
-            self.black_swan_prob,
+        let components = [self.black_swan_prob,
             self.concentration_risk,
             self.liquidity_risk,
-            if self.event_risk_elevated { 0.3 } else { 0.0 },
-        ];
+            if self.event_risk_elevated { 0.3 } else { 0.0 }];
         // Weighted average: 40% black swan, 30% concentration, 20% liquidity, 10% event
         (0.4 * components[0] + 0.3 * components[1] + 0.2 * components[2] + components[3]).min(1.0)
     }
@@ -273,6 +283,12 @@ pub struct ReasoningEngine {
     risk: RiskAssessment,
     /// Historical calibration data
     calibrations: Vec<Calibration>,
+}
+
+impl Default for ReasoningEngine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ReasoningEngine {
@@ -340,7 +356,7 @@ impl ReasoningEngine {
             // Bayes rule: posterior ∝ prior × likelihood
             hypothesis.posterior_prob = (hypothesis.prior_prob * likelihood)
                 / (hypothesis.prior_prob * likelihood + (1.0 - hypothesis.prior_prob));
-            hypothesis.posterior_prob = hypothesis.posterior_prob.min(0.99).max(0.01);
+            hypothesis.posterior_prob = hypothesis.posterior_prob.clamp(0.01, 0.99);
             // Bound [0.01, 0.99]
         }
     }
@@ -365,7 +381,7 @@ impl ReasoningEngine {
 
         // Sideways scenario: balanced signals
         let remaining = 1.0 - bull_prob - bear_prob;
-        let sideways_prob = remaining.max(0.1).min(0.8);
+        let sideways_prob = remaining.clamp(0.1, 0.8);
         let mut sideways = Scenario::new("sideways".to_string(), sideways_prob, 0.02, -0.05);
         sideways.reasoning = "Mixed signals suggest consolidation".to_string();
         self.scenarios.push(sideways);
@@ -408,7 +424,7 @@ impl ReasoningEngine {
         let mut sorted_returns: Vec<f64> =
             self.scenarios.iter().map(|s| s.expected_return).collect();
         sorted_returns.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let var_95 = sorted_returns.get(0).cloned().unwrap_or(0.0);
+        let var_95 = sorted_returns.first().cloned().unwrap_or(0.0);
 
         // CVaR: average of worst 5% cases (typically one scenario)
         let cvar_95 = self

@@ -11,7 +11,7 @@ fn main() {
     ob.submit_limit(Side::Buy, 1.997, 5.0);
 
     // Simulate a simple momentum signal: buy when price rising
-    let prices = vec![2.000, 2.001, 2.002, 2.004, 2.003, 2.002, 2.001];
+    let prices = [2.000, 2.001, 2.002, 2.004, 2.003, 2.002, 2.001];
     for w in prices.windows(3) {
         let p1 = w[0];
         let p2 = w[1];

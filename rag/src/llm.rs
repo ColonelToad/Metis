@@ -6,13 +6,13 @@ use llama_cpp_2::{
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
     model::{params::LlamaModelParams, AddBos, LlamaModel},
-    token::data_array::LlamaTokenDataArray,
 };
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::Arc;
 
 pub struct LocalLLMEngine {
+    #[allow(dead_code)]
     model_path: String,
     mock_mode: bool,
     backend: Option<Arc<LlamaBackend>>,
@@ -94,7 +94,7 @@ impl LocalLLMEngine {
 
             for _ in 0..max_tokens {
                 // Sample next token
-                let new_token_id = sampler.sample(&mut ctx, batch.n_tokens() - 1);
+                let new_token_id = sampler.sample(&ctx, batch.n_tokens() - 1);
 
                 // Check for EOS
                 if model.is_eog_token(new_token_id) {

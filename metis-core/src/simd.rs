@@ -46,6 +46,13 @@ pub unsafe fn normalize_temperature_simd(temps: &[f32], mean: f32, std: f32) -> 
 /// # Performance
 /// Processes 8 f32 values per iteration using AVX2 + FMA
 /// Uses fused multiply-add for (a-b)^2 accumulation (3x faster than scalar)
+///
+/// # Safety
+/// This function is unsafe because it performs unchecked pointer arithmetic and uses SIMD intrinsics.
+/// The caller must ensure that:
+/// - `a` and `b` have the same length and are at least a multiple of 8 in length.
+/// - Both slices are valid for reads of `len` elements.
+/// - The CPU supports AVX2 instructions.
 #[inline(always)]
 pub unsafe fn euclidean_distance_simd(a: &[f32], b: &[f32]) -> f32 {
     let mut sum = _mm256_setzero_ps();

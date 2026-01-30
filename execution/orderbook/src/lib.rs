@@ -6,7 +6,7 @@ use ordered_float::OrderedFloat;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use tracing::{debug, info, warn};
+use tracing::debug;
 
 /// Price level in the order book (stored as ordered float for BTreeMap)
 pub type Price = OrderedFloat<f64>;
@@ -89,7 +89,7 @@ impl OrderBook {
             EventType::Trade {
                 price,
                 quantity,
-                side,
+                side: _,
             } => {
                 debug!("Trade: {} {} @ {}", quantity, self.symbol, price);
                 // Trades don't update the book directly in L2 data

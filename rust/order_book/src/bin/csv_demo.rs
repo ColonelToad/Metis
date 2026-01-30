@@ -1,7 +1,6 @@
 use order_book::{OrderBook, Side};
 use std::env;
 use std::fs::File;
-use std::io;
 
 #[derive(Default)]
 struct Pnl {

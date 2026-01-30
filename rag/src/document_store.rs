@@ -3,6 +3,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 pub struct DocumentStore {
+    #[allow(dead_code)]
     db_path: PathBuf,
     mock_mode: bool,
     mock_documents: Vec<Document>,

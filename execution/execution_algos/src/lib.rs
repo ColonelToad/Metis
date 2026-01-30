@@ -1,9 +1,8 @@
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
-use orderbook::{OrderBook, Side};
+use orderbook::Side;
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
-use tracing::{debug, info};
+use tracing::info;
 
 /// Parent order representing the full trading signal
 #[derive(Debug, Clone, Serialize, Deserialize)]
