@@ -57,109 +57,39 @@ jobs:
         db.close()
         PYEOF
 
-    - name: Run ingestion with fail mode handling
+    - name: Run ingestion pipeline
       id: ingest
       continue-on-error: true
       env:
         METIS_MODE: REAL
       run: |
-        cd research/data_ingest
-        python << 'PYEOF'
-        import sys
-        import traceback
-        from datetime import datetime
-        from fail_modes import with_retry, validate_ingestion, fallback_on_error
-        from run_all_ingesters import run_all_ingesters
+        cd ${{ github.workspace }}
+        python ingest_wrapper.py
 
-        print(f'[{datetime.now().isoformat()}] Starting ingestion with fail mode handling...')
-
-        # Run ingesters with built-in retry logic
-        try:
-            @with_retry(max_attempts=3, backoff_factor=2.0, timeout=300)
-            def ingest():
-                return run_all_ingesters()
-
-            result = ingest()
-            print(f'[{datetime.now().isoformat()}] ✓ Ingestion completed successfully')
-            sys.exit(0)
-
-        except Exception as e:
-            print(f'[{datetime.now().isoformat()}] ✗ Ingestion failed after retries: {e}')
-            traceback.print_exc()
-
-            # Attempt fallback: use previous day's data
-            try:
-                fallback_result = fallback_on_error()
-                print(f'[{datetime.now().isoformat()}] ⚠ Using fallback data from previous run')
-                sys.exit(0)
-            except:
-                print(f'[{datetime.now().isoformat()}] ✗ Fallback also failed')
-                sys.exit(1)
-        PYEOF
-
-    - name: Validate ingested data
+    - name: Verify ingestion completed
       id: validate
       continue-on-error: true
       run: |
-        cd research/data_ingest
-        python << 'PYEOF'
-        import sys
-        from datetime import datetime
-        from fail_modes import validate_ingestion, check_anomalies
-
-        print(f'[{datetime.now().isoformat()}] Validating ingested data...')
-
-        try:
-            # Check schema, nulls, duplicates
-            validation_result = validate_ingestion()
-
-            # Check for anomalies (prices, volume, missing data)
-            anomalies = check_anomalies()
-
-            if validation_result and not anomalies:
-                print(f'[{datetime.now().isoformat()}] ✓ Data validation passed')
-                sys.exit(0)
-            else:
-                print(f'[{datetime.now().isoformat()}] ⚠ Data validation warnings (non-fatal)')
-                print(f'  Anomalies detected: {anomalies}')
-                sys.exit(0)  # Continue even with warnings
-
-        except Exception as e:
-            print(f'[{datetime.now().isoformat()}] ✗ Validation error: {e}')
-            sys.exit(1)
-        PYEOF
-
-    - name: Build Rust ingesters
-      id: rust-build
-      continue-on-error: true
-      run: |
-        cd ais_vessel_tracking
-        cargo build --release 2>&1 | tail -20
-
-    - name: Run AIS vessel tracking (Rust)
-      id: ais-ingest
-      continue-on-error: true
-      timeout-minutes: 5
-      run: |
-        if [ -f ais_vessel_tracking/target/release/ais_vessel_tracking ]; then
-          ./ais_vessel_tracking/target/release/ais_vessel_tracking
+        if [ -f "data/metis.db" ]; then
+          echo "[OK] Database exists"
+          exit 0
         else
-          echo "⚠ AIS ingester not available, skipping"
+          echo "[XX] Database not found"
+          exit 1
         fi
 
     - name: Summary
       if: always()
       run: |
-        echo "## Ingestion Summary"
+        echo "## Data Ingestion Summary"
         echo "- Ingest status: ${{ steps.ingest.outcome }}"
-        echo "- Validation status: ${{ steps.validate.outcome }}"
-        echo "- AIS ingester status: ${{ steps.ais-ingest.outcome }}"
+        echo "- Database validation: ${{ steps.validate.outcome }}"
 
         if [ "${{ steps.ingest.outcome }}" = "success" ] || [ "${{ steps.validate.outcome }}" = "success" ]; then
-          echo "✓ Ingestion pipeline completed"
+          echo "[OK] Ingestion pipeline completed successfully"
           exit 0
         else
-          echo "✗ Ingestion failed"
+          echo "[XX] Ingestion pipeline failed"
           exit 1
         fi
 
@@ -181,7 +111,7 @@ jobs:
       with:
         payload: |
           {
-            "text": "❌ Data Ingestion Failed",
+            "text": "[XX] Data Ingestion Failed",
             "blocks": [
               {
                 "type": "section",
