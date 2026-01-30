@@ -50,8 +50,9 @@ def fetch_permits_national() -> Optional[pd.DataFrame]:
         return generate_synthetic_permits()
     
     try:
-        # Query: NAME (geography), PERMIT_COUNT, PERMIT_VAL (monthly)
+        # Query: NAME (geography), PERMIT (permits issued count)
         # get parameter specifies which variables to retrieve
+        # Note: Census API variable names may have changed; common alternatives: PERMIT, BPS_AC, etc.
         params = {
             "get": "NAME,PERMIT",  # Permits issued count
             "key": CENSUS_API_KEY,
@@ -91,6 +92,13 @@ def fetch_permits_national() -> Optional[pd.DataFrame]:
         print(f"[CENSUS] Fetched {len(df)} monthly permit records")
         return df
         
+    except requests.exceptions.HTTPError as e:
+        if "404" in str(e):
+            print(f"[CENSUS] API endpoint 404 - variable name may have changed, using synthetic data")
+            print(f"[CENSUS] To fix: verify PERMIT variable exists at https://api.census.gov/data/timeseries/eits/bps")
+        else:
+            print(f"[CENSUS] API fetch failed: {e}")
+        return generate_synthetic_permits()
     except Exception as e:
         print(f"[CENSUS] API fetch failed: {e}")
         return generate_synthetic_permits()

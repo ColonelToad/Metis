@@ -1,0 +1,31 @@
+{
+  "created": "2026-01-29T19:10:33.127299",
+  "source": "airline_fuel.ods",
+  "rows": 311,
+  "columns": [
+    "Date",
+    "Year",
+    "Month",
+    "Domestic_Gallons",
+    "International_Gallons",
+    "Total_Gallons",
+    "Total_Cost_Million",
+    "Cost_Per_Gallon",
+    "Total_Gallons_YoY_Pct",
+    "Domestic_Pct",
+    "Cost_Per_1000Gal",
+    "Total_Gallons_MA3"
+  ],
+  "date_range": "2000-01-01 00:00:00 to 2025-11-01 00:00:00",
+  "indicators": [
+    "Total_Gallons: Monthly fuel consumption (gallons)",
+    "Domestic_Gallons: Domestic airline fuel (gallons)",
+    "International_Gallons: International airline fuel (gallons)",
+    "Total_Cost_Million: Total fuel cost (million dollars)",
+    "Cost_Per_Gallon: Fuel cost per gallon (dollars)",
+    "Total_Gallons_YoY_Pct: Year-over-year growth %",
+    "Domestic_Pct: Domestic as % of total",
+    "Cost_Per_1000Gal: Cost efficiency metric",
+    "Total_Gallons_MA3: 3-month moving average of consumption"
+  ]
+}

@@ -20,7 +20,7 @@ import json
 
 logger = logging.getLogger(__name__)
 
-AIRLINE_FUEL_FILE = Path(__file__).parent.parent.parent / "airline_fuel.ods"
+AIRLINE_FUEL_FILE = Path(__file__).parent.parent.parent / "data" / "airline_fuel.ods"
 OUTPUT_DIR = Path(__file__).parent.parent / "data" / "processed"
 
 
