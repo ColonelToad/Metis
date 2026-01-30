@@ -226,10 +226,12 @@ impl RiskAssessment {
 
     /// Overall risk score (0.0-1.0, higher = riskier)
     pub fn risk_score(&self) -> f64 {
-        let components = [self.black_swan_prob,
+        let components = [
+            self.black_swan_prob,
             self.concentration_risk,
             self.liquidity_risk,
-            if self.event_risk_elevated { 0.3 } else { 0.0 }];
+            if self.event_risk_elevated { 0.3 } else { 0.0 },
+        ];
         // Weighted average: 40% black swan, 30% concentration, 20% liquidity, 10% event
         (0.4 * components[0] + 0.3 * components[1] + 0.2 * components[2] + components[3]).min(1.0)
     }

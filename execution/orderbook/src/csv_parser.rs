@@ -31,7 +31,10 @@ impl CsvTickParser {
                     // Try to parse as "%Y-%m-%d %H:%M:%S"
                     match chrono::NaiveDateTime::parse_from_str(&record[0], "%Y-%m-%d %H:%M:%S") {
                         Ok(naive) => {
-                            let t = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc);
+                            let t = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                                naive,
+                                chrono::Utc,
+                            );
                             debug!("Row {}: Parsed timestamp (naive fallback): {}", i + 2, t);
                             t
                         }
