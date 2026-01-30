@@ -3,12 +3,12 @@
 //! Zero-copy signal transmission from Python ML models to Rust execution engine
 //! Every shop has Python ML + C++/Rust execution; this is production essential.
 
+use crate::numa::pin_thread_to_core;
+use crate::types::{Direction, InstrumentId, TradingSignal};
+use crossbeam::channel::{bounded, Receiver, Sender};
 use pyo3::prelude::*;
 use std::sync::Arc;
 use std::thread;
-use crossbeam::channel::{bounded, Sender, Receiver};
-use crate::types::{TradingSignal, Direction, InstrumentId};
-use crate::numa::pin_thread_to_core;
 
 /// Rust trading engine that consumes signals
 pub struct MetisTradingEngine {
@@ -24,7 +24,7 @@ impl MetisTradingEngine {
             signal_count: 0,
         }
     }
-    
+
     /// Main event loop (runs on dedicated thread)
     pub fn run(&mut self) {
         // Pin this thread to core 0 for NUMA locality and consistent latency
@@ -32,7 +32,7 @@ impl MetisTradingEngine {
         if let Err(e) = pin_thread_to_core(0) {
             eprintln!("[Engine] Warning: Failed to pin thread: {}", e);
         }
-        
+
         loop {
             match self.rx.recv() {
                 Ok(signal) => {
@@ -47,7 +47,7 @@ impl MetisTradingEngine {
             }
         }
     }
-    
+
     /// Process a trading signal (main hot path)
     #[inline(always)]
     fn process_signal(&mut self, signal: &TradingSignal) {
@@ -55,19 +55,16 @@ impl MetisTradingEngine {
         // - Order submission
         // - Position management
         // - Risk checks
-        
+
         eprintln!(
             "[Signal] {:?} {} @ confidence {:.2} (horizon: {} min)",
-            signal.instrument,
-            signal.direction,
-            signal.confidence,
-            signal.horizon_minutes
+            signal.instrument, signal.direction, signal.confidence, signal.horizon_minutes
         );
     }
 }
 
 /// Python-facing signal publisher
-/// 
+///
 /// Created in Python, holds channel sender to Rust engine
 /// Provides non-blocking signal submission from Python
 #[pyclass]
@@ -78,24 +75,22 @@ pub struct SignalPublisher {
 #[pymethods]
 impl SignalPublisher {
     /// Initialize publisher and spawn Rust trading engine
-    /// 
+    ///
     /// Called from Python: `publisher = metis_core.SignalPublisher()`
     #[new]
     fn new() -> Self {
         // Create bounded channel (16384 signals max buffered for benchmarking)
         let (tx, rx) = bounded(16384);
-        
+
         // Spawn Rust trading engine on background thread
         thread::spawn(move || {
             let mut engine = MetisTradingEngine::new(rx);
             engine.run();
         });
-        
-        Self {
-            tx: Arc::new(tx),
-        }
+
+        Self { tx: Arc::new(tx) }
     }
-    
+
     /// Publish signal from Python ML model (non-blocking)
     ///
     /// Called from Python after getting prediction:
@@ -119,13 +114,13 @@ impl SignalPublisher {
         let numeric_id = instrument_id
             .bytes()
             .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
-        
+
         let direction_enum = match direction {
             x if x > 0 => Direction::Long,
             x if x < 0 => Direction::Short,
             _ => Direction::Neutral,
         };
-        
+
         let signal = TradingSignal {
             timestamp_ns: Self::get_timestamp_ns(),
             instrument: InstrumentId(numeric_id),
@@ -133,19 +128,18 @@ impl SignalPublisher {
             confidence: confidence.clamp(0.0, 1.0),
             horizon_minutes,
         };
-        
+
         // Non-blocking send (fails if queue full)
-        self.tx
-            .try_send(signal)
-            .map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Failed to publish signal: {}", e)
-                )
-            })
+        self.tx.try_send(signal).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to publish signal: {}",
+                e
+            ))
+        })
     }
-    
+
     /// Get current nanosecond timestamp using TSC
-    /// 
+    ///
     /// Uses CPU's timestamp counter for nanosecond precision
     /// (Requires x86_64 Linux/Windows)
     #[staticmethod]
@@ -164,11 +158,14 @@ impl SignalPublisher {
 #[pymodule]
 fn metis_core(m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<SignalPublisher>()?;
-    
+
     // Add version info
     m.add("__version__", "0.1.0")?;
-    m.add("__doc__", "Metis Core: Production HFT engine with lock-free fusion")?;
-    
+    m.add(
+        "__doc__",
+        "Metis Core: Production HFT engine with lock-free fusion",
+    )?;
+
     Ok(())
 }
 
@@ -187,7 +184,7 @@ mod tests {
     fn test_timestamp() {
         let ts1 = SignalPublisher::get_timestamp_ns();
         let ts2 = SignalPublisher::get_timestamp_ns();
-        
+
         // ts2 should be >= ts1
         assert!(ts2 >= ts1);
     }

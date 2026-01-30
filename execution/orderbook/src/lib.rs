@@ -1,7 +1,7 @@
 mod csv_parser;
-pub use csv_parser::CsvTickParser;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+pub use csv_parser::CsvTickParser;
 use ordered_float::OrderedFloat;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -56,16 +56,16 @@ pub enum EventType {
 pub struct OrderBook {
     /// Instrument identifier (e.g., "NG:CME")
     pub symbol: String,
-    
+
     /// Bid side: price -> total quantity (sorted descending)
     bids: BTreeMap<Price, Quantity>,
-    
+
     /// Ask side: price -> total quantity (sorted ascending)
     asks: BTreeMap<Price, Quantity>,
-    
+
     /// Last update timestamp
     pub last_update: DateTime<Utc>,
-    
+
     /// Order ID to (side, price, quantity) mapping for cancellations
     order_map: FxHashMap<u64, (Side, Price, Quantity)>,
 }
@@ -86,50 +86,64 @@ impl OrderBook {
         self.last_update = event.timestamp;
 
         match event.event_type {
-            EventType::Trade { price, quantity, side } => {
+            EventType::Trade {
+                price,
+                quantity,
+                side,
+            } => {
                 debug!("Trade: {} {} @ {}", quantity, self.symbol, price);
                 // Trades don't update the book directly in L2 data
                 Ok(())
             }
-            EventType::Quote { bid_price, bid_quantity, ask_price, ask_quantity } => {
-                self.update_quote(bid_price, bid_quantity, ask_price, ask_quantity)
-            }
-            EventType::AddOrder { order_id, side, price, quantity } => {
-                self.add_order(order_id, side, price, quantity)
-            }
-            EventType::CancelOrder { order_id } => {
-                self.cancel_order(order_id)
-            }
+            EventType::Quote {
+                bid_price,
+                bid_quantity,
+                ask_price,
+                ask_quantity,
+            } => self.update_quote(bid_price, bid_quantity, ask_price, ask_quantity),
+            EventType::AddOrder {
+                order_id,
+                side,
+                price,
+                quantity,
+            } => self.add_order(order_id, side, price, quantity),
+            EventType::CancelOrder { order_id } => self.cancel_order(order_id),
         }
     }
 
-    fn update_quote(&mut self, bid_price: f64, bid_quantity: f64, ask_price: f64, ask_quantity: f64) -> Result<()> {
+    fn update_quote(
+        &mut self,
+        bid_price: f64,
+        bid_quantity: f64,
+        ask_price: f64,
+        ask_quantity: f64,
+    ) -> Result<()> {
         // Replace top of book with new quote
         self.bids.clear();
         self.asks.clear();
-        
+
         if bid_quantity > 0.0 {
             self.bids.insert(OrderedFloat(bid_price), bid_quantity);
         }
-        
+
         if ask_quantity > 0.0 {
             self.asks.insert(OrderedFloat(ask_price), ask_quantity);
         }
-        
+
         Ok(())
     }
 
     fn add_order(&mut self, order_id: u64, side: Side, price: f64, quantity: f64) -> Result<()> {
         let price = OrderedFloat(price);
-        
+
         let book = match side {
             Side::Bid => &mut self.bids,
             Side::Ask => &mut self.asks,
         };
-        
+
         *book.entry(price).or_insert(0.0) += quantity;
         self.order_map.insert(order_id, (side, price, quantity));
-        
+
         Ok(())
     }
 
@@ -139,7 +153,7 @@ impl OrderBook {
                 Side::Bid => &mut self.bids,
                 Side::Ask => &mut self.asks,
             };
-            
+
             if let Some(level_qty) = book.get_mut(&price) {
                 *level_qty -= quantity;
                 if *level_qty <= 0.0 {
@@ -147,7 +161,7 @@ impl OrderBook {
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -213,7 +227,7 @@ impl OrderBook {
         }
 
         if remaining > 0.0 {
-            None  // Not enough liquidity
+            None // Not enough liquidity
         } else {
             Some(total_cost / quantity)
         }
@@ -224,8 +238,19 @@ impl OrderBook {
         BookSnapshot {
             symbol: self.symbol.clone(),
             timestamp: self.last_update,
-            bids: self.bids.iter().rev().take(levels).map(|(p, q)| (p.0, *q)).collect(),
-            asks: self.asks.iter().take(levels).map(|(p, q)| (p.0, *q)).collect(),
+            bids: self
+                .bids
+                .iter()
+                .rev()
+                .take(levels)
+                .map(|(p, q)| (p.0, *q))
+                .collect(),
+            asks: self
+                .asks
+                .iter()
+                .take(levels)
+                .map(|(p, q)| (p.0, *q))
+                .collect(),
         }
     }
 }
@@ -234,7 +259,7 @@ impl OrderBook {
 pub struct BookSnapshot {
     pub symbol: String,
     pub timestamp: DateTime<Utc>,
-    pub bids: Vec<(f64, f64)>,  // (price, quantity)
+    pub bids: Vec<(f64, f64)>, // (price, quantity)
     pub asks: Vec<(f64, f64)>,
 }
 
@@ -245,7 +270,7 @@ mod tests {
     #[test]
     fn test_order_book_quote() {
         let mut book = OrderBook::new("NG:CME".to_string());
-        
+
         let event = MarketEvent {
             timestamp: Utc::now(),
             event_type: EventType::Quote {
@@ -255,29 +280,27 @@ mod tests {
                 ask_quantity: 150.0,
             },
         };
-        
+
         book.process_event(event).unwrap();
-        
+
         assert_eq!(book.best_bid(), Some((2.500, 100.0)));
-
-
 
         assert_eq!(book.best_ask(), Some((2.505, 150.0)));
         assert_eq!(book.mid_price(), Some(2.5025));
-        
+
         let spread = book.spread_bps().unwrap();
-        assert!((spread - 19.99).abs() < 0.1);  // ~20 bps
+        assert!((spread - 19.99).abs() < 0.1); // ~20 bps
     }
 
     #[test]
     fn test_vwap_calculation() {
         let mut book = OrderBook::new("NG:CME".to_string());
-        
+
         // Add multiple levels
         book.add_order(1, Side::Ask, 2.505, 50.0).unwrap();
         book.add_order(2, Side::Ask, 2.510, 75.0).unwrap();
         book.add_order(3, Side::Ask, 2.515, 100.0).unwrap();
-        
+
         // VWAP for 100 contracts: (50*2.505 + 50*2.510) / 100
         let vwap = book.vwap(Side::Ask, 100.0).unwrap();
         assert!((vwap - 2.5075).abs() < 0.001);

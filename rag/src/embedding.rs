@@ -12,12 +12,12 @@ impl EmbeddingEngine {
             dimension: 384, // BGE-small dimension
         })
     }
-    
+
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         if self.mock_mode {
             return Ok(self.mock_embed(text));
         }
-        
+
         // TODO: Implement fastembed or sentence-transformers via PyO3
         let text = text.to_string();
         tokio::task::spawn_blocking(move || {
@@ -27,7 +27,7 @@ impl EmbeddingEngine {
         })
         .await?
     }
-    
+
     pub async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut embeddings = Vec::new();
         for text in texts {
@@ -35,7 +35,7 @@ impl EmbeddingEngine {
         }
         Ok(embeddings)
     }
-    
+
     fn mock_embed(&self, text: &str) -> Vec<f32> {
         // Deterministic mock embedding based on text hash
         let hash = text.chars().map(|c| c as u32).sum::<u32>();
@@ -45,7 +45,7 @@ impl EmbeddingEngine {
         }
         embedding
     }
-    
+
     pub fn dimension(&self) -> usize {
         self.dimension
     }

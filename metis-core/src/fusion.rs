@@ -2,13 +2,13 @@
 //!
 //! Non-blocking fusion of climate, grid, and policy signals
 //! without locks - critical for latency-sensitive trading
-//! 
+//!
 //! Industry relevance: Traditional approaches use mutexes.
 //! Lock-free is harder but essential for <1μs latency.
 
+use crate::types::{ClimateSignal, FusedSignal, GridSignal, PolicySignal};
 use crossbeam::queue::SegQueue;
 use std::sync::atomic::{AtomicU64, Ordering};
-use crate::types::{ClimateSignal, GridSignal, PolicySignal, FusedSignal};
 
 /// Lock-free multi-modal signal aggregator
 ///
@@ -17,22 +17,22 @@ use crate::types::{ClimateSignal, GridSignal, PolicySignal, FusedSignal};
 pub struct LockFreeSignalFusion {
     /// Lock-free queue for climate observations
     climate_queue: SegQueue<ClimateSignal>,
-    
+
     /// Lock-free queue for grid observations  
     grid_queue: SegQueue<GridSignal>,
-    
+
     /// Lock-free queue for policy observations
     policy_queue: SegQueue<PolicySignal>,
-    
+
     /// Atomic sequence counter for climate signals
     climate_seq: AtomicU64,
-    
+
     /// Atomic sequence counter for grid signals
     grid_seq: AtomicU64,
-    
+
     /// Atomic sequence counter for policy signals
     policy_seq: AtomicU64,
-    
+
     /// Maximum time drift allowed between signals (nanoseconds)
     max_drift_ns: u64,
 }
@@ -53,28 +53,28 @@ impl LockFreeSignalFusion {
             max_drift_ns,
         }
     }
-    
+
     /// Publish climate signal (non-blocking)
     #[inline(always)]
     pub fn publish_climate(&self, signal: ClimateSignal) {
         self.climate_queue.push(signal);
         self.climate_seq.fetch_add(1, Ordering::Release);
     }
-    
+
     /// Publish grid signal (non-blocking)
     #[inline(always)]
     pub fn publish_grid(&self, signal: GridSignal) {
         self.grid_queue.push(signal);
         self.grid_seq.fetch_add(1, Ordering::Release);
     }
-    
+
     /// Publish policy signal (non-blocking)
     #[inline(always)]
     pub fn publish_policy(&self, signal: PolicySignal) {
         self.policy_queue.push(signal);
         self.policy_seq.fetch_add(1, Ordering::Release);
     }
-    
+
     /// Non-blocking fusion attempt
     ///
     /// Returns fused signal only if all three data sources have available data
@@ -89,21 +89,26 @@ impl LockFreeSignalFusion {
         let climate = self.climate_queue.pop();
         let grid = self.grid_queue.pop();
         let policy = self.policy_queue.pop();
-        
+
         // Only fuse if all sources have data
         match (climate, grid, policy) {
             (Some(c), Some(g), Some(p)) => {
                 // Check temporal alignment (branchless check)
-                if Self::temporally_aligned(c.timestamp_ns, g.timestamp_ns, p.timestamp_ns, self.max_drift_ns) {
+                if Self::temporally_aligned(
+                    c.timestamp_ns,
+                    g.timestamp_ns,
+                    p.timestamp_ns,
+                    self.max_drift_ns,
+                ) {
                     Some(FusedSignal::new(c, g, p))
                 } else {
                     None
                 }
             }
-            _ => None
+            _ => None,
         }
     }
-    
+
     /// Check if timestamps fall within acceptable window
     ///
     /// Branchless temporal alignment using min/max operations
@@ -113,12 +118,12 @@ impl LockFreeSignalFusion {
         // Find max and min without branches (using bitwise tricks)
         let max = t1.max(t2).max(t3);
         let min = t1.min(t2).min(t3);
-        
+
         // All within window if: max - min < max_drift
         // This comparison itself may branch, but it's the minimal check
         (max - min) < max_drift
     }
-    
+
     /// Get current sequence numbers for diagnostics
     #[inline(always)]
     pub fn sequences(&self) -> (u64, u64, u64) {
@@ -128,7 +133,7 @@ impl LockFreeSignalFusion {
             self.policy_seq.load(Ordering::Acquire),
         )
     }
-    
+
     /// Approximate queue depths (for monitoring)
     /// Note: Not exact due to lock-free nature, but good for metrics
     pub fn queue_depths(&self) -> (usize, usize, usize) {
@@ -144,34 +149,37 @@ mod tests {
 
     #[test]
     fn test_fusion_creation() {
-        let fusion = LockFreeSignalFusion::new(1_000_000_000);  // 1 second max drift
+        let fusion = LockFreeSignalFusion::new(1_000_000_000); // 1 second max drift
         assert_eq!(fusion.sequences(), (0, 0, 0));
     }
 
     #[test]
     fn test_temporal_alignment() {
-        let max_drift = 1_000_000_000;  // 1 second
-        
+        let max_drift = 1_000_000_000; // 1 second
+
         // All same timestamp: should align
         assert!(LockFreeSignalFusion::temporally_aligned(
             1000, 1000, 1000, max_drift
         ));
-        
+
         // Within drift: should align
         assert!(LockFreeSignalFusion::temporally_aligned(
             1000, 1000, 1500, max_drift
         ));
-        
+
         // Beyond drift: should NOT align
         assert!(!LockFreeSignalFusion::temporally_aligned(
-            1000, 1000, 2_500_000_000, max_drift
+            1000,
+            1000,
+            2_500_000_000,
+            max_drift
         ));
     }
 
     #[test]
     fn test_non_blocking_publish() {
         let fusion = LockFreeSignalFusion::new(1_000_000_000);
-        
+
         let climate = ClimateSignal {
             timestamp_ns: 1000,
             region: "US".to_string(),
@@ -179,7 +187,7 @@ mod tests {
             humidity_pct: 60.0,
             wind_kmh: 10.0,
         };
-        
+
         // This should not block even if queues are full
         fusion.publish_climate(climate);
         assert_eq!(fusion.sequences().0, 1);
@@ -188,7 +196,7 @@ mod tests {
     #[test]
     fn test_fusion_without_all_signals() {
         let fusion = LockFreeSignalFusion::new(1_000_000_000);
-        
+
         // Publish only climate, not grid or policy
         fusion.publish_climate(ClimateSignal {
             timestamp_ns: 1000,
@@ -197,7 +205,7 @@ mod tests {
             humidity_pct: 60.0,
             wind_kmh: 10.0,
         });
-        
+
         // Should return None (missing grid and policy)
         assert!(fusion.try_fuse().is_none());
     }

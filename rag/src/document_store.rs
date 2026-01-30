@@ -11,47 +11,43 @@ pub struct DocumentStore {
 impl DocumentStore {
     pub fn new(db_path: impl Into<PathBuf>, mock_mode: bool) -> Result<Self> {
         let db_path = db_path.into();
-        
+
         let mock_documents = if mock_mode {
             Self::create_mock_documents()
         } else {
             vec![]
         };
-        
+
         Ok(Self {
             db_path,
             mock_mode,
             mock_documents,
         })
     }
-    
-    pub async fn search(
-        &self,
-        query_embedding: &[f32],
-        top_k: usize,
-    ) -> Result<Vec<Document>> {
+
+    pub async fn search(&self, query_embedding: &[f32], top_k: usize) -> Result<Vec<Document>> {
         if self.mock_mode {
             let _ = query_embedding;
             return Ok(self.mock_documents.iter().take(top_k).cloned().collect());
         }
-        
+
         // TODO: Implement LanceDB search
         Ok(vec![])
     }
-    
+
     pub async fn upsert(&mut self, doc: Document) -> Result<()> {
         if self.mock_mode {
             self.mock_documents.push(doc);
             return Ok(());
         }
-        
+
         // TODO: Implement LanceDB upsert
         Ok(())
     }
-    
+
     fn create_mock_documents() -> Vec<Document> {
         use chrono::Utc;
-        
+
         vec![
             Document {
                 id: "doc1".to_string(),

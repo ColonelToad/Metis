@@ -24,11 +24,14 @@ pub fn pin_thread_to_core(core_id: usize) -> Result<(), String> {
         eprintln!("[NUMA] Would pin thread to core {}", core_id);
         Ok(())
     }
-    
+
     #[cfg(not(windows))]
     {
         // Linux/macOS would use pthread_setaffinity_np
-        eprintln!("[NUMA] Would pin thread to core {} (not implemented)", core_id);
+        eprintln!(
+            "[NUMA] Would pin thread to core {} (not implemented)",
+            core_id
+        );
         Ok(())
     }
 }

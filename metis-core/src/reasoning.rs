@@ -1,5 +1,5 @@
 //! Systematic Reasoning Engine for LLM-Driven Trading Decisions
-//! 
+//!
 //! Implements the "Gambling Meteorologist" hybrid framework:
 //! 1. Reference class selection (category assignment)
 //! 2. Ensemble aggregation (multi-source consensus)
@@ -28,7 +28,13 @@ pub struct Observation {
 }
 
 impl Observation {
-    pub fn new(id: String, value: f64, confidence: f64, timestamp: i64, source_reliability: f64) -> Self {
+    pub fn new(
+        id: String,
+        value: f64,
+        confidence: f64,
+        timestamp: i64,
+        source_reliability: f64,
+    ) -> Self {
         Self {
             id,
             value,
@@ -325,15 +331,17 @@ impl ReasoningEngine {
                 .sum();
 
             let likelihood = if supporting_strength > 0.0 {
-                2.0 + (supporting_strength * 2.0)  // Increased multiplier to ensure posterior > prior
+                2.0 + (supporting_strength * 2.0) // Increased multiplier to ensure posterior > prior
             } else {
                 0.5
             };
 
             hypothesis.likelihood_ratio = likelihood;
             // Bayes rule: posterior ∝ prior × likelihood
-            hypothesis.posterior_prob = (hypothesis.prior_prob * likelihood) / (hypothesis.prior_prob * likelihood + (1.0 - hypothesis.prior_prob));
-            hypothesis.posterior_prob = hypothesis.posterior_prob.min(0.99).max(0.01); // Bound [0.01, 0.99]
+            hypothesis.posterior_prob = (hypothesis.prior_prob * likelihood)
+                / (hypothesis.prior_prob * likelihood + (1.0 - hypothesis.prior_prob));
+            hypothesis.posterior_prob = hypothesis.posterior_prob.min(0.99).max(0.01);
+            // Bound [0.01, 0.99]
         }
     }
 
@@ -403,7 +411,8 @@ impl ReasoningEngine {
         let var_95 = sorted_returns.get(0).cloned().unwrap_or(0.0);
 
         // CVaR: average of worst 5% cases (typically one scenario)
-        let cvar_95 = self.scenarios
+        let cvar_95 = self
+            .scenarios
             .iter()
             .filter(|s| s.expected_return <= var_95)
             .map(|s| s.expected_return)
@@ -434,12 +443,16 @@ impl ReasoningEngine {
         let extreme_scenarios = self
             .scenarios
             .iter()
-            .filter(|s| (s.expected_return - self.ev.portfolio_return / 100.0).abs() > 3.0 * (self.ev.volatility / 100.0))
+            .filter(|s| {
+                (s.expected_return - self.ev.portfolio_return / 100.0).abs()
+                    > 3.0 * (self.ev.volatility / 100.0)
+            })
             .map(|s| s.probability)
             .sum();
 
         // Max drawdown: worst scenario's drawdown
-        let max_drawdown = self.scenarios
+        let max_drawdown = self
+            .scenarios
             .iter()
             .map(|s| s.max_drawdown)
             .fold(f64::NEG_INFINITY, f64::max)
@@ -507,13 +520,23 @@ impl ReasoningEngine {
     }
 
     /// Step 8: Track calibration (record predictions for accuracy monitoring)
-    pub fn record_calibration(&mut self, prediction: String, predicted_prob: f64, forecast_date: i64) {
-        self.calibrations.push(Calibration::new(prediction, predicted_prob, forecast_date));
+    pub fn record_calibration(
+        &mut self,
+        prediction: String,
+        predicted_prob: f64,
+        forecast_date: i64,
+    ) {
+        self.calibrations
+            .push(Calibration::new(prediction, predicted_prob, forecast_date));
     }
 
     /// Compute calibration accuracy over historical data
     pub fn calibration_accuracy(&self) -> Option<f64> {
-        let resolved: Vec<_> = self.calibrations.iter().filter(|c| c.is_resolved()).collect();
+        let resolved: Vec<_> = self
+            .calibrations
+            .iter()
+            .filter(|c| c.is_resolved())
+            .collect();
         if resolved.is_empty() {
             return None;
         }
@@ -574,13 +597,7 @@ mod tests {
 
     #[test]
     fn test_observation_effective_confidence() {
-        let obs = Observation::new(
-            "test".to_string(),
-            100.0,
-            0.8,
-            1234567890,
-            0.9,
-        );
+        let obs = Observation::new("test".to_string(), 100.0, 0.8, 1234567890, 0.9);
         assert!((obs.effective_confidence() - 0.72).abs() < 0.001);
     }
 

@@ -1,7 +1,3 @@
-"""
-Example server for signal interface.
-Receives trading signals from Python and simulates execution.
-"""
 use anyhow::Result;
 use signal_interface::{ExecutionResponse, ExecutionStatus, SignalServer, TradingSignal};
 use std::net::SocketAddr;
@@ -11,9 +7,7 @@ use tracing_subscriber;
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .init();
+    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
     info!("Starting Metis signal server...");
 

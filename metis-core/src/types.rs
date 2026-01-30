@@ -33,16 +33,16 @@ pub struct InstrumentId(pub u32);
 pub struct TradingSignal {
     /// Nanosecond timestamp (from Python or TSC)
     pub timestamp_ns: u64,
-    
+
     /// Target instrument (e.g., 1 = NG futures)
     pub instrument: InstrumentId,
-    
+
     /// Direction: Long, Short, Neutral
     pub direction: Direction,
-    
+
     /// Confidence [0.0, 1.0]
     pub confidence: f64,
-    
+
     /// Predicted horizon in minutes
     pub horizon_minutes: u32,
 }
@@ -91,8 +91,8 @@ pub struct GridSignal {
 pub struct PolicySignal {
     pub timestamp_ns: u64,
     pub source: String,
-    pub sentiment_score: f32,  // -1.0 (bearish) to +1.0 (bullish)
-    pub relevance: f32,        // 0.0 to 1.0
+    pub sentiment_score: f32, // -1.0 (bearish) to +1.0 (bullish)
+    pub relevance: f32,       // 0.0 to 1.0
 }
 
 /// Fused multi-modal signal
@@ -151,13 +151,7 @@ mod tests {
 
     #[test]
     fn test_trading_signal_creation() {
-        let signal = TradingSignal::new(
-            1_000_000_000,
-            InstrumentId(1),
-            Direction::Long,
-            0.85,
-            60,
-        );
+        let signal = TradingSignal::new(1_000_000_000, InstrumentId(1), Direction::Long, 0.85, 60);
         assert_eq!(signal.timestamp_ns, 1_000_000_000);
         assert_eq!(signal.confidence, 0.85);
     }

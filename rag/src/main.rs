@@ -1,11 +1,11 @@
-use rag::pipeline::ExplainabilityRAG;
-use rag::types::{TradingSignal, TradingContext};
 use chrono::Utc;
+use rag::pipeline::ExplainabilityRAG;
+use rag::types::{TradingContext, TradingSignal};
 
 #[tokio::main]
 async fn main() {
     println!("=== RAG System Test ===\n");
-    
+
     // Example trading signal
     let signal = TradingSignal {
         id: "sig1".to_string(),
@@ -24,16 +24,19 @@ async fn main() {
 
     // Set mock_mode to false to use real LLM
     let mock_mode = false;
-    
+
     println!("Initializing RAG pipeline (mock_mode: {})...", mock_mode);
     let rag = ExplainabilityRAG::new(
         "./llm/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
         "mock.db",
         mock_mode,
-    ).expect("Failed to initialize RAG pipeline");
+    )
+    .expect("Failed to initialize RAG pipeline");
 
     println!("Generating explanation...\n");
-    let explanation = rag.explain_signal(&signal).await
+    let explanation = rag
+        .explain_signal(&signal)
+        .await
         .expect("Failed to generate explanation");
 
     println!("--- EXPLANATION ---");

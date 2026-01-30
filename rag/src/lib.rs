@@ -7,4 +7,4 @@ pub mod template;
 pub mod types;
 
 pub use pipeline::ExplainabilityRAG;
-pub use types::{Explanation, TradingSignal, TradingContext};
+pub use types::{Explanation, TradingContext, TradingSignal};

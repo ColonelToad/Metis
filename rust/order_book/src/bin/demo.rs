@@ -16,9 +16,11 @@ fn main() {
         let p1 = w[0];
         let p2 = w[1];
         let p3 = w[2];
-        if p3 > p2 && p2 > p1 { // uptrend
+        if p3 > p2 && p2 > p1 {
+            // uptrend
             ob.submit_market(Side::Buy, 1.0);
-        } else if p3 < p2 && p2 < p1 { // downtrend
+        } else if p3 < p2 && p2 < p1 {
+            // downtrend
             ob.submit_market(Side::Sell, 1.0);
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -26,6 +28,9 @@ fn main() {
 
     println!("Trades: {}", ob.trades.len());
     for t in ob.trades.iter() {
-        println!("buy={} sell={} px={:.3} qty={:.3}", t.buy_id, t.sell_id, t.price, t.qty);
+        println!(
+            "buy={} sell={} px={:.3} qty={:.3}",
+            t.buy_id, t.sell_id, t.price, t.qty
+        );
     }
 }

@@ -17,11 +17,7 @@ pub struct ExplainabilityRAG {
 }
 
 impl ExplainabilityRAG {
-    pub fn new(
-        model_path: &str,
-        db_path: &str,
-        mock_mode: bool,
-    ) -> Result<Self> {
+    pub fn new(model_path: &str, db_path: &str, mock_mode: bool) -> Result<Self> {
         Ok(Self {
             llm: LocalLLMEngine::new(model_path, mock_mode)?,
             embedder: EmbeddingEngine::new(mock_mode)?,
@@ -30,15 +26,11 @@ impl ExplainabilityRAG {
             use_fallback: false,
         })
     }
-    
+
     pub async fn explain_signal(&self, signal: &TradingSignal) -> Result<Explanation> {
         // Try LLM-based explanation first
         if !self.use_fallback {
-            match tokio::time::timeout(
-                Duration::from_secs(15),
-                self.explain_with_llm(signal),
-            )
-            .await
+            match tokio::time::timeout(Duration::from_secs(15), self.explain_with_llm(signal)).await
             {
                 Ok(Ok(explanation)) => return Ok(explanation),
                 Ok(Err(e)) => {
@@ -49,25 +41,25 @@ impl ExplainabilityRAG {
                 }
             }
         }
-        
+
         // Fallback to template
         Ok(self.template_engine.generate(signal))
     }
-    
+
     async fn explain_with_llm(&self, signal: &TradingSignal) -> Result<Explanation> {
         // 1. Build query
         let query = self.build_query(signal);
-        
+
         // 2. Retrieve relevant documents
         let query_embedding = self.embedder.embed(&query).await?;
         let docs = self.document_store.search(&query_embedding, 5).await?;
-        
+
         // 3. Build CoT prompt
         let prompt = self.build_cot_prompt(signal, &docs);
-        
+
         // 4. Generate explanation
         let raw_text = self.llm.generate(&prompt, 512).await?;
-        
+
         // 5. Parse and return
         Ok(Explanation {
             signal_id: signal.id.clone(),
@@ -81,7 +73,7 @@ impl ExplainabilityRAG {
             generated_at: chrono::Utc::now(),
         })
     }
-    
+
     fn build_query(&self, signal: &TradingSignal) -> String {
         format!(
             "natural gas {} prediction grid stress {} weather anomaly {} policy events {}",
@@ -91,7 +83,7 @@ impl ExplainabilityRAG {
             signal.context.recent_policy_events.join(" ")
         )
     }
-    
+
     fn build_cot_prompt(&self, signal: &TradingSignal, docs: &[crate::types::Document]) -> String {
         let evidence = docs
             .iter()
@@ -107,7 +99,7 @@ impl ExplainabilityRAG {
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        
+
         format!(
             r#"<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 

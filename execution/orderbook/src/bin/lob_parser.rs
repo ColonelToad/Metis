@@ -1,8 +1,8 @@
 use anyhow::Result;
-use orderbook::{OrderBook, CsvTickParser};
+use clap::Parser;
+use orderbook::{CsvTickParser, OrderBook};
 use std::path::PathBuf;
 use tracing::{info, Level};
-use clap::Parser;
 
 #[derive(Parser)]
 struct Args {
@@ -11,9 +11,7 @@ struct Args {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .init();
+    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
     let args = Args::parse();
     info!("Parsing tick data from {:?}", args.input);

@@ -3,10 +3,10 @@ use chrono::{DateTime, Utc};
 use orderbook::Side;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, warn};
-use std::sync::Arc;
 
 /// Trading signal from Python ML model
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,9 +15,9 @@ pub struct TradingSignal {
     pub timestamp: DateTime<Utc>,
     pub symbol: String,
     pub direction: SignalDirection,
-    pub confidence: f64,  // 0.0 - 1.0
+    pub confidence: f64, // 0.0 - 1.0
     pub target_quantity: f64,
-    pub horizon_minutes: i64,  // Execution window
+    pub horizon_minutes: i64, // Execution window
     pub metadata: SignalMetadata,
 }
 
@@ -113,7 +113,7 @@ impl SignalServer {
             // Read message length (4 bytes)
             let mut len_buf = [0u8; 4];
             if stream.read_exact(&mut len_buf).await.is_err() {
-                break;  // Connection closed
+                break; // Connection closed
             }
             let msg_len = u32::from_be_bytes(len_buf) as usize;
 
@@ -123,7 +123,10 @@ impl SignalServer {
 
             // Deserialize signal (using MessagePack for efficiency)
             let signal: TradingSignal = rmp_serde::from_slice(&msg_buf)?;
-            info!("Received signal: {} ({:?})", signal.signal_id, signal.direction);
+            info!(
+                "Received signal: {} ({:?})",
+                signal.signal_id, signal.direction
+            );
 
             // Process signal and always serialize ExecutionResponse
             let response = match handler(signal) {
@@ -168,7 +171,10 @@ impl SignalClient {
     }
 
     pub async fn send_signal(&mut self, signal: TradingSignal) -> Result<ExecutionResponse> {
-        let stream = self.stream.as_mut().ok_or_else(|| anyhow::anyhow!("Not connected"))?;
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Not connected"))?;
 
         // Serialize and send
         let signal_bytes = rmp_serde::to_vec(&signal)?;
