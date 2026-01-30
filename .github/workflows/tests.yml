@@ -115,5 +115,5 @@ jobs:
       env:
         METIS_MODE: DEV
       run: |
-        cd research/data_ingest
-        python -m pytest test_integration.py -v --tb=short -k "not slow"
+        cd research
+        python -m pytest test_ingestion.py -v --tb=short -k "not slow"
