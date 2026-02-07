@@ -1,9 +1,6 @@
 name: Data Quality Checks
 
 on:
-  schedule:
-    # Run after each scheduled ingestion (6 AM UTC = 1 AM EST)
-    - cron: '15 6 * * *'  # 15 minutes after daily ingest
   workflow_dispatch:
 
 jobs:

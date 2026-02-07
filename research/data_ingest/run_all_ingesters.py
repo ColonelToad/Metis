@@ -16,12 +16,9 @@ import ingest_eia
 import ingest_lmp
 import ingest_fred
 import ingest_congress_bills_expanded
-import ingest_job_postings
 import ingest_ais_maritime
 import ingest_bls_ppi
 import ingest_fred_building_permits
-
-# New data sources (Sprint Jan 27)
 import ingest_freight
 import ingest_aviation_fuel
 import ingest_cme_futures
@@ -32,7 +29,6 @@ INGESTERS = [
     ("Grid LMP", ingest_lmp),
     ("FRED Macro", ingest_fred),
     ("Congress Bills", ingest_congress_bills_expanded),
-    ("Job Postings", ingest_job_postings),
     ("Maritime AIS", ingest_ais_maritime),
     
     # Economic Indicators
@@ -56,16 +52,15 @@ def run_all():
     for name, module in INGESTERS:
         try:
             print(f"\n--- Running {name} ingester ---")
-            # Call the main ingest function if it exists
+            # Call the main/ingest function
             if name == "Freight Data":
                 module.ingest_freight()
             elif name == "Aviation Fuel":
                 module.ingest_aviation_fuel()
             elif name == "CME Futures":
                 module.ingest_cme_futures()
-            elif name in ["BLS Producer Price Index", "FRED Building Permits"]:
-                module.main()
             else:
+                # For all others, use main() if available
                 module.main() if hasattr(module, 'main') else exec(open(module.__file__).read())
             results.append((name, "SUCCESS"))
         except Exception as e:

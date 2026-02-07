@@ -16,6 +16,7 @@ import hashlib
 # Add project root for imports
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from research.common import runtime_config as rc
+from data_ingest import incremental_utils
 
 load_dotenv()
 DB_URL = rc.get_db_url()
@@ -60,13 +61,24 @@ def fetch_caiso_lmp(start_date, end_date, use_cache=True):
     
     return df
 
-if __name__ == "__main__":
+
+def main():
+    """Main ingestion function for LMP."""
     rc.log_mode("LMP")
-    # Fetch last 7 days
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=7)
     
-    print("Fetching LMP data from CAISO...")
+    # Create engine for querying existing data
+    try:
+        engine = create_engine(DB_URL)
+    except:
+        engine = None
+    
+    # Calculate fetch range based on incremental strategy with 7-day lookback
+    start_date, end_date = incremental_utils.calculate_fetch_range(
+        "lmp",
+        engine=engine
+    )
+    
+    print(f"Fetching LMP data from CAISO ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')})...")
     
     try:
         caiso_df = fetch_caiso_lmp(start_date, end_date)
@@ -81,11 +93,24 @@ if __name__ == "__main__":
             })
             
             # Save to database
-            engine = create_engine(DB_URL)
+            if engine is None:
+                engine = create_engine(DB_URL)
             caiso_df.to_sql('grid_lmp', engine, if_exists='append', index=False)
             
             print(f"Saved {len(caiso_df)} LMP records to database")
+            
+            # Update metadata
+            incremental_utils.update_fetch_metadata("lmp", start_date, end_date, success=True)
         else:
             print("No LMP data fetched")
+            incremental_utils.update_fetch_metadata("lmp", start_date, end_date, success=False)
     except Exception as e:
         print(f"CAISO fetch failed: {e}")
+        if engine is not None:
+            start_date_dt = start_date if isinstance(start_date, datetime) else datetime.fromisoformat(start_date)
+            end_date_dt = end_date if isinstance(end_date, datetime) else datetime.fromisoformat(end_date)
+            incremental_utils.update_fetch_metadata("lmp", start_date_dt, end_date_dt, success=False)
+
+
+if __name__ == "__main__":
+    main()

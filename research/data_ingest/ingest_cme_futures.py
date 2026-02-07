@@ -23,8 +23,20 @@ from pathlib import Path
 import logging
 from typing import List, Dict, Optional
 import json
+import threading
+import signal
+from sqlalchemy import create_engine
+import os
 
 logger = logging.getLogger(__name__)
+# Default timeout for yfinance downloads (in seconds)
+DEFAULT_DOWNLOAD_TIMEOUT = 30
+
+# Import incremental utilities
+from incremental_utils import calculate_fetch_range, update_fetch_metadata
+
+# Database URL
+DB_URL = os.getenv("DB_URL", "sqlite:///data/metis.db")
 
 OUTPUT_DIR = Path(__file__).parent.parent / "data" / "processed"
 
@@ -61,6 +73,51 @@ CME_FUTURES = {
 }
 
 
+def download_with_timeout(symbol: str, start: str, end: str, timeout: int = DEFAULT_DOWNLOAD_TIMEOUT) -> Optional[pd.DataFrame]:
+    """
+    Download futures data from yfinance with a timeout.
+    
+    Args:
+        symbol: Yahoo Finance ticker symbol (e.g., 'CL=F')
+        start: Start date (YYYY-MM-DD)
+        end: End date (YYYY-MM-DD)
+        timeout: Timeout in seconds
+        
+    Returns:
+        DataFrame if successful, None if timeout or error
+    """
+    result = [None]
+    exception = [None]
+    
+    def download_task():
+        try:
+            data = yf.download(
+                symbol,
+                start=start,
+                end=end,
+                interval="1d",
+                progress=False,
+                timeout=timeout
+            )
+            result[0] = data
+        except Exception as e:
+            exception[0] = e
+    
+    thread = threading.Thread(target=download_task, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout + 5)  # Give 5 extra seconds for cleanup
+    
+    if thread.is_alive():
+        logger.warning(f"Download timeout for {symbol} after {timeout}s")
+        return None
+    
+    if exception[0]:
+        logger.error(f"Download error for {symbol}: {exception[0]}")
+        return None
+    
+    return result[0]
+
+
 class CMEFuturesClient:
     """Client for fetching CME futures data via Yahoo Finance."""
     
@@ -88,16 +145,14 @@ class CMEFuturesClient:
             start_date = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d")
         
         try:
-            logger.info(f"Fetching {symbol} futures data from {start_date} to {end_date}...")
+            logger.info(f"Fetching {symbol} futures data from {start_date} to {end_date} (timeout: {DEFAULT_DOWNLOAD_TIMEOUT}s)...")
             
-            # Use yfinance to download futures data
-            data = yf.download(
-                symbol,
-                start=start_date,
-                end=end_date,
-                interval=interval,
-                progress=False
-            )
+            # Use timeout-wrapped download
+            data = download_with_timeout(symbol, start_date, end_date, timeout=DEFAULT_DOWNLOAD_TIMEOUT)
+            
+            if data is None:
+                logger.warning(f"Failed to fetch {symbol} (timeout or error)")
+                return pd.DataFrame()
             
             if data.empty:
                 logger.warning(f"No data returned for {symbol}")
@@ -239,12 +294,27 @@ def ingest_cme_futures():
     """Main ingestion function for CME futures."""
     logger.info("Starting CME futures data ingestion...")
     
+    # Create engine for querying existing data
+    try:
+        engine = create_engine(DB_URL)
+    except:
+        engine = None
+    
+    # Calculate fetch range based on sliding window strategy
+    start_date, end_date = calculate_fetch_range(
+        "cme_futures",
+        engine=engine
+    )
+    
+    logger.info(f"Fetching CME futures from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+    
     client = CMEFuturesClient()
     
-    # Fetch all futures data
-    logger.info(f"Fetching CME futures for: {list(CME_FUTURES.keys())}")
-    
-    df = client.fetch_all_futures()
+    # Fetch all futures data with calculated date range
+    df = client.fetch_all_futures(
+        start_date=start_date.strftime('%Y-%m-%d'),
+        end_date=end_date.strftime('%Y-%m-%d')
+    )
     
     if not df.empty:
         # Calculate indicators
@@ -254,6 +324,9 @@ def ingest_cme_futures():
         output_path = save_futures_data(df)
         
         logger.info(f"Futures ingestion complete. Total records: {len(df)}")
+        
+        # Update metadata to track successful fetch
+        update_fetch_metadata("cme_futures", start_date, end_date, success=True)
         
         # Summary by contract
         logger.info("Data summary by contract:")
@@ -274,6 +347,7 @@ def ingest_cme_futures():
         return df
     else:
         logger.warning("No futures data retrieved")
+        update_fetch_metadata("cme_futures", start_date, end_date, success=False)
         return pd.DataFrame()
 
 

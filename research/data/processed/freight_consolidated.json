@@ -1,10 +1,20 @@
 {
-  "created": "2026-01-30T18:00:53.311831",
-  "rows": 0,
+  "created": "2026-02-06T18:01:07.164538",
+  "rows": 6706,
   "columns": [
-    "Date"
+    "Date",
+    "Container Rates",
+    "Containerized Exports",
+    "Containerized Imports",
+    "Durable Goods",
+    "Inventory to Sales",
+    "Loaded Exports",
+    "Loaded Imports",
+    "Nominal Imports",
+    "West Coast Shipping",
+    "Diesel Price"
   ],
-  "date_range": "nan to nan",
+  "date_range": "2019-01 to 2025-12",
   "sources": [
     "Container Rates",
     "Containerized Exports",
@@ -15,7 +25,6 @@
     "Loaded Exports",
     "Loaded Imports",
     "Nominal Imports",
-    "Real Imports",
     "West Coast Shipping"
   ],
   "source_descriptions": {
@@ -28,7 +37,6 @@
     "Loaded Exports": "Loaded export containers at select US ports",
     "Loaded Imports": "Loaded import containers at select US ports",
     "Nominal Imports": "US nominal goods imports (billions USD)",
-    "Real Imports": "US real goods imports (billions USD, 2017 chain-weighted)",
     "West Coast Shipping": "West Coast container shipping rates"
   }
 }

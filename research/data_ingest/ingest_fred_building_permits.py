@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 # Add project root for imports
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from research.common import runtime_config as rc
+from data_ingest import incremental_utils
 
 load_dotenv()
 
@@ -41,11 +42,15 @@ FRED_API_URL = "https://api.stlouisfed.org/fred/series/observations"
 PERMIT_SERIES_ID = "PERMIT"  # National building permits (thousands of units)
 
 
-def fetch_permits_national() -> Optional[pd.DataFrame]:
+def fetch_permits_national(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Optional[pd.DataFrame]:
     """
     Fetch national building permits data from FRED API.
     
     Returns monthly data: total permits issued (in thousands of units).
+    
+    Args:
+        start_date: Start date (YYYY-MM-DD format), or None to use config
+        end_date: End date (YYYY-MM-DD format), or None to use today
     """
     if not rc.require_real_mode("FRED Building Permits API"):
         # Return synthetic data for DEV mode
@@ -55,13 +60,26 @@ def fetch_permits_national() -> Optional[pd.DataFrame]:
         print("[FRED] Missing FRED_API_KEY - using synthetic data")
         return generate_synthetic_permits()
     
+    # Convert datetime objects to string if needed
+    if isinstance(start_date, datetime):
+        start_date = start_date.strftime('%Y-%m-%d')
+    if isinstance(end_date, datetime):
+        end_date = end_date.strftime('%Y-%m-%d')
+    
+    # Default to 2015 if not specified
+    if not start_date:
+        start_date = "2015-01-01"
+    
     try:
         params = {
             "series_id": PERMIT_SERIES_ID,
             "api_key": FRED_API_KEY,
             "file_type": "json",
-            "observation_start": "2015-01-01",  # Last 10+ years
+            "observation_start": start_date,
         }
+        
+        if end_date:
+            params["observation_end"] = end_date
         
         response = requests.get(FRED_API_URL, params=params, timeout=30)
         response.raise_for_status()
@@ -184,33 +202,64 @@ def upsert_permits(engine, df: pd.DataFrame) -> None:
     df_insert = df.copy()
     df_insert['timestamp'] = datetime.now().isoformat()
     
-    df_insert.to_sql(
-        'census_permits',
-        engine,
-        if_exists='replace',
-        index=False,
-        method='multi'
-    )
-    
-    print(f"[FRED] Upserted {len(df)} permit records")
+    try:
+        df_insert.to_sql(
+            'census_permits',
+            engine,
+            if_exists='append',  # Use 'append' instead of 'replace' to avoid transaction issues
+            index=False,
+            method='multi'
+        )
+        print(f"[FRED] Upserted {len(df)} permit records")
+    except Exception as e:
+        print(f"[FRED] Error upserting permits: {e}")
+        # Rollback any pending transaction
+        try:
+            engine.rollback()
+        except:
+            pass
+        # Dispose of connections to reset state
+        engine.dispose()
+        raise
+    finally:
+        # Always dispose of engine after use
+        engine.dispose()
 
 
 def main():
     """Main ingestion pipeline."""
     rc.log_mode("FRED Building Permits")
     
-    # Fetch data
-    df = fetch_permits_national()
+    # Create engine first to query existing data
+    engine = create_engine(DB_URL)
+    
+    # Calculate fetch range based on backfill strategy
+    start_date, end_date = incremental_utils.calculate_fetch_range(
+        "fred_building_permits",
+        engine=engine
+    )
+    
+    print(f"[FRED] Fetching permits from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+    
+    # Fetch data with calculated date range
+    df = fetch_permits_national(
+        start_date=start_date.strftime('%Y-%m-%d'),
+        end_date=end_date.strftime('%Y-%m-%d')
+    )
+    
     if df is None or df.empty:
         print("[FRED] No permit data available")
+        incremental_utils.update_fetch_metadata("fred_building_permits", start_date, end_date, success=False)
         return
     
     # Calculate metrics
     df = calculate_rolling_metrics(df)
     
     # Save to database
-    engine = create_engine(DB_URL)
     upsert_permits(engine, df)
+    
+    # Update metadata to track successful fetch
+    incremental_utils.update_fetch_metadata("fred_building_permits", start_date, end_date, success=True)
     
     # Log summary
     if not df.empty:

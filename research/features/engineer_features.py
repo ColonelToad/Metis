@@ -180,17 +180,25 @@ class FeatureEngineer:
                 if col != 'date':
                     fred[col] = pd.to_numeric(fred[col], errors='coerce')
             
-            # Calculate YoY changes for each indicator (252 = trading days/year, but FRED is monthly/quarterly)
-            for col in fred.columns[1:]:
+            # Forward fill base columns first (sparse FRED data)
+            base_cols = [col for col in fred.columns if col != 'date']
+            for col in base_cols:
+                fred[col] = fred[col].fillna(method='ffill').fillna(method='bfill')
+            
+            # Calculate YoY changes for each indicator (4 quarters for FRED monthly/quarterly)
+            derived_cols = []
+            for col in base_cols:
                 fred[f'{col}_yoy'] = fred[col].pct_change(4)  # 4 quarters
-                fred[f'{col}_ma'] = fred[col].rolling(4).mean()  # 4-period MA for monthly/quarterly data
+                fred[f'{col}_ma'] = fred[col].rolling(4).mean()  # 4-period MA
+                derived_cols.extend([f'{col}_yoy', f'{col}_ma'])
             
             df = df.merge(fred, on='date', how='left')
             
-            # Forward fill FRED data (monthly/quarterly)
-            for col in fred.columns[1:]:
+            # Forward fill ALL FRED columns (base + derived) to daily data
+            all_fred_cols = base_cols + derived_cols
+            for col in all_fred_cols:
                 if col in df.columns:
-                    df[col] = df[col].fillna(method='ffill')
+                    df[col] = df[col].fillna(method='ffill').fillna(method='bfill')
             
             print(f"[FEATURES] Loaded {len(fred.columns)-1} FRED indicators")
         else:

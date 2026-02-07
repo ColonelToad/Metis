@@ -50,7 +50,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-FREIGHT_DATA_DIR = Path(__file__).parent.parent.parent / "freight"
+FREIGHT_DATA_DIR = Path(__file__).parent.parent.parent / "data" / "freight"
 OUTPUT_DIR = Path(__file__).parent.parent / "data" / "processed"
 
 # Data source configurations
@@ -83,13 +83,13 @@ FREIGHT_SOURCES = {
     "Durable Goods": {
         "file": "Durable Goods Purchases_data.csv",
         "frequency": "monthly",
-        "metric_col": "Value",
+        "metric_col": "Metric Value",
         "description": "Durable goods purchases (orders indicator)",
     },
     "Inventory to Sales": {
         "file": "Inventory to Sales Ratio_data.csv",
         "frequency": "monthly",
-        "metric_col": "Value",
+        "metric_col": "Metric Value",
         "description": "Business inventory to sales ratio",
     },
     "Loaded Exports": {
@@ -107,19 +107,13 @@ FREIGHT_SOURCES = {
     "Nominal Imports": {
         "file": "Nominal Imports_data.csv",
         "frequency": "monthly",
-        "metric_col": "Value",
+        "metric_col": "Metric Value",
         "description": "US nominal goods imports (billions USD)",
-    },
-    "Real Imports": {
-        "file": "Real Imports_data.csv",
-        "frequency": "monthly",
-        "metric_col": "Value",
-        "description": "US real goods imports (billions USD, 2017 chain-weighted)",
     },
     "West Coast Shipping": {
         "file": "West Coast Shipping Rates_data.csv",
         "frequency": "monthly",
-        "metric_col": "Rate",
+        "metric_col": "Value",
         "description": "West Coast container shipping rates",
     },
 }
