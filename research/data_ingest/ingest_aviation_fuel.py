@@ -11,12 +11,17 @@ This data feeds into aviation demand signals and can be correlated
 with jet fuel inventory and airline stock performance.
 """
 
+import sys
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
 import logging
 from typing import Optional
 import json
+from sqlalchemy import create_engine
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from common import runtime_config as rc
 
 logger = logging.getLogger(__name__)
 
@@ -144,41 +149,25 @@ def calculate_aviation_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def save_aviation_data(df: pd.DataFrame, output_path: Optional[Path] = None) -> Path:
-    """Save processed aviation fuel data to CSV."""
-    if output_path is None:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        output_path = OUTPUT_DIR / "aviation_fuel_historical.csv"
+    """Save processed aviation fuel data to database."""
+    if df.empty:
+        logger.warning("No aviation fuel data to save")
+        return Path()
     
-    df.to_csv(output_path, index=False)
-    logger.info(f"Saved aviation data to {output_path}")
+    # Drop Year/Month columns as they're derived from Date
+    df_to_save = df.drop(columns=['Year', 'Month'], errors='ignore')
     
-    # Create metadata
-    metadata = {
-        "created": datetime.now().isoformat(),
-        "source": "airline_fuel.ods",
-        "rows": len(df),
-        "columns": df.columns.tolist(),
-        "date_range": f"{df['Date'].min()} to {df['Date'].max()}",
-        "indicators": [
-            "Total_Gallons: Monthly fuel consumption (gallons)",
-            "Domestic_Gallons: Domestic airline fuel (gallons)",
-            "International_Gallons: International airline fuel (gallons)",
-            "Total_Cost_Million: Total fuel cost (million dollars)",
-            "Cost_Per_Gallon: Fuel cost per gallon (dollars)",
-            "Total_Gallons_YoY_Pct: Year-over-year growth %",
-            "Domestic_Pct: Domestic as % of total",
-            "Cost_Per_1000Gal: Cost efficiency metric",
-            "Total_Gallons_MA3: 3-month moving average of consumption"
-        ]
-    }
+    try:
+        engine = create_engine(rc.get_db_url())
+        # Use replace to handle schema evolution
+        df_to_save.to_sql('aviation_fuel', engine, if_exists='replace', index=False)
+        logger.info(f"Saved {len(df_to_save)} aviation fuel records to database (schema updated)")
+    except Exception as e:
+        logger.error(f"Error saving aviation fuel data to database: {e}")
+        raise
     
-    metadata_path = output_path.with_suffix(".json")
-    with open(metadata_path, "w") as f:
-        json.dump(metadata, f, indent=2, default=str)
-    
-    logger.info(f"Saved metadata to {metadata_path}")
-    
-    return output_path
+    # Return a dummy path for compatibility
+    return Path("aviation_fuel_historical")
 
 
 def ingest_aviation_fuel():

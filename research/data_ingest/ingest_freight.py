@@ -43,10 +43,15 @@ Next step: Connect specific vessel movements to recorded LNG terminal activity.
 """
 
 import os
+import sys
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
 import logging
+from sqlalchemy import create_engine
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from common import runtime_config as rc
 
 logger = logging.getLogger(__name__)
 
@@ -227,26 +232,22 @@ def consolidate_freight_data(data):
 
 
 def save_consolidated_data(consolidated_df, output_path):
-    """Save consolidated freight data to CSV."""
-    consolidated_df.to_csv(output_path, index=False)
-    logger.info(f"Saved consolidated freight data to {output_path}")
+    """Save consolidated freight data to database."""
+    if consolidated_df.empty:
+        logger.warning("No freight data to save")
+        return
     
-    # Also create metadata file
-    metadata = {
-        "created": datetime.now().isoformat(),
-        "rows": len(consolidated_df),
-        "columns": list(consolidated_df.columns),
-        "date_range": f"{consolidated_df['Date'].min()} to {consolidated_df['Date'].max()}",
-        "sources": list(FREIGHT_SOURCES.keys()),
-        "source_descriptions": {k: v["description"] for k, v in FREIGHT_SOURCES.items()},
-    }
+    # Convert Period dates to strings for SQLite compatibility
+    if pd.api.types.is_period_dtype(consolidated_df['Date']):
+        consolidated_df['Date'] = consolidated_df['Date'].astype(str)
     
-    import json
-    metadata_path = output_path.with_suffix(".json")
-    with open(metadata_path, "w") as f:
-        json.dump(metadata, f, indent=2, default=str)
-    
-    logger.info(f"Saved metadata to {metadata_path}")
+    try:
+        engine = create_engine(rc.get_db_url())
+        consolidated_df.to_sql('freight_data', engine, if_exists='append', index=False)
+        logger.info(f"Saved {len(consolidated_df)} freight records to database")
+    except Exception as e:
+        logger.error(f"Error saving freight data to database: {e}")
+        raise
 
 
 def ingest_freight():

@@ -61,7 +61,12 @@ def run_all():
                 module.ingest_cme_futures()
             else:
                 # For all others, use main() if available
-                module.main() if hasattr(module, 'main') else exec(open(module.__file__).read())
+                if hasattr(module, 'main'):
+                    module.main()
+                else:
+                    print(f"WARNING: No main() function found in {name}")
+                    results.append((name, "FAILED: No main() function"))
+                    continue
             results.append((name, "SUCCESS"))
         except Exception as e:
             print(f"ERROR in {name}: {e}")

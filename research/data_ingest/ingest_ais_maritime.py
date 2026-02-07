@@ -4,16 +4,22 @@ Uses MarineTraffic free tier API
 Tracks LNG tanker movements as supply indicator
 """
 import os
+import sys
+from pathlib import Path
 import requests
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 
+# Add parent directory (research/) to Python path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from common import runtime_config as rc
+
 load_dotenv()
 # Get free API key from: https://www.marinetraffic.com/en/ais-api-services
 MARINETRAFFIC_API_KEY = os.getenv("MARINETRAFFIC_API_KEY", "")
-DB_URL = os.getenv("DB_URL", "postgresql://postgres:postgres@localhost:5432/metis")
+DB_URL = rc.get_db_url()
 
 # Key LNG export terminals (major US ports)
 LNG_TERMINALS = {
@@ -59,7 +65,8 @@ def fetch_vessels_near_terminal(terminal_name, coords, radius_nm=5):
     
     return pd.DataFrame()
 
-if __name__ == "__main__":
+def main():
+    """Main ingestion function for Maritime AIS data."""
     print("Fetching LNG tanker positions near US export terminals...")
     
     all_vessels = []
@@ -80,3 +87,6 @@ if __name__ == "__main__":
         print(f"Saved {len(combined_df)} vessel positions to database")
     else:
         print("No vessel data fetched. Set MARINETRAFFIC_API_KEY in .env or use free tier.")
+
+if __name__ == "__main__":
+    main()
