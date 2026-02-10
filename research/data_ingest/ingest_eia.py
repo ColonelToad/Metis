@@ -47,7 +47,7 @@ def fetch_ng_storage():
     return df[['timestamp', 'storage_bcf', 'area-name']]
 
 def fetch_ng_production():
-    """Fetch natural gas production data"""
+    """Fetch natural gas production data (USA aggregate only)"""
     if not rc.require_real_mode("EIA production API"):
         return pd.DataFrame()
     url = f"https://api.eia.gov/v2/natural-gas/prod/sum/data/"
@@ -67,6 +67,16 @@ def fetch_ng_production():
     df = pd.DataFrame(data['response']['data'])
     df['timestamp'] = pd.to_datetime(df['period'])
     df = df.rename(columns={'value': 'production_mmcf'})
+    
+    # Filter to USA aggregate only (many regional series have sparse/missing data)
+    # This removes ~80% of rows that are mostly NULL
+    if 'duoarea' in df.columns:
+        df = df[df['duoarea'] == 'NUS']  # 'NUS' = National US aggregate, not 'USA'
+    
+    # Drop rows with NULL production values
+    df = df.dropna(subset=['production_mmcf'])
+    
+    print(f"Filtered production data to {len(df)} USA aggregate records")
     
     return df[['timestamp', 'production_mmcf', 'area-name']]
 

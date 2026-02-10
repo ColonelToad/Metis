@@ -20,17 +20,13 @@
     "eia_storage_yoy",
     "eia_storage_change",
     "production_mmcf",
-    "eia_production_yoy",
     "eia_production_change",
-    "unemployment_rate",
     "cpi_energy",
     "retail_gas_price",
     "wti_crude_price",
     "industrial_production",
     "housing_starts",
     "personal_consumption",
-    "unemployment_rate_yoy",
-    "unemployment_rate_ma",
     "cpi_energy_yoy",
     "cpi_energy_ma",
     "retail_gas_price_yoy",
@@ -45,7 +41,6 @@
     "personal_consumption_ma",
     "permit_count",
     "permit_6m_rolling",
-    "permit_yoy_change",
     "permit_bullish",
     "permit_count_lag3m",
     "permit_bullish_lag3m",
@@ -54,8 +49,8 @@
     "congress_bills_ma",
     "congress_bills_energy_ma"
   ],
-  "test_accuracy": 0.956813104988831,
-  "test_sharpe": -0.44650134377820205,
-  "test_return": -1.390400028321892e-06,
-  "date_trained": "2026-01-31T18:19:46.408928"
+  "test_accuracy": 0.746177370030581,
+  "test_sharpe": -0.06299112947721765,
+  "test_return": -6.873698620751383e-05,
+  "date_trained": "2026-02-10T15:18:12.349794"
 }

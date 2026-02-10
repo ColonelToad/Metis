@@ -158,7 +158,7 @@ class FeatureEngineer:
         """Load FRED macro indicators."""
         
         query = """
-        SELECT timestamp as date, unemployment_rate, cpi_energy, retail_gas_price, 
+        SELECT timestamp as date, cpi_energy, retail_gas_price, 
                wti_crude_price, industrial_production, housing_starts, personal_consumption
         FROM fred_macro
         WHERE timestamp >= :start_date
@@ -358,6 +358,80 @@ class FeatureEngineer:
         
         return df
     
+    def split_features_by_frequency(self) -> dict:
+        """
+        Split features into 3 groups by temporal frequency.
+        
+        Returns:
+            dict with 'daily', 'low_freq', 'sparse' DataFrames
+        """
+        if self.df is None:
+            raise ValueError("Run engineer_features() first")
+        
+        df = self.df.copy()
+        
+        # Daily features: high-frequency price and volume-based
+        daily_cols = [
+            'date', 'open', 'high', 'low', 'close', 'volume',
+            'log_return', 'return_1d', 'return_5d', 'return_20d',
+            'volatility_20d', 'volatility_5d', 'price_range', 
+            'momentum_20d', 'volume_ma_20d', 'volume_ratio'
+        ]
+        daily_features = df[[col for col in daily_cols if col in df.columns]].copy()
+        
+        # Low-frequency features: weekly, monthly, quarterly macro and structural
+        low_freq_base = [
+            'storage_bcf', 'eia_storage_yoy', 'eia_storage_change',
+            'production_mmcf', 'eia_production_change',
+            'cpi_energy', 'retail_gas_price', 'wti_crude_price',
+            'industrial_production', 'housing_starts', 'personal_consumption',
+            'permit_count', 'permit_6m_rolling', 'permit_bullish',
+            'permit_count_lag3m', 'permit_bullish_lag3m'
+        ]
+        
+        # Include all YoY and MA variants of low-freq features
+        low_freq_cols = ['date'] + [col for col in low_freq_base if col in df.columns]
+        for col in df.columns:
+            if any(col.startswith(base) and (col.endswith('_yoy') or col.endswith('_ma')) 
+                   for base in ['cpi_', 'retail_', 'wti_', 'industrial_', 'housing_', 'personal_']):
+                if col not in low_freq_cols:
+                    low_freq_cols.append(col)
+        
+        # Include PPI features in low-freq
+        ppi_cols = [col for col in df.columns if 'ppi' in col.lower()]
+        low_freq_cols.extend(ppi_cols)
+        
+        low_freq_features = df[[col for col in low_freq_cols if col in df.columns]].copy()
+        
+        # Sparse features: event-driven signals with sparse occurrence
+        sparse_cols = ['date', 'congress_bills_count', 'congress_bills_energy_count', 
+                       'congress_bills_ma', 'congress_bills_energy_ma']
+        sparse_features = df[[col for col in sparse_cols if col in df.columns]].copy()
+        
+        return {
+            'daily': daily_features,
+            'low_freq': low_freq_features,
+            'sparse': sparse_features
+        }
+    
+    def save_features_parquet(self) -> None:
+        """Save all features to parquet files (CSV for backward compatibility, parquet for frequency groups)."""
+        if self.df is None:
+            raise ValueError("Run engineer_features() first")
+        
+        # Save full features as CSV (backward compatibility)
+        output_path_csv = os.path.join(OUTPUT_DIR, "all_features.csv")
+        self.df.to_csv(output_path_csv, index=False)
+        print(f"[FEATURES] Saved full features (CSV): {output_path_csv}")
+        
+        # Split by frequency and save as parquet
+        features_split = self.split_features_by_frequency()
+        
+        for freq_name, freq_df in features_split.items():
+            output_path_parquet = os.path.join(OUTPUT_DIR, f"{freq_name}_features.parquet")
+            freq_df.to_parquet(output_path_parquet, index=False, compression='snappy')
+            print(f"[FEATURES] Saved {freq_name} features ({len(freq_df.columns)} cols): {output_path_parquet}")
+    
     def save_features(self, filename: str = "all_features.csv") -> str:
         """Save features to CSV."""
         if self.df is None:
@@ -408,13 +482,29 @@ class FeatureEngineer:
 if __name__ == "__main__":
     engineer = FeatureEngineer(DB_URL, start_date="2015-01-01")
     df = engineer.engineer_features()
-    engineer.save_features()
     
-    # Also save train/val/test splits
+    # Save full features (CSV) and frequency-split features (parquet)
+    engineer.save_features()
+    engineer.save_features_parquet()
+    
+    # Also save train/val/test splits (CSV for backward compatibility)
     splits = engineer.get_training_data(test_size=0.15, holdout_months=6)
     splits['train'].to_csv(os.path.join(OUTPUT_DIR, "train_features.csv"), index=False)
     splits['val'].to_csv(os.path.join(OUTPUT_DIR, "val_features.csv"), index=False)
     splits['test'].to_csv(os.path.join(OUTPUT_DIR, "test_features.csv"), index=False)
+    
+    # Save frequency-split train/val/test as parquet files
+    features_split = engineer.split_features_by_frequency()
+    for freq_name, freq_df in features_split.items():
+        freq_train = freq_df[:len(splits['train'])]
+        freq_val = freq_df[len(splits['train']):len(splits['train'])+len(splits['val'])]
+        freq_test = freq_df[len(splits['train'])+len(splits['val']):]
+        
+        freq_train.to_parquet(os.path.join(OUTPUT_DIR, f"train_{freq_name}_features.parquet"), index=False, compression='snappy')
+        freq_val.to_parquet(os.path.join(OUTPUT_DIR, f"val_{freq_name}_features.parquet"), index=False, compression='snappy')
+        freq_test.to_parquet(os.path.join(OUTPUT_DIR, f"test_{freq_name}_features.parquet"), index=False, compression='snappy')
+        
+        print(f"[FEATURES] Saved {freq_name} train/val/test splits (parquet)")
     
     print(f"\n[FEATURES] Saved train/val/test splits to {OUTPUT_DIR}")
     print("[SUCCESS] Feature engineering complete!")

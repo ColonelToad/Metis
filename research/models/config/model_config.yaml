@@ -1,0 +1,221 @@
+# Dual LSTM + Fusion Model Configuration
+# Version: 1.0
+# Date: 2026-02-10
+# Architecture: Frequency-separated dual LSTM with sparse event embedding
+
+model:
+  name: "Dual LSTM + Fusion"
+  version: "1.0"
+  description: "Three-track LSTM architecture for multi-frequency NG price prediction"
+  created_date: "2026-02-10"
+  author: "Metis Research Team"
+
+architecture:
+  lookback_window: 20  # Days of history per sequence
+  track_1:
+    name: "daily_high_frequency"
+    lstm_units: [64, 64]  # Two stacked LSTM layers
+    output_dim: 64
+    dropout: 0.2
+  
+  track_2:
+    name: "low_frequency_macro"
+    lstm_units: [32, 32]
+    output_dim: 32
+    dropout: 0.2
+  
+  track_3:
+    name: "sparse_events"
+    dense_units: [64, 32]
+    output_dim: 32
+    dropout: 0.2
+    processing: "flatten + dense (no LSTM for sparse data)"
+  
+  fusion:
+    concat_dim: 128  # 64 + 32 + 32
+    dense_layers: [64, 32]
+    dropout: [0.3, 0.2]
+    output_activation: "sigmoid"
+
+performance:
+  test_accuracy: 0.765  # 76.5%
+  test_f1_score: 0.588
+  test_precision: 0.453  # 45.3%
+  test_recall: 0.838    # 83.8%
+  baseline_accuracy: 0.526  # Single LSTM
+  improvement_vs_baseline: 0.239  # +45%
+  
+  confusion_matrix:
+    true_positives: 165
+    false_positives: 199
+    false_negatives: 32
+    true_negatives: 585
+    test_samples_total: 981
+  
+  thresholds:
+    default: 0.40  # Optimized on training F1
+    conservative: 0.50  # Higher precision, lower recall
+    aggressive: 0.30  # Higher recall, lower precision
+
+# Feature configuration
+daily_features:
+  - "open"
+  - "high"
+  - "low"
+  - "close"
+  - "volume"
+  - "log_return"
+  - "return_1d"
+  - "return_5d"
+  - "return_20d"
+  - "volatility_20d"
+  - "volatility_5d"
+  - "price_range"
+  - "momentum_20d"
+  - "volume_ma_20d"
+  - "volume_ratio"
+feature_count_daily: 15
+
+low_freq_features:
+  - "storage_bcf"
+  - "eia_storage_yoy"
+  - "eia_storage_change"
+  - "production_mmcf"
+  - "eia_production_change"
+  - "cpi_energy"
+  - "retail_gas_price"
+  - "wti_crude_price"
+  - "industrial_production"
+  - "housing_starts"
+  - "personal_consumption"
+  - "permit_count"
+  - "permit_6m_rolling"
+  - "permit_bullish"
+  - "permit_count_lag3m"
+  - "permit_bullish_lag3m"
+  - "cpi_energy_yoy"
+  - "cpi_energy_ma"
+  - "retail_gas_price_yoy"
+  - "retail_gas_price_ma"
+  - "wti_crude_price_yoy"
+  - "wti_crude_price_ma"
+  - "industrial_production_yoy"
+  - "industrial_production_ma"
+  - "housing_starts_yoy"
+  - "housing_starts_ma"
+  - "personal_consumption_yoy"
+  - "personal_consumption_ma"
+  - "ppi_index_PCUOMPU"
+  - "ppi_yoy_PCUOMPU"
+  - "ppi_index_PUEMUUI"
+  - "ppi_yoy_PUEMUUI"
+  - "ppi_index_PUEUUUI01"
+  - "ppi_yoy_PUEUUUI01"
+  - "ppi_energy_avg"
+  - "ppi_yoy_avg"
+feature_count_low_freq: 36
+
+sparse_features:
+  - "congress_bills_count"
+  - "congress_bills_energy_count"
+  - "congress_bills_ma"
+  - "congress_bills_energy_ma"
+feature_count_sparse: 4
+
+training:
+  lookback: 20  # Sequence length
+  batch_size: 32
+  epochs_max: 50
+  early_stopping:
+    monitor: "val_loss"
+    patience: 5
+    restore_best_weights: true
+  
+  learning_rate:
+    optimizer: "adam"
+    initial: 0.001
+    reduce_on_plateau:
+      factor: 0.5
+      patience: 3
+      min_lr: 0.00001
+  
+  regularization:
+    dropout_track1: 0.2
+    dropout_track2: 0.2
+    dropout_track3: 0.2
+    dropout_fusion: [0.3, 0.2]
+  
+  class_balancing:
+    method: "oversampling"
+    target_positive_rate: 0.33  # 33% positive
+    notes: "Oversampled positives to ~1:2 ratio"
+  
+  validation:
+    method: "validation_split"
+    split: 0.2  # 20% of training for internal validation
+    notes: "External val/test sets were too small; using internal split"
+
+inference:
+  threshold: 0.40  # Classification threshold
+  prediction_type: "binary"  # Long or Neutral
+  confidence_scale: [0.0, 1.0]  # Raw probability
+  latency_target_ms: 100  # Target Python inference time
+  
+  preprocessing:
+    scaling: "per_track"  # Independent StandardScaler per track
+    scaling_type: "StandardScaler"
+    notes: "Each track scaled independently for proper gradient flow"
+
+signal_format:
+  symbol: "NG:CME"  # Natural gas CME futures
+  directions: ["Long", "Neutral"]  # Binary classification only
+  horizon_minutes: 60  # Recommended execution window
+  metadata:
+    model_version: "1.0"
+    features_count: 55  # 15 + 36 + 4
+    temporal_coverage: "20-day lookback"
+
+deployment:
+  model_file: "models/dual_lstm_v1.0.h5"
+  scalers_file: "models/scalers_v1.0.pkl"
+  inference_script: "inference_pipeline.py"
+  
+  dependencies:
+    - tensorflow>=2.12
+    - numpy>=1.21
+    - pandas>=1.3
+    - scikit-learn>=0.24
+    - loguru>=0.5
+  
+  execution_engine:
+    type: "Rust (async)"
+    protocol: "TCP + MessagePack"
+    host: "localhost"
+    port: 8080
+    signal_latency_target_ms: 50
+
+monitoring:
+  metrics_to_track:
+    - "prediction_count_daily"
+    - "model_latency_p95"
+    - "signal_acceptance_rate"
+    - "execution_fill_rate"
+    - "win_rate_by_prediction_confidence"
+  
+  alerting:
+    - "If latency > 200ms: escalate"
+    - "If fill rate < 70%: review execution"
+    - "If accuracy drift > 5%: retrain"
+
+future_improvements:
+  next_iteration:
+    - "Add sparse data age tracking (days since congress update)"
+    - "Implement ensemble stacking with XGBoost"
+    - "BiLSTM on low-freq track for bidirectional context"
+    - "Attention mechanism for feature importance"
+  
+  research_directions:
+    - "Transformer-based fusion layer"
+    - "Regime detection (bull/bear/chop markets)"
+    - "Reinforcement learning for position sizing"
+    - "Transfer learning from related commodities"

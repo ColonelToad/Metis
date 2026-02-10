@@ -12,9 +12,12 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine
 import time
 
-# Add project root for imports
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-from research.common import runtime_config as rc
+# Add parent directory (research/) to Python path if not already there
+parent_dir = str(Path(__file__).parent.parent)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from common import runtime_config as rc
 
 load_dotenv()
 FRED_API_KEY = os.getenv("FRED_API_KEY")
@@ -22,7 +25,6 @@ DB_URL = rc.get_db_url()
 
 # Relevant macro series for natural gas trading
 SERIES_IDS = {
-    'UNRATE': 'unemployment_rate',
     'CPIENGSL': 'cpi_energy',
     'GASREGW': 'retail_gas_price',
     'DCOILWTICO': 'wti_crude_price',
@@ -97,11 +99,26 @@ def main():
     if all_data:
         combined_df = pd.concat(all_data, ignore_index=True)
         
+        # Pivot: each date gets one row with all series as columns
+        # This converts from vertical (stacked) to horizontal (wide) format
+        print("Pivoting data from vertical to horizontal format...")
+        pivoted_df = combined_df.pivot_table(
+            index='timestamp',
+            aggfunc='first'
+        ).reset_index()
+        
+        # Clean up column names after pivot
+        pivoted_df.columns.name = None
+        
+        # Verify we have fewer rows (one per date instead of many per date)
+        print(f"Before pivot: {len(combined_df)} rows (vertical/stacked)")
+        print(f"After pivot: {len(pivoted_df)} rows (horizontal/wide)")
+        
         # Save to database
         engine = create_engine(DB_URL)
-        combined_df.to_sql('fred_macro', engine, if_exists='replace', index=False)
+        pivoted_df.to_sql('fred_macro', engine, if_exists='replace', index=False)
         
-        print(f"Saved {len(combined_df)} total macro observations to database")
+        print(f"Saved {len(pivoted_df)} unique dates to database")
 
 if __name__ == "__main__":
     main()
