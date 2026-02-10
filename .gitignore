@@ -35,7 +35,6 @@ data/raw/
 data/processed/
 data/tick_data/
 data/historical/
-
 # ML Models
 *.pt
 *.pth
@@ -49,6 +48,10 @@ target/
 Cargo.lock
 **/*.rs.bk
 *.pdb
+
+# Profiling
+profiling/**/*.txt
+metis-core/profiling/*.txt
 
 # Node.js / React
 node_modules/

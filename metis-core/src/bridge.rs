@@ -4,6 +4,7 @@
 //! Every shop has Python ML + C++/Rust execution; this is production essential.
 
 use crate::types::{Direction, InstrumentId, TradingSignal};
+use crate::pin_thread_to_core;
 use crossbeam::channel::{bounded, Receiver, Sender};
 use pyo3::prelude::*;
 use std::sync::Arc;
