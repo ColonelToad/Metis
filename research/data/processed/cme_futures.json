@@ -1,5 +1,5 @@
 {
-  "created": "2026-02-09T18:01:40.915967",
+  "created": "2026-02-10T18:01:11.632500",
   "contracts": [
     "crude_oil_wti",
     "natural_gas",
@@ -13,8 +13,8 @@
     "rbob_gasoline": "RB=F"
   },
   "data_source": "Yahoo Finance",
-  "total_records": 2004,
-  "date_range": "2024-02-12 00:00:00 to 2026-02-06 00:00:00",
+  "total_records": 2008,
+  "date_range": "2024-02-12 00:00:00 to 2026-02-09 00:00:00",
   "indicators": [
     "Close_YoY_Pct: Year-over-year price change %",
     "Close_MTD_Pct: Daily price change %",

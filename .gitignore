@@ -52,7 +52,7 @@ Cargo.lock
 # Profiling
 profiling/**/*.txt
 metis-core/profiling/*.txt
-
+zephyrmetis/
 # Node.js / React
 node_modules/
 npm-debug.log*

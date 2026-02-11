@@ -2,23 +2,25 @@
 layout: post
 title: "Dual LSTM + Fusion: 45% Improvement in NG Price Prediction"
 date: 2026-02-10
-author: "Metis Research Team"
+author: "Researcher"
 categories: ["Research", "Model Architecture", "Price Prediction"]
 tags: ["LSTM", "Deep Learning", "Natural Gas", "Multi-Frequency Learning"]
 ---
 
+
 ## Executive Summary
 
-We've achieved a **significant breakthrough** in natural gas price direction prediction by moving from a single monolithic LSTM to a **Dual LSTM + Fusion architecture**. This frequency-aware approach delivers:
+I've achieved a **significant breakthrough** in natural gas price direction prediction by moving from a single monolithic LSTM to a **Dual LSTM + Fusion architecture**. This frequency-aware approach delivers:
 
 - **Accuracy: 76.5%** (vs baseline 52.6%) — **+45% improvement**
 - **F1 Score: 0.588** (vs baseline 0.256) — **2.3x better**
 - **Recall: 83.8%** — catches 84% of actual price movements
 - **Adaptive signal fusion** across daily, structural, and event-driven timeframes
 
-This architecture is now **production-ready** and integrated with our Rust execution engine for real-time trading signal generation.
+This architecture is now **production-ready** and integrated with my Rust execution engine for real-time trading signal generation.
 
 ---
+
 
 ## The Problem: Why Single LSTM Failed
 
@@ -38,53 +40,14 @@ Result: The model learned to ignore low-frequency features and default to a near
 
 ---
 
+
 ## The Solution: Frequency-Aware Dual LSTM + Fusion
 
-We separated features into **three independent tracks** by their natural timescale:
+I separated features into **three independent tracks** by their natural timescale:
 
 ### Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      MULTI-TRACK FUSION ARCHITECTURE             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  TRACK 1: DAILY (16 features)          TRACK 2: LOW-FREQ (37)   │
-│  ├─ OHLCV                              ├─ EIA storage (bcf)     │
-│  ├─ Volume ratio                       ├─ Production (mmcf)     │
-│  ├─ Returns (1d, 5d, 20d)             ├─ CPI energy            │
-│  ├─ Volatility                         ├─ WTI crude             │
-│  └─ Momentum (20d MA)                  ├─ Industrial output     │
-│       ↓                                ├─ Housing starts        │
-│   LSTM(64→64)                         ├─ PPI indices (3x)      │
-│       ↓                                └─ Permits (6m roll avg)│
-│   64-dim output                             ↓                  │
-│                                        LSTM(32→32)             │
-│                                            ↓                   │
-│                                        32-dim output           │
-│                                                                 │
-│  TRACK 3: SPARSE EVENTS (5 features)                           │
-│  ├─ Congress bills (count, energy-related)                     │
-│  └─ Related moving averages                                    │
-│       ↓                                                        │
-│   Dense(64) → Dense(32)                                       │
-│       ↓                                                        │
-│   32-dim output                                               │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                      FUSION & PREDICTION                         │
-│                                                                   │
-│  Concatenate [64 + 32 + 32 = 128-dim]                           │
-│       ↓                                                          │
-│  Dense(64, relu) → Dropout(0.3) → Dense(32, relu) → Output     │
-│       ↓                                                          │
-│  Sigmoid → Binary Prediction (0.0 - 1.0)                       │
-│       ↓                                                          │
-│  Threshold: 0.40 (optimized on train F1)                       │
-│       ↓                                                          │
-│  Signal: BUY (p > 0.40) | HOLD (p ≤ 0.40)                     │
-└─────────────────────────────────────────────────────────────────┘
-```
+...existing code...
 
 ### Key Design Choices
 
@@ -154,30 +117,31 @@ These operate at different scales. By filtering them first, each LSTM specialize
 Original features ranged from 0.01 (PPI yoy%) to 100+ (volume). Standard scaling on the mixture meant:
 ```
 - Small-magnitude storage changes (~0.1 units) 
-  diluted by re-scaled volume (~10 units in normalized space)
+   diluted by re-scaled volume (~10 units in normalized space)
 - Low-freq LSTM never learned to attend to them
 ```
 
 Separate scalers per track: storage changes remain 1-2 units in their normalized space.
 
 ### 3. **Sparse Event Embedding is Appropriate**
-Congress bills occur ~5-10 times per quarter, not daily. Forcing them into an LSTM wastes capacity on padding and null states. Via dense embedding with flattening, we encode "how many recent events" and "trend in event count" directly.
+Congress bills occur ~5-10 times per quarter, not daily. Forcing them into an LSTM wastes capacity on padding and null states. Via dense embedding with flattening, I encode "how many recent events" and "trend in event count" directly.
 
 ### 4. **Fusion Learning Models Cross-Frequency Dependencies**
 High-frequency signals (volatility spike) often coincide with low-frequency events (storage alert). The fusion layer learns these interactions:
 ```
 High volatility + Storage at 10-yr low + Recent congress activity 
-                        ↓
-          Model assigns higher confidence to upcoming move
+                                    ↓
+               Model assigns higher confidence to upcoming move
 ```
 
 ---
+
 
 ## Integration with Execution Engine
 
 ### How Signals Flow to Trading
 
-The model is now connected to our Rust-based execution system:
+The model is now connected to my Rust-based execution system:
 
 ```python
 from signal_client import SignalClient, create_signal
@@ -189,14 +153,14 @@ y_pred_proba = model.predict([X_daily, X_low_freq, X_sparse])
 
 # 2. Convert to trading signal
 signal = create_signal(
-    signal_id=str(uuid.uuid4()),
-    symbol="NG:CME",
-    direction="Long" if y_pred_proba > 0.40 else "Neutral",
-    confidence=float(y_pred_proba),
-    target_quantity=10.0,  # contracts
-    horizon_minutes=60,
-    model_version="dual_lstm_fusion_v1.0",
-    features_used=daily_cols + low_freq_cols + sparse_cols,
+   signal_id=str(uuid.uuid4()),
+   symbol="NG:CME",
+   direction="Long" if y_pred_proba > 0.40 else "Neutral",
+   confidence=float(y_pred_proba),
+   target_quantity=10.0,  # contracts
+   horizon_minutes=60,
+   model_version="dual_lstm_fusion_v1.0",
+   features_used=daily_cols + low_freq_cols + sparse_cols,
 )
 
 # 3. Send to execution engine
@@ -213,6 +177,7 @@ The execution engine:
 - Returns execution details (fill price, latency, slippage)
 
 ---
+
 
 ## Next Steps & Future Improvements
 
@@ -260,6 +225,7 @@ The execution engine:
 
 ---
 
+
 ## Repository Structure
 
 The model is now organized for production:
@@ -283,18 +249,19 @@ research/models/
 
 ---
 
+
 ## Conclusion
 
-The Dual LSTM + Fusion architecture represents a **paradigm shift** in how we approach multi-frequency price prediction:
+The Dual LSTM + Fusion architecture represents a **paradigm shift** in how I approach multi-frequency price prediction:
 
-- ✅ **45% accuracy gain** through frequency-aware feature separation
-- ✅ **2.3x better recall** — catches real opportunities
-- ✅ **Production-ready** — integrated with Rust execution engine
-- ✅ **Interpretable** — clear separation of daily/macro/event signals
+- **45% accuracy gain** through frequency-aware feature separation
+- **2.3x better recall** — catches real opportunities
+- **Production-ready** — integrated with Rust execution engine
+- **Interpretable** — clear separation of daily/macro/event signals
 
 **Result**: A model that understands natural gas markets at multiple timescales simultaneously, delivering actionable trading signals with high confidence in real-time.
 
-The work validates our thesis: **Better feature engineering beats bigger models.** By respecting the natural frequency structure of our data, we achieved better generalization with fewer parameters than the baseline.
+The work validates my thesis: **Better feature engineering beats bigger models.** By respecting the natural frequency structure of my data, I achieved better generalization with fewer parameters than the baseline.
 
 ---
 
@@ -305,6 +272,7 @@ The work validates our thesis: **Better feature engineering beats bigger models.
 - Complementary: EIA Weekly Report, FRED St. Louis Fed API, Congress.gov Bills API
 
 ---
+
 
 **Next blog post**: Implementing the ensemble stack (XGBoost + LSTM fusion)
 
