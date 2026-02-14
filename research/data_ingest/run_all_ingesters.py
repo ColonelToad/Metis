@@ -16,21 +16,21 @@ from datetime import datetime
 from pathlib import Path
 import sqlite3
 
-# Add parent directory (research/) to Python path
+# Add parent directory (research/) to Python path so we can import from data_ingest/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Import all ingesters
-import ingest_eia
-import ingest_lmp
-import ingest_fred
-import ingest_weather
-import ingest_ais_maritime
-import ingest_cme_futures
-import ingest_drought
-import ingest_congress_bills_expanded
-import ingest_bls_ppi
-import ingest_fred_building_permits
-import ingest_eia_jet_fuel
+# Import all ingesters using qualified paths
+from data_ingest import ingest_eia
+from data_ingest import ingest_lmp
+from data_ingest import ingest_fred
+from data_ingest import ingest_weather
+from data_ingest import ingest_ais_maritime
+from data_ingest import ingest_cme_futures
+from data_ingest import ingest_drought
+from data_ingest import ingest_congress_bills_expanded
+from data_ingest import ingest_bls_ppi
+from data_ingest import ingest_fred_building_permits
+from data_ingest import ingest_eia_jet_fuel
 
 # Define ingester groups by frequency
 DAILY_INGESTERS = [

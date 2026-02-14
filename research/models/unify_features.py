@@ -346,7 +346,8 @@ def save_features(combined_df):
     
     return parquet_path
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for feature unification pipeline."""
     print("="*60)
     print("Feature Unification Pipeline")
     print("="*60)
@@ -370,3 +371,8 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print(f"Unified training data ready at: {path}")
     print("="*60)
+    
+    return True
+
+if __name__ == "__main__":
+    main()

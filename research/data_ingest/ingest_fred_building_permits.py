@@ -230,6 +230,11 @@ def main():
     """Main ingestion pipeline."""
     rc.log_mode("FRED Building Permits")
     
+    # Skip ingestion in DEV mode - DEV mode is read-only
+    if not rc.require_real_mode("FRED Building Permits ingestion"):
+        print("[FRED] Skipping ingestion in DEV mode (read-only)")
+        return
+    
     # Create engine first to query existing data
     engine = create_engine(DB_URL)
     
@@ -255,11 +260,13 @@ def main():
     # Calculate metrics
     df = calculate_rolling_metrics(df)
     
-    # Save to database
-    upsert_permits(engine, df)
-    
-    # Update metadata to track successful fetch
-    incremental_utils.update_fetch_metadata("fred_building_permits", start_date, end_date, success=True)
+    # Save to database only in REAL mode
+    if rc.require_real_mode("FRED Building Permits ingestion"):
+        upsert_permits(engine, df)
+        # Update metadata to track successful fetch
+        incremental_utils.update_fetch_metadata("fred_building_permits", start_date, end_date, success=True)
+    else:
+        print("[FRED] Skipping database write in DEV mode (read-only)")
     
     # Log summary
     if not df.empty:

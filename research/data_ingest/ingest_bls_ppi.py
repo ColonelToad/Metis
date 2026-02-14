@@ -235,6 +235,11 @@ def main():
     """Main ingestion pipeline."""
     rc.log_mode("BLS Producer Price Index")
     
+    # Skip database writes in DEV mode - DEV mode is read-only
+    if not rc.require_real_mode("BLS PPI ingestion"):
+        print("[BLS] Skipping ingestion in DEV mode (read-only)")
+        return
+    
     # Fetch PPI data for key energy series
     series_list = list(PPI_SERIES.keys())
     df = fetch_ppi_data(series_list)
