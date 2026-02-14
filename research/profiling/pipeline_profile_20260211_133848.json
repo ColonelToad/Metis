@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-02-11T13:38:48.261493",
+  "mode": "DEV",
+  "timings": {
+    "ingest_eia": 0.0028134999993199017,
+    "ingest_lmp": 13.125549999999748,
+    "ingest_congress": 0.0021423999996841303,
+    "ingest_bls_ppi": 0.5342347999994672,
+    "ingest_cme_futures": 1.4578870000004827,
+    "ingest_freight": 0.21536699999978737,
+    "ingest_total_sequential": 15.374536099999204
+  },
+  "sizes": {
+    "lmp": 1.455432,
+    "cme_futures": 0.791854,
+    "freight": 0.912148
+  },
+  "errors": {
+    "fred": "'timestamp'",
+    "features": "(sqlite3.OperationalError) no such table: ng_futures_daily\n[SQL: \n        SELECT date, open, high, low, close, volume\n        FROM ng_futures_daily\n        WHERE date >= ?\n        ORDER BY date\n        ]\n[parameters: ('2015-01-01T00:00:00',)]\n(Background on this error at: https://sqlalche.me/e/20/e3q8)",
+    "inference": "Model files not found: [Errno 2] No such file or directory: 'models/scalers_v1.0.pkl'"
+  },
+  "memory": {
+    "current_mb": 0,
+    "peak_mb": 0
+  }
+}

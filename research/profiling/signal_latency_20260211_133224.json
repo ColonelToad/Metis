@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-02-11T13:32:09.662517",
+  "mode": "DEV",
+  "fresh_ingest": true,
+  "timings": {
+    "ingest_fresh": 14.136839499999951
+  },
+  "data_counts": {},
+  "error": "Database tables not populated. Run ingestion first."
+}

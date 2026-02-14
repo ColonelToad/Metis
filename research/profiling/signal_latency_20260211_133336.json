@@ -1,0 +1,9 @@
+{
+  "timestamp": "2026-02-11T13:33:36.394147",
+  "mode": "DEV",
+  "fresh_ingest": false,
+  "timings": {},
+  "data_counts": {},
+  "error": "Database not populated yet",
+  "suggestion": "To populate with demo data: python run_ingestion.py"
+}

@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """
 Metis Data Ingestion Wrapper
-Runs all ingestion tasks with proper environment setup
+Runs ingestion tasks with proper environment setup
+
+Usage:
+    python ingest_wrapper.py [--frequency {daily|weekly|monthly|all}]
+    
+Frequencies:
+    daily   - EIA, LMP, FRED Macro, Weather
+    weekly  - CME Futures, Drought Monitor
+    monthly - BLS PPI, FRED Building Permits, Congress Bills
+    all     - run all of the above (default)
 """
 import sys
 import os
+import argparse
 from pathlib import Path
 from datetime import datetime
 
@@ -29,8 +39,18 @@ try:
     # Import here after paths are set
     from data_ingest import run_all_ingesters
     
-    # Run
-    run_all_ingesters.run_all()
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Run data ingesters by frequency")
+    parser.add_argument(
+        "--frequency",
+        choices=["daily", "weekly", "monthly", "all"],
+        default="all",
+        help="Ingestion frequency to run (default: all)"
+    )
+    args = parser.parse_args()
+    
+    # Run with specified frequency
+    run_all_ingesters.run_all(args.frequency)
     sys.exit(0)
     
 except ImportError as e:

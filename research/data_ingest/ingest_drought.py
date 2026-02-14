@@ -202,15 +202,17 @@ def normalize_and_save(df: pd.DataFrame) -> None:
         print(f"Error saving drought data to database: {e}")
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Main function for drought data ingestion."""
     print(f"[{METIS_MODE}] US Drought Monitor")
-
     print("Fetching US Drought Monitor data...")
-
     df = get_multi_state_drought()
-
     if not df.empty:
         print(f"Fetched {len(df)} drought records")
         normalize_and_save(df)
     else:
         print("No drought data fetched")
+
+
+if __name__ == "__main__":
+    main()

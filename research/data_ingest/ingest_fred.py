@@ -96,29 +96,51 @@ def main():
         except Exception as e:
             print(f"Failed to fetch {series_id}: {e}")
     
-    if all_data:
-        combined_df = pd.concat(all_data, ignore_index=True)
+    if all_data and len(all_data) > 0:
+        try:
+            combined_df = pd.concat(all_data, ignore_index=True)
+            
+            if combined_df.empty:
+                print("No FRED data fetched (DEV mode or API errors)")
+                return {}
+            
+            # Pivot: each date gets one row with all series as columns
+            # This converts from vertical (stacked) to horizontal (wide) format
+            print("Pivoting data from vertical to horizontal format...")
+            pivoted_df = combined_df.pivot_table(
+                index='timestamp',
+                aggfunc='first'
+            ).reset_index()
+            
+            # Clean up column names after pivot
+            pivoted_df.columns.name = None
+            
+            # Verify we have fewer rows (one per date instead of many per date)
+            print(f"Before pivot: {len(combined_df)} rows (vertical/stacked)")
+            print(f"After pivot: {len(pivoted_df)} rows (horizontal/wide)")
+            
+            # Save to database
+            engine = create_engine(DB_URL)
+            pivoted_df.to_sql('fred_macro', engine, if_exists='replace', index=False)
+            
+            print(f"Saved {len(pivoted_df)} unique dates to database")
+            
+            # Return dict of DataFrames (one per series)
+            result_dict = {}
+            for series_id, column_name in SERIES_IDS.items():
+                if column_name in pivoted_df.columns:
+                    result_dict[series_id] = pivoted_df[['timestamp', column_name]].rename(columns={column_name: 'value'})
+            
+            return result_dict
         
-        # Pivot: each date gets one row with all series as columns
-        # This converts from vertical (stacked) to horizontal (wide) format
-        print("Pivoting data from vertical to horizontal format...")
-        pivoted_df = combined_df.pivot_table(
-            index='timestamp',
-            aggfunc='first'
-        ).reset_index()
-        
-        # Clean up column names after pivot
-        pivoted_df.columns.name = None
-        
-        # Verify we have fewer rows (one per date instead of many per date)
-        print(f"Before pivot: {len(combined_df)} rows (vertical/stacked)")
-        print(f"After pivot: {len(pivoted_df)} rows (horizontal/wide)")
-        
-        # Save to database
-        engine = create_engine(DB_URL)
-        pivoted_df.to_sql('fred_macro', engine, if_exists='replace', index=False)
-        
-        print(f"Saved {len(pivoted_df)} unique dates to database")
+        except Exception as e:
+            print(f"Error processing FRED data: {e}")
+            return {}
+    else:
+        print("No FRED data fetched")
+        return {}
 
 if __name__ == "__main__":
-    main()
+    result = main()
+    if result:
+        print(f"\nReturned {len(result)} series")

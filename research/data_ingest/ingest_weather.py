@@ -11,7 +11,7 @@ In DEV mode, skips API calls and prints a notice.
 """
 import argparse
 import os
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 from typing import List, Dict, Any
 
 import pandas as pd
@@ -176,10 +176,23 @@ def upsert_weather(engine, df: pd.DataFrame) -> None:
         conn.execute(text(insert_sql), records)
 
 
-def main(start: str, end: str) -> None:
+def main(start: str = None, end: str = None) -> None:
+    """
+    Ingest weather data from Open-Meteo.
+    
+    Args:
+        start: Start date in ISO format (YYYY-MM-DD). Defaults to 7 days ago.
+        end: End date in ISO format (YYYY-MM-DD). Defaults to today.
+    """
     rc.log_mode("Weather")
     if not rc.require_real_mode("Open-Meteo weather"):
         return
+
+    # Default to last 7 days if not specified
+    if end is None:
+        end = datetime.now(timezone.utc).date().isoformat()
+    if start is None:
+        start = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
 
     start_date = datetime.fromisoformat(start).date()
     end_date = datetime.fromisoformat(end).date()
