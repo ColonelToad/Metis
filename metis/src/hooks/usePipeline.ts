@@ -95,13 +95,13 @@ export function usePipeline() {
 
     pollIntervalRef.current = setInterval(async () => {
       try {
-        const statusResponse = await invoke<any>('poll_pipeline_status', { job_id: jobId });
+        const statusResponse = await invoke<any>('poll_pipeline_status', { jobId });
         setStatus(statusResponse);
 
         // Check if complete
         if (statusResponse.status === 'complete' || statusResponse.status === 'partial' || statusResponse.status === 'error') {
           // Fetch full results
-          const resultResponse = await invoke<any>('fetch_pipeline_results', { job_id: jobId });
+          const resultResponse = await invoke<any>('fetch_pipeline_results', { jobId });
           setResults(resultResponse);
           setIsRunning(false);
 

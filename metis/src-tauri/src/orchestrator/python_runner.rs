@@ -48,24 +48,32 @@ impl PythonRunner {
                 let json_module = py.import_bound("json")?;
                 let dumps = json_module.getattr("dumps")?;
                 let json_str: String = dumps.call1((py_result,))?.extract()?;
-                
-                let result_dict: serde_json::Value = serde_json::from_str(&json_str)
-                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("JSON parse error: {}", e)))?;
-                
+
+                let result_dict: serde_json::Value =
+                    serde_json::from_str(&json_str).map_err(|e| {
+                        pyo3::exceptions::PyRuntimeError::new_err(format!(
+                            "JSON parse error: {}",
+                            e
+                        ))
+                    })?;
+
                 // Extract fields
                 let status = result_dict["status"]
                     .as_str()
-                    .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Missing 'status' field"))?
+                    .ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err("Missing 'status' field")
+                    })?
                     .to_string();
-                
+
                 let signals = result_dict["signals"]
                     .as_array()
-                    .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Missing 'signals' field"))?
+                    .ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err("Missing 'signals' field")
+                    })?
                     .clone();
-                
-                let metrics = result_dict["metrics"]
-                    .clone();
-                
+
+                let metrics = result_dict["metrics"].clone();
+
                 let errors = result_dict["errors"]
                     .as_array()
                     .map(|arr| {
@@ -163,9 +171,17 @@ impl PythonRunner {
                 // Create instance with PyDict in PyO3 0.22+ way
                 // Build absolute paths for model, scalers, and config
                 let model_path = project_root.join("models").join("lstm_ng_predictor.keras");
-                let scalers_path = project_root.join("research").join("models").join("config").join("scalers_v1.0.pkl");
-                let config_path = project_root.join("research").join("models").join("config").join("model_config.yaml");
-                
+                let scalers_path = project_root
+                    .join("research")
+                    .join("models")
+                    .join("config")
+                    .join("scalers_v1.0.pkl");
+                let config_path = project_root
+                    .join("research")
+                    .join("models")
+                    .join("config")
+                    .join("model_config.yaml");
+
                 let kwargs = pyo3::types::PyDict::new_bound(py);
                 kwargs.set_item("model_path", model_path.to_string_lossy().to_string())?;
                 kwargs.set_item("scalers_path", scalers_path.to_string_lossy().to_string())?;

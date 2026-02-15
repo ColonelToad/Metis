@@ -84,7 +84,7 @@ export default function SignalsScreen() {
         {isRunning && status && (
           <div style={{ marginTop: 16 }}>
             <div style={{ marginBottom: 8 }}>
-              <strong>Phase:</strong> {status.phase.replace(/_/g, ' ')} ({status.progress}%)
+              <strong>Phase:</strong> {status.phase ? status.phase.replace(/_/g, ' ') : 'processing'} ({status.progress}%)
             </div>
             <Progress percent={status.progress} status={status.status === 'error' ? 'exception' : 'active'} />
           </div>

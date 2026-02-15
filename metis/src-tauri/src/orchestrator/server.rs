@@ -25,8 +25,8 @@ pub struct AppState {
 }
 
 /// Start the orchestrator HTTP server
-/// Runs on localhost:9000
-pub async fn start_http_server(project_root: PathBuf) {
+/// Runs on localhost with specified port (default 9000)
+pub async fn start_http_server(project_root: PathBuf, port: u16) {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -61,16 +61,14 @@ pub async fn start_http_server(project_root: PathBuf) {
         .with_state(state);
 
     // Start server
-    let addr = SocketAddr::from(([127, 0, 0, 1], 9000));
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .expect("Failed to bind to port 9000");
+        .unwrap_or_else(|_| panic!("Failed to bind to port {}", port));
 
     info!("🚀 Orchestrator service listening on http://{}", addr);
 
-    axum::serve(listener, app)
-        .await
-        .expect("Server crashed");
+    axum::serve(listener, app).await.expect("Server crashed");
 }
 
 async fn health_handler(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
@@ -96,9 +94,12 @@ async fn run_pipeline_handler(
             let orchestrator = state.orchestrator.clone();
             let job_id_clone = job_id.clone();
             let mode = payload.mode.clone();
-            
-            info!("[{}] Submitting pipeline execution (mode: {:?})", job_id_clone, mode);
-            
+
+            info!(
+                "[{}] Submitting pipeline execution (mode: {:?})",
+                job_id_clone, mode
+            );
+
             tokio::spawn(async move {
                 match orchestrator
                     .run_pipeline(job_id_clone.clone(), mode.clone())
@@ -106,7 +107,11 @@ async fn run_pipeline_handler(
                 {
                     Ok(result) => {
                         info!("[{}] Pipeline completed successfully", job_id_clone);
-                        info!("[{}] Generated {} signals", job_id_clone, result.signals.len());
+                        info!(
+                            "[{}] Generated {} signals",
+                            job_id_clone,
+                            result.signals.len()
+                        );
                     }
                     Err(e) => {
                         error!("[{}] Pipeline failed: {}", job_id_clone, e);
@@ -125,7 +130,10 @@ async fn run_pipeline_handler(
         }
         Ok(false) => {
             // Job is queued
-            warn!("[{}] Pipeline queued (another execution in progress)", job_id);
+            warn!(
+                "[{}] Pipeline queued (another execution in progress)",
+                job_id
+            );
             Ok((
                 StatusCode::ACCEPTED,
                 Json(RunPipelineResponse {
@@ -146,13 +154,12 @@ async fn pipeline_status_handler(
     State(state): State<Arc<AppState>>,
     Path(job_id): Path<String>,
 ) -> Result<Json<StatusResponse>, error::OrchestrationError> {
-    match state
-        .orchestrator
-        .get_status(&job_id)
-    {
+    match state.orchestrator.get_status(&job_id) {
         Some(status) => {
-            info!("[{}] Status requested: phase={}, progress={}%", 
-                job_id, status.phase, status.progress);
+            info!(
+                "[{}] Status requested: phase={}, progress={}%",
+                job_id, status.phase, status.progress
+            );
             Ok(Json(status))
         }
         None => {
@@ -166,13 +173,14 @@ async fn pipeline_results_handler(
     State(state): State<Arc<AppState>>,
     Path(job_id): Path<String>,
 ) -> Result<Json<PipelineResult>, error::OrchestrationError> {
-    match state
-        .orchestrator
-        .get_result(&job_id)
-    {
+    match state.orchestrator.get_result(&job_id) {
         Some(result) => {
-            info!("[{}] Results requested: status={}, signals={}", 
-                job_id, result.status, result.signals.len());
+            info!(
+                "[{}] Results requested: status={}, signals={}",
+                job_id,
+                result.status,
+                result.signals.len()
+            );
             Ok(Json(result))
         }
         None => {

@@ -1,3 +1,4 @@
+pub mod diagnostics;
 pub mod error;
 pub mod job_queue;
 pub mod metrics;
