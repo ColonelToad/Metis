@@ -1,39 +1,47 @@
 use anyhow::Result;
+use crate::python_bridge::PythonRAGBridge;
 
 pub struct EmbeddingEngine {
-    mock_mode: bool,
+    bridge: Option<PythonRAGBridge>,
     dimension: usize,
 }
 
 impl EmbeddingEngine {
     pub fn new(mock_mode: bool) -> Result<Self> {
+        let bridge = if mock_mode {
+            None
+        } else {
+            Some(PythonRAGBridge::new()?)
+        };
+
         Ok(Self {
-            mock_mode,
-            dimension: 384, // BGE-small dimension
+            bridge,
+            dimension: 384, // sentence-transformers all-MiniLM-L6-v2 dimension
         })
     }
 
+    /// Embed a single text string using sentence-transformers
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        if self.mock_mode {
-            return Ok(self.mock_embed(text));
+        if let Some(bridge) = &self.bridge {
+            bridge.embed_text(text).await
+        } else {
+            // Mock mode: return deterministic vector
+            Ok(self.mock_embed(text))
         }
-
-        // TODO: Implement fastembed or sentence-transformers via PyO3
-        let text = text.to_string();
-        tokio::task::spawn_blocking(move || {
-            // In production: call embedding model
-            let _ = text;
-            Ok(vec![0.0; 384])
-        })
-        .await?
     }
 
+    /// Embed multiple texts in batch (parallel processing)
     pub async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut embeddings = Vec::new();
         for text in texts {
             embeddings.push(self.embed(text).await?);
         }
         Ok(embeddings)
+    }
+
+    /// Get embedding dimension (for vector store initialization)
+    pub fn dimension(&self) -> usize {
+        self.dimension
     }
 
     fn mock_embed(&self, text: &str) -> Vec<f32> {
@@ -45,10 +53,6 @@ impl EmbeddingEngine {
         }
         embedding
     }
-
-    pub fn dimension(&self) -> usize {
-        self.dimension
-    }
 }
 
 #[cfg(test)]
@@ -58,7 +62,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_embedding() {
         let embedder = EmbeddingEngine::new(true).unwrap();
-        let embedding = embedder.embed("test query").await.unwrap();
+        let embedding = embedder.embed("test text").await.unwrap();
         assert_eq!(embedding.len(), 384);
     }
 }

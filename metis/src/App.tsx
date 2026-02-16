@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from 'react';
-import { Layout, Menu, ConfigProvider, theme as antdTheme } from 'antd';
+import { Layout, Menu, ConfigProvider, theme as antdTheme, App as AntApp } from 'antd';
 import OverviewScreen from './components/OverviewScreen';
 import SignalsScreen from './components/SignalsScreen';
 import PortfolioScreen from './components/PortfolioScreen';
@@ -26,6 +26,7 @@ import {
 import { IntlProvider } from 'react-intl';
 import enUS from 'antd/locale/en_US';
 import { LocaleProvider, useLocale } from './contexts/LocaleContext';
+import { SignalProvider } from './contexts/SignalContext';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import CommandPalette, { createNavigationCommands, createUtilityCommands } from './components/CommandPalette';
 import './App.css';
@@ -89,7 +90,7 @@ function AppContent() {
       case 'overview':
         return <OverviewScreen />;
       case 'signals':
-        return <SignalsScreen />;
+        return <SignalsScreen onNavigate={setSelectedKey} />;
       case 'portfolio':
         return <PortfolioScreen />;
       case 'explainer':
@@ -116,46 +117,48 @@ function AppContent() {
       locale={enUS}
       theme={{ algorithm: antdTheme.darkAlgorithm }}
     >
-      <IntlProvider locale={locale} messages={messages}>
-        <CommandPalette
-          open={commandPaletteOpen}
-          onClose={() => setCommandPaletteOpen(false)}
-          commands={commands}
-        />
-        <Layout style={{ minHeight: '100vh' }}>
-          <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} theme="dark">
-            <div style={{ height: 48, margin: 16, color: '#fff', fontWeight: 'bold', fontSize: 20, textAlign: 'center', letterSpacing: 2 }} role="banner">
-              METIS
-            </div>
-            <Menu
-              theme="dark"
-              mode="inline"
-              selectedKeys={[selectedKey]}
-              onClick={({ key }) => setSelectedKey(key)}
-              items={menuItems}
-              style={{ fontSize: 16 }}
-              role="navigation"
-              aria-label="Main navigation"
-            />
-          </Sider>
-          <Layout>
-            <Header style={{ background: '#18181c', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }} role="banner">
-              <div style={{ color: '#fff', fontSize: 22, fontWeight: 600 }}>
-                Metis Platform
-                <span style={{ marginLeft: 16, fontSize: 14, color: '#00ff88', background: '#222', borderRadius: 4, padding: '2px 8px', marginRight: 8 }} role="status" aria-live="polite">
-                  {mode} MODE
-                </span>
+      <AntApp>
+        <IntlProvider locale={locale} messages={messages}>
+          <CommandPalette
+            open={commandPaletteOpen}
+            onClose={() => setCommandPaletteOpen(false)}
+            commands={commands}
+          />
+          <Layout style={{ minHeight: '100vh' }}>
+            <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} theme="dark">
+              <div style={{ height: 48, margin: 16, color: '#fff', fontWeight: 'bold', fontSize: 20, textAlign: 'center', letterSpacing: 2 }} role="banner">
+                METIS
               </div>
-              <div style={{ color: '#aaa', fontSize: 14 }} role="timer" aria-live="off">
-                {currentTime.toLocaleString()}
-              </div>
-            </Header>
-            <Content style={{ margin: 0, background: '#18181c', minHeight: 0, overflowY: 'auto', height: 'calc(100vh - 64px)' }} role="main" aria-label="Main content">
-              {renderContent()}
-            </Content>
+              <Menu
+                theme="dark"
+                mode="inline"
+                selectedKeys={[selectedKey]}
+                onClick={({ key }) => setSelectedKey(key)}
+                items={menuItems}
+                style={{ fontSize: 16 }}
+                role="navigation"
+                aria-label="Main navigation"
+              />
+            </Sider>
+            <Layout>
+              <Header style={{ background: '#18181c', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }} role="banner">
+                <div style={{ color: '#fff', fontSize: 22, fontWeight: 600 }}>
+                  Metis Platform
+                  <span style={{ marginLeft: 16, fontSize: 14, color: '#00ff88', background: '#222', borderRadius: 4, padding: '2px 8px', marginRight: 8 }} role="status" aria-live="polite">
+                    {mode} MODE
+                  </span>
+                </div>
+                <div style={{ color: '#aaa', fontSize: 14 }} role="timer" aria-live="off">
+                  {currentTime.toLocaleString()}
+                </div>
+              </Header>
+              <Content style={{ margin: 0, background: '#18181c', minHeight: 0, overflowY: 'auto', height: 'calc(100vh - 64px)' }} role="main" aria-label="Main content">
+                {renderContent()}
+              </Content>
+            </Layout>
           </Layout>
-        </Layout>
-      </IntlProvider>
+        </IntlProvider>
+      </AntApp>
     </ConfigProvider>
   );
 }
@@ -163,7 +166,9 @@ function AppContent() {
 function App() {
   return (
     <LocaleProvider>
-      <AppContent />
+      <SignalProvider>
+        <AppContent />
+      </SignalProvider>
     </LocaleProvider>
   );
 }

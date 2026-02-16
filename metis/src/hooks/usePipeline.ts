@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
+const STORAGE_KEY = 'metis_pipeline_cache';
+
 export interface PipelineStatus {
   job_id: string;
   status: 'running' | 'queued' | 'complete' | 'error' | 'partial';
@@ -32,6 +34,7 @@ export interface PipelineResult {
     confidence: number;
     target_quantity: number;
     horizon_minutes: number;
+    metadata?: Record<string, any>;
   }>;
   metrics: {
     total_time: number;
@@ -49,13 +52,57 @@ export interface PipelineResult {
   error?: string;
 }
 
+interface CachedPipelineData {
+  jobId: string;
+  results: PipelineResult | null;
+  timestamp: number;
+}
+
+function getCachedData(): CachedPipelineData | null {
+  try {
+    const cached = localStorage.getItem(STORAGE_KEY);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+  } catch (e) {
+    console.warn('Failed to read pipeline cache:', e);
+  }
+  return null;
+}
+
+function saveCacheData(jobId: string, results: PipelineResult | null) {
+  try {
+    const data: CachedPipelineData = {
+      jobId,
+      results,
+      timestamp: Date.now(),
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn('Failed to save pipeline cache:', e);
+  }
+}
+
 export function usePipeline() {
   const [isRunning, setIsRunning] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<PipelineStatus | null>(null);
   const [results, setResults] = useState<PipelineResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [cacheAge, setCacheAge] = useState<number | null>(null); // Age in seconds
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /// Initialize from localStorage on mount
+  useEffect(() => {
+    const cached = getCachedData();
+    if (cached) {
+      setCurrentJobId(cached.jobId);
+      setResults(cached.results);
+      const ageSeconds = (Date.now() - cached.timestamp) / 1000;
+      setCacheAge(ageSeconds);
+      console.log(`Restored pipeline results from cache (age: ${ageSeconds}s)`);
+    }
+  }, []);
 
   /// Start a new pipeline execution
   const startPipeline = useCallback(
@@ -64,6 +111,7 @@ export function usePipeline() {
         setError(null);
         setIsRunning(true);
         setResults(null);
+        setCacheAge(null);
 
         const response = await invoke<any>('invoke_pipeline', {
           mode,
@@ -72,6 +120,7 @@ export function usePipeline() {
 
         const jobId = response.job_id;
         setCurrentJobId(jobId);
+        saveCacheData(jobId, null); // Cache the jobId immediately
         console.log(`Pipeline started with job ID: ${jobId}`);
 
         // Start polling for status
@@ -103,6 +152,11 @@ export function usePipeline() {
           // Fetch full results
           const resultResponse = await invoke<any>('fetch_pipeline_results', { jobId });
           setResults(resultResponse);
+          
+          // Cache results to localStorage
+          saveCacheData(jobId, resultResponse);
+          setCacheAge(0); // Just cached, age is 0
+          
           setIsRunning(false);
 
           // Stop polling
@@ -137,6 +191,7 @@ export function usePipeline() {
     status,
     results,
     error,
+    cacheAge, // Age in seconds, null if not cached
     startPipeline,
     stopPolling,
   };

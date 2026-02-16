@@ -67,9 +67,9 @@ impl LocalLLMEngine {
                 .new_context(&backend, ctx_params)
                 .context("Failed to create context")?;
 
-            // Tokenize the prompt
+            // Tokenize the prompt (prompt already starts with <|begin_of_text|> so use AddBos::Never)
             let tokens = model
-                .str_to_token(&prompt, AddBos::Always)
+                .str_to_token(&prompt, AddBos::Never)
                 .context("Failed to tokenize prompt")?;
 
             // Create batch and add tokens
@@ -85,7 +85,8 @@ impl LocalLLMEngine {
             // Decode the batch
             ctx.decode(&mut batch).context("Failed to decode batch")?;
 
-            // Create a greedy sampler
+            // Use greedy sampling - deterministic and more reliable
+            // Avoids probability distribution issues that can occur with temperature sampling
             let mut sampler = LlamaSampler::greedy();
 
             // Generate tokens

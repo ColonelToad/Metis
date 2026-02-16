@@ -1,11 +1,18 @@
-import { Card, Statistic, Row, Col, Table, Tag, List, Button, Spin, Alert, Progress } from 'antd';
+import { Card, Statistic, Row, Col, Table, Tag, Button, Spin, Alert, Progress } from 'antd';
 import { useState, useEffect } from 'react';
 import { usePipeline } from '../hooks/usePipeline';
+import { useSignal } from '../contexts/SignalContext';
+import { transformSignalForRag } from '../utils/signalTransform';
 
-export default function SignalsScreen() {
+interface SignalsScreenProps {
+  onNavigate?: (key: string) => void;
+}
+
+export default function SignalsScreen({ onNavigate }: SignalsScreenProps) {
   const [mode, setMode] = useState<'dev' | 'real'>('dev');
   const { isRunning, status, results, error, startPipeline, currentJobId } = usePipeline();
   const [performanceHistory, setPerformanceHistory] = useState<any[]>([]);
+  const { setActiveSignal } = useSignal();
 
   useEffect(() => {
     if (results?.signals) {
@@ -27,6 +34,15 @@ export default function SignalsScreen() {
 
   const handleRunPipeline = () => {
     startPipeline(mode, false);
+  };
+
+  const handleExplainerClick = () => {
+    if (activeSignal) {
+      // Transform signal to RAG format and set it
+      const transformedSignal = transformSignalForRag(activeSignal);
+      setActiveSignal(transformedSignal);
+      onNavigate?.('explainer');
+    }
   };
 
   // Display active signal or loading state
@@ -133,7 +149,7 @@ export default function SignalsScreen() {
                 </Card>
                 <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
                   <Button type="default">📊 View Supporting Data</Button>
-                  <Button type="primary">🤖 Full Explanation</Button>
+                  <Button type="primary" onClick={handleExplainerClick}>🤖 Full Explanation</Button>
                   <Button type="dashed">✓ Execute</Button>
                 </div>
               </>

@@ -31,18 +31,38 @@ async fn main() {
         "mock.db",
         mock_mode,
     )
+    .await
     .expect("Failed to initialize RAG pipeline");
 
     println!("Generating explanation...\n");
-    let explanation = rag
-        .explain_signal(&signal)
-        .await
-        .expect("Failed to generate explanation");
+    let result = rag.explain_signal(&signal).await;
 
-    println!("--- EXPLANATION ---");
-    println!("{}", explanation.raw_text);
-    println!("\n--- METADATA ---");
-    println!("Signal ID: {}", explanation.signal_id);
-    println!("Confidence: {:.2}", explanation.confidence_score);
-    println!("Generated at: {}", explanation.generated_at);
+    match result {
+        rag::pipeline::ExplanationResult::Success { explanation } => {
+            println!("--- EXPLANATION (Success) ---");
+            println!("{}", explanation.raw_text);
+            println!("\n--- METADATA ---");
+            println!("Signal ID: {}", explanation.signal_id);
+            println!("Confidence: {:.2}", explanation.confidence_score);
+            println!("Generated at: {}", explanation.generated_at);
+        }
+        rag::pipeline::ExplanationResult::Timeout { partial_explanation, .. } => {
+            println!("--- EXPLANATION (Timeout) ---");
+            if let Some(explanation) = partial_explanation {
+                println!("{}", explanation.raw_text);
+                println!("\n--- METADATA ---");
+                println!("Signal ID: {}", explanation.signal_id);
+                println!("Confidence: {:.2}", explanation.confidence_score);
+            }
+        }
+        rag::pipeline::ExplanationResult::MissingDocuments { explanation, missing_docs } => {
+            println!("--- EXPLANATION (Partial - Missing Docs) ---");
+            println!("{}", explanation.raw_text);
+            println!("\nMissing documents: {:?}", missing_docs);
+        }
+        rag::pipeline::ExplanationResult::TemplateFallback { explanation, reason } => {
+            println!("--- EXPLANATION (Fallback: {}) ---", reason);
+            println!("{}", explanation.raw_text);
+        }
+    }
 }

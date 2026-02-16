@@ -18,7 +18,7 @@
     "@ant-design/pro-components": "^2.8.10",
     "@antv/g2plot": "^2.3.32",
     "@tanstack/react-table": "^8.21.3",
-    "@tauri-apps/api": "^2",
+    "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-opener": "^2",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
