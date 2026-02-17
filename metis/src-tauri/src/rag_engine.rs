@@ -7,6 +7,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
+use tokio::sync::mpsc;
 
 static RAG_ENGINE: OnceCell<Arc<Mutex<ExplainabilityRAG>>> = OnceCell::new();
 static SESSION_MANAGER: OnceCell<Arc<Mutex<SessionManager>>> = OnceCell::new();
@@ -16,7 +18,7 @@ static SESSION_MANAGER: OnceCell<Arc<Mutex<SessionManager>>> = OnceCell::new();
 static RAG_STATUS: AtomicU32 = AtomicU32::new(0);
 static RAG_ERROR: OnceCell<String> = OnceCell::new();
 
-/// Initialize RAG engine on app startup
+/// Initialize RAG engine on app startup, blocking until documents are indexed
 pub async fn init_rag_engine(model_path: &str, db_path: &str) -> Result<(), String> {
     RAG_STATUS.store(1, Ordering::SeqCst); // Initializing
     
@@ -29,7 +31,19 @@ pub async fn init_rag_engine(model_path: &str, db_path: &str) -> Result<(), Stri
             error_msg
         })?;
 
-    // Index documents on startup (async, non-blocking)
+    RAG_ENGINE
+        .set(Arc::new(Mutex::new(rag)))
+        .map_err(|_| {
+            let error_msg = "RAG engine already initialized".to_string();
+            let _ = RAG_ERROR.set(error_msg.clone());
+            RAG_STATUS.store(3, Ordering::SeqCst); // Failed
+            error_msg
+        })?;
+
+    // Create channel for indexing completion signal
+    let (tx, mut rx) = mpsc::channel::<Result<usize, String>>(1);
+
+    // Index documents on startup (async, waits for completion before returning from init)
     let db_path_str = db_path.to_string();
     tokio::spawn(async move {
         match rag::DocumentStore::new(&db_path_str, false).await {
@@ -41,30 +55,49 @@ pub async fn init_rag_engine(model_path: &str, db_path: &str) -> Result<(), Stri
                             "Document indexing complete: {} documents indexed",
                             stats.total_documents
                         );
+                        let _ = tx.send(Ok(stats.total_documents)).await;
                     }
                     Err(e) => {
-                        tracing::warn!("Document indexing failed: {}", e);
+                        let error_msg = format!("Document indexing failed: {}", e);
+                        tracing::warn!("{}", error_msg);
+                        let _ = tx.send(Err(error_msg)).await;
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to create document store for indexing: {}", e);
+                let error_msg = format!("Failed to create document store for indexing: {}", e);
+                tracing::warn!("{}", error_msg);
+                let _ = tx.send(Err(error_msg)).await;
             }
         }
     });
 
-    RAG_ENGINE
-        .set(Arc::new(Mutex::new(rag)))
-        .map_err(|_| {
-            let error_msg = "RAG engine already initialized".to_string();
+    // Wait for indexing to complete with timeout (30 seconds)
+    match tokio::time::timeout(Duration::from_secs(30), rx.recv()).await {
+        Ok(Some(Ok(doc_count))) => {
+            RAG_STATUS.store(2, Ordering::SeqCst); // Ready
+            tracing::info!("RAG engine initialized successfully with {} documents indexed", doc_count);
+            Ok(())
+        }
+        Ok(Some(Err(e))) => {
+            let error_msg = format!("RAG indexing failed: {}", e);
             let _ = RAG_ERROR.set(error_msg.clone());
             RAG_STATUS.store(3, Ordering::SeqCst); // Failed
-            error_msg
-        })?;
-
-    RAG_STATUS.store(2, Ordering::SeqCst); // Ready
-    tracing::info!("RAG engine initialized successfully");
-    Ok(())
+            Err(error_msg)
+        }
+        Ok(None) => {
+            let error_msg = "Indexing channel closed unexpectedly".to_string();
+            let _ = RAG_ERROR.set(error_msg.clone());
+            RAG_STATUS.store(3, Ordering::SeqCst);
+            Err(error_msg)
+        }
+        Err(_) => {
+            let error_msg = "Document indexing timeout (>30s)".to_string();
+            let _ = RAG_ERROR.set(error_msg.clone());
+            RAG_STATUS.store(3, Ordering::SeqCst); // Failed
+            Err(error_msg)
+        }
+    }
 }
 
 /// Initialize session manager

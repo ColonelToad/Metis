@@ -124,6 +124,30 @@ impl ExplainabilityRAG {
         self.explain_signal(signal).await
     }
 
+    /// Handle a follow-up question/chat message (no signal context)
+    /// Used for continuing conversations after an explanation
+    pub async fn chat_response(&self, conversation_context: &str, user_message: &str) -> Result<String> {
+        // Build a simple prompt for chat mode
+        let prompt = format!(
+            r#"<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are a helpful quantitative analyst answering questions about trading signals and market analysis.
+Keep responses concise and focused on the topic.
+<|eot_id|><|start_header_id|>user<|end_header_id|>
+Context from previous analysis:
+{}
+
+User question:
+{}
+<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+"#,
+            conversation_context, user_message
+        );
+
+        // Call LLM with the prompt
+        let response = self.llm.generate(&prompt, 500).await?;  // 500 token limit for chat responses
+        Ok(response)
+    }
+
     async fn explain_with_llm(&self, signal: &TradingSignal) -> Result<ExplanationResult> {
         // 1. Build query from signal context
         let query = self.build_query(signal);
@@ -243,13 +267,24 @@ impl ExplainabilityRAG {
 
         format!(
             r#"<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are a quantitative analyst explaining trades with probabilistic reasoning and citations.
-RESPOND ONLY WITH JSON (no markdown/text):
-{{"probabilistic_forecast": "...", "signal_drivers": "...", "scenarios": "...", "expected_value": "...", "risks": "...", "confidence": 0.0}}
+You are a quantitative analyst explaining trades with 8-step probabilistic reasoning.
+
+Return ONLY VALID JSON. Structure as:
+{{
+  "summary": "1-2 sentence explanation",
+  "reference_class": {{"class_name": "...", "base_rate": 0.75, "sample_size": 50, "reasoning": "..."}},
+  "ensemble": {{"components": [{{"source": "...", "signal": 0.5, "confidence": 0.8, "weight": 0.33}}], "final_signal": 0.45, "agreement": 0.85}},
+  "bayesian_update": {{"prior": 0.5, "likelihood_ratio": 2.5, "posterior": 0.67, "evidence_summary": "..."}},
+  "scenarios": [{{"name": "Cold Snap", "probability": 0.4, "payoff": 0.15, "payoff_min": 0.10, "payoff_max": 0.20, "description": "..."}}],
+  "expected_value": {{"expected_return": 0.08, "volatility": 0.12, "sharpe_ratio": 0.67, "kelly_position_size": 0.03, "interpretation": "..."}},
+  "risk_assessment": {{"worst_case": -0.25, "worst_case_probability": 0.05, "tail_risk_probability": 0.01, "recovery_days": 30, "concentration_risks": ["..."], "liquidity_assessment": "...", "risk_checklist": [{{"name": "Check1", "passed": true}}]}},
+  "confidence": 0.75
+}}
 <|eot_id|><|start_header_id|>user<|end_header_id|>
 ## Trade: {} {} @{:.0}% confidence, ${:.2}, grid {}/100, policy: {}
 Evidence: {}
-Analyze step-by-step using probabilistic reasoning.
+
+Analyze using ALL 8 steps. Return JSON only.
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>
 "#,
             signal.instrument,

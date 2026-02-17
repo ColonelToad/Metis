@@ -14,6 +14,52 @@ from loguru import logger
 
 
 @dataclass
+class DataSourceConfig:
+    """Configuration for a single data source in the RAG pipeline."""
+    
+    name: str  # 'market_price', 'eia_storage', 'lmp', 'congress_bills', etc.
+    tier: int  # 1=critical (always fresh), 2=important (lazy), 3=optional (precomputed)
+    freshness_threshold: Optional[timedelta]  # None = fixed schedule (never refresh mid-schedule)
+    update_pattern: str  # 'continuous', 'schedule', 'event'
+    
+    def is_stale(self, snapshot_age: timedelta) -> bool:
+        """Check if data is older than freshness threshold."""
+        if self.freshness_threshold is None:
+            return False  # Fixed schedule, not stale
+        return snapshot_age > self.freshness_threshold
+
+
+# Registry of all data sources with their configuration
+# Phase 1: Simple Tier 2 (lazy load) for all sources
+DATA_SOURCES_CONFIG: Dict[str, DataSourceConfig] = {
+    'market_price': DataSourceConfig(
+        name='market_price',
+        tier=1,  # Critical - need current price
+        freshness_threshold=timedelta(hours=1),
+        update_pattern='continuous',
+    ),
+    'eia_storage': DataSourceConfig(
+        name='eia_storage',
+        tier=2,  # Important but doesn't change frequently
+        freshness_threshold=timedelta(hours=24),
+        update_pattern='schedule',
+    ),
+    'lmp': DataSourceConfig(
+        name='lmp',
+        tier=2,  # Grid pricing
+        freshness_threshold=timedelta(hours=12),
+        update_pattern='continuous',
+    ),
+    'congress_bills': DataSourceConfig(
+        name='congress_bills',
+        tier=3,  # Optional - policy context
+        freshness_threshold=None,  # Event-triggered
+        update_pattern='event',
+    ),
+}
+
+
+@dataclass
 class SourceStatus:
     """Status of a single data source fetch."""
     name: str
@@ -343,9 +389,141 @@ Latest Action ({action_date}): {action_text}"""
         
         return snapshot
     
+    async def fetch_with_freshness_check(
+        self, 
+        source_name: str, 
+        cached_snapshot: Optional[ContextSnapshot] = None
+    ) -> Tuple[Optional[Any], SourceStatus]:
+        """
+        Fetch data with tier-aware freshness validation.
+        
+        Implements tiered failure mode:
+        - Tier 1 (critical): Always fresh, warn if unavailable, suggest fallback
+        - Tier 2 (important): Lazy load, note limitation if unavailable
+        - Tier 3 (optional): Silently omit if unavailable
+        
+        Args:
+            source_name: Name of source to fetch (e.g., 'market_price', 'eia_storage')
+            cached_snapshot: Previously cached snapshot to check freshness against
+        
+        Returns:
+            Tuple of (data, SourceStatus) where status indicates fetch outcome
+        """
+        config = DATA_SOURCES_CONFIG.get(source_name)
+        if not config:
+            return None, SourceStatus(
+                name=source_name,
+                status='unknown_source',
+                error=f"Source {source_name} not in configuration"
+            )
+        
+        # Check if cached data is still fresh
+        if cached_snapshot and source_name in cached_snapshot.sources_status:
+            cached_status = cached_snapshot.sources_status[source_name]
+            snapshot_age = datetime.utcnow() - cached_snapshot.created_at
+            
+            if not config.is_stale(snapshot_age):
+                logger.debug(f"Using cached {source_name} (age: {snapshot_age.total_seconds():.1f}s)")
+                return cached_status.value, SourceStatus(
+                    name=source_name,
+                    status='cached',
+                    value=cached_status.value,
+                    timestamp=cached_status.timestamp,
+                )
+        
+        # Fetch fresh data
+        try:
+            if source_name == 'market_price':
+                price, status = await self.get_market_price_recent(days=1)
+                if status == 'success':
+                    return price, SourceStatus(
+                        name=source_name,
+                        status='success',
+                        value=price,
+                        timestamp=datetime.utcnow(),
+                    )
+                else:
+                    # Tier 1: critical - return warning status
+                    return None, SourceStatus(
+                        name=source_name,
+                        status='tier_1_failure',
+                        error=f"Market price unavailable: {status}. Recommend using signal's own price.",
+                        timestamp=datetime.utcnow(),
+                    )
+            
+            elif source_name == 'eia_storage':
+                docs, status = await self.get_eia_storage_recent(days=30)
+                if status == 'success':
+                    return docs, SourceStatus(
+                        name=source_name,
+                        status='success',
+                        value=docs,
+                        timestamp=datetime.utcnow(),
+                    )
+                else:
+                    # Tier 2: important - return limitation status
+                    return None, SourceStatus(
+                        name=source_name,
+                        status='tier_2_unavailable',
+                        error=f"EIA storage data unavailable: {status}. Omitting from context.",
+                        timestamp=datetime.utcnow(),
+                    )
+            
+            elif source_name == 'lmp':
+                docs, status = await self.get_lmp_recent(days=7)
+                if status == 'success':
+                    return docs, SourceStatus(
+                        name=source_name,
+                        status='success',
+                        value=docs,
+                        timestamp=datetime.utcnow(),
+                    )
+                else:
+                    # Tier 2: important - return limitation status
+                    return None, SourceStatus(
+                        name=source_name,
+                        status='tier_2_unavailable',
+                        error=f"LMP data unavailable: {status}. Omitting from context.",
+                        timestamp=datetime.utcnow(),
+                    )
+            
+            elif source_name == 'congress_bills':
+                docs, status = await self.get_congress_recent(days=180)
+                if status == 'success':
+                    return docs, SourceStatus(
+                        name=source_name,
+                        status='success',
+                        value=docs,
+                        timestamp=datetime.utcnow(),
+                    )
+                else:
+                    # Tier 3: optional - silently omit
+                    logger.debug(f"Congress bills unavailable ({status}), silently omitting")
+                    return None, SourceStatus(
+                        name=source_name,
+                        status='tier_3_omitted',
+                        timestamp=datetime.utcnow(),
+                    )
+            
+            else:
+                return None, SourceStatus(
+                    name=source_name,
+                    status='unsupported_fetch',
+                    error=f"No fetch handler for {source_name}"
+                )
+        
+        except Exception as e:
+            logger.error(f"Exception during freshness check for {source_name}: {e}")
+            return None, SourceStatus(
+                name=source_name,
+                status='fetch_exception',
+                error=f"{type(e).__name__}: {str(e)}",
+                timestamp=datetime.utcnow(),
+            )
+    
     @staticmethod
     def _calculate_confidence_adjustment(snapshot: ContextSnapshot) -> float:
-        """Calculate confidence adjustment based on data gaps."""
+        """Calculate confidence adjustment based on data gaps and tier failures."""
         adjustment = 1.0
         
         if not snapshot.tier_1_available:
@@ -448,26 +626,41 @@ class SessionContextManager:
         # In-memory session cache
         self.session_cache: Dict[Tuple[str, str], ContextSnapshot] = {}
     
-    async def get_or_create_snapshot(self, signal_id: str, session_id: str) -> ContextSnapshot:
+    async def get_or_create_snapshot(
+        self, 
+        signal_id: str, 
+        session_id: str,
+        force_refresh: bool = False
+    ) -> ContextSnapshot:
         """
-        Get cached snapshot if available, otherwise create new one.
+        Get cached snapshot if available and fresh, otherwise create new one.
+        Supports freshness-aware caching and tier-based refresh logic.
         
         Args:
             signal_id: Unique signal identifier
             session_id: User session identifier
+            force_refresh: If True, bypass cache and fetch fresh data
         
         Returns:
-            ContextSnapshot (cached or newly created)
+            ContextSnapshot (cached or newly created, with freshness validation)
         """
         cache_key = (session_id, signal_id)
+        cached = None
         
-        # Check in-memory cache
-        if cache_key in self.session_cache:
-            logger.info(f"Using cached context for signal {signal_id} in session {session_id}")
-            return self.session_cache[cache_key]
+        # Check in-memory cache if not forcing refresh
+        if cache_key in self.session_cache and not force_refresh:
+            cached = self.session_cache[cache_key]
+            snapshot_age = datetime.utcnow() - cached.created_at
+            
+            # Check if cache is still fresh (at least one Tier 1 refresh interval old)
+            if snapshot_age < timedelta(hours=1):
+                logger.info(f"Using cached context for signal {signal_id} (age: {snapshot_age.total_seconds():.1f}s)")
+                return cached
+            else:
+                logger.info(f"Cached context expired for signal {signal_id} (age: {snapshot_age.total_seconds():.1f}s), refreshing")
         
-        # Create new snapshot
-        logger.info(f"Creating new context snapshot for signal {signal_id} in session {session_id}")
+        # Create new or refresh snapshot
+        logger.info(f"{'Refreshing' if cached else 'Creating'} context snapshot for signal {signal_id} in session {session_id}")
         snapshot = await self.loader.get_all_context(signal_id=signal_id)
         snapshot.session_id = session_id
         
@@ -478,6 +671,61 @@ class SessionContextManager:
         self._save_snapshot_to_disk(snapshot)
         
         return snapshot
+    
+    async def refresh_snapshot_with_checks(
+        self,
+        existing_snapshot: ContextSnapshot,
+        sources_to_update: Optional[list] = None
+    ) -> ContextSnapshot:
+        """
+        Refresh specific sources in an existing snapshot based on freshness.
+        
+        Useful for selective updates without full re-fetch.
+        
+        Args:
+            existing_snapshot: Previous snapshot to refresh
+            sources_to_update: List of sources to refresh (None = all stale sources)
+        
+        Returns:
+            Updated ContextSnapshot
+        """
+        if sources_to_update is None:
+            # Auto-detect stale sources
+            sources_to_update = []
+            for source_name, config in DATA_SOURCES_CONFIG.items():
+                snapshot_age = datetime.utcnow() - existing_snapshot.created_at
+                if config.is_stale(snapshot_age):
+                    sources_to_update.append(source_name)
+            logger.info(f"Auto-detected {len(sources_to_update)} stale sources: {sources_to_update}")
+        
+        # Refresh detected stale sources
+        for source_name in sources_to_update:
+            data, status = await self.loader.fetch_with_freshness_check(
+                source_name=source_name,
+                cached_snapshot=existing_snapshot
+            )
+            
+            existing_snapshot.sources_status[source_name] = status
+            
+            # Update tier availability
+            if source_name == 'market_price' and status.status == 'tier_1_failure':
+                existing_snapshot.tier_1_available = False
+            
+            # Track gaps
+            if status.status not in ('success', 'cached', 'not_stale'):
+                if source_name not in [g.split(':')[0] for g in existing_snapshot.gaps]:
+                    existing_snapshot.gaps.append(f"{source_name}: {status.status}")
+        
+        # Recalculate confidence
+        existing_snapshot.confidence_adjustment = self.loader._calculate_confidence_adjustment(existing_snapshot)
+        
+        # Update timestamp
+        existing_snapshot.data_as_of = datetime.utcnow()
+        
+        # Persist to disk
+        self._save_snapshot_to_disk(existing_snapshot)
+        
+        return existing_snapshot
     
     def _save_snapshot_to_disk(self, snapshot: ContextSnapshot):
         """Persist snapshot to disk for retrieval later."""

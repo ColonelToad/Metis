@@ -24,7 +24,7 @@ impl ExplanationParser {
         Self::parse_text(raw_text, signal_id, available_docs)
     }
 
-    /// Try to parse JSON output from LLM
+    /// Try to parse JSON output from LLM with 8-step structured format
     fn parse_json(
         raw_text: &str,
         signal_id: String,
@@ -37,27 +37,226 @@ impl ExplanationParser {
 
         let parsed: serde_json::Value = serde_json::from_str(json_str)?;
 
-        let market_analysis = parsed["probabilistic_forecast"]
+        // Step 1: Summary / Market Analysis
+        let market_analysis = parsed["summary"]
             .as_str()
+            .or_else(|| parsed["probabilistic_forecast"].as_str())
             .or_else(|| parsed["market_analysis"].as_str())
             .map(|s| s.to_string());
 
+        // Step 2: Signal Drivers (extracted from ensemble or direct field)
         let signal_drivers = parsed["signal_drivers"]
             .as_str()
             .map(|s| s.to_string());
 
+        // Step 3: Risks
         let risks = parsed["risks"]
             .as_str()
             .map(|s| s.to_string());
 
+        // Step 4: Expected Outcome
         let expected_outcome = parsed["expected_value"]
             .as_str()
             .or_else(|| parsed["expected_outcome"].as_str())
             .map(|s| s.to_string());
 
+        // Extract confidence from JSON
         let confidence_json = parsed["confidence"].as_f64().unwrap_or(0.7);
 
-        // Extract citations if present in JSON
+        // Extract structured 8-step fields from JSON
+
+        // Step 2: Reference Class Data - only create if we have all required fields
+        let reference_class = if let Some(rc_obj) = parsed["reference_class"].as_object() {
+            if let (Some(class_name), Some(base_rate), Some(sample_size), Some(reasoning)) = (
+                rc_obj["class_name"].as_str().map(|s| s.to_string()),
+                rc_obj["base_rate"].as_f64(),
+                rc_obj["sample_size"].as_i64().map(|n| n as usize),
+                rc_obj["reasoning"].as_str().map(|s| s.to_string()),
+            ) {
+                Some(crate::types::ReferenceClassData {
+                    class_name,
+                    base_rate,
+                    sample_size,
+                    reasoning,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Step 3: Ensemble Data - create only if we have required fields
+        let ensemble = if let Some(ens_obj) = parsed["ensemble"].as_object() {
+            if let (Some(final_signal), Some(agreement)) = (
+                ens_obj["final_signal"].as_f64(),
+                ens_obj["agreement"].as_f64(),
+            ) {
+                let components = if let Some(comp_arr) = ens_obj["components"].as_array() {
+                    comp_arr
+                        .iter()
+                        .filter_map(|comp| {
+                            if let (Some(source), Some(signal), Some(confidence), Some(weight)) = (
+                                comp["source"].as_str(),
+                                comp["signal"].as_f64(),
+                                comp["confidence"].as_f64(),
+                                comp["weight"].as_f64(),
+                            ) {
+                                Some(crate::types::EnsembleComponent {
+                                    source: source.to_string(),
+                                    signal,
+                                    confidence,
+                                    weight,
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                Some(crate::types::EnsembleData {
+                    components,
+                    final_signal,
+                    agreement,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Step 4: Bayesian Update Data - create only if we have required fields
+        let bayesian_update = if let Some(bay_obj) = parsed["bayesian_update"].as_object() {
+            if let (Some(prior), Some(likelihood_ratio), Some(posterior), Some(evidence_summary)) = (
+                bay_obj["prior"].as_f64(),
+                bay_obj["likelihood_ratio"].as_f64(),
+                bay_obj["posterior"].as_f64(),
+                bay_obj["evidence_summary"].as_str().map(|s| s.to_string()),
+            ) {
+                Some(crate::types::BayesianData {
+                    prior,
+                    likelihood_ratio,
+                    posterior,
+                    evidence_summary,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Step 5: Scenario Data - create only if we have required fields
+        let scenarios = if let Some(scen_arr) = parsed["scenarios"].as_array() {
+            let scenario_vec: Vec<crate::types::ScenarioData> = scen_arr
+                .iter()
+                .filter_map(|s| {
+                    if let (Some(name), Some(probability), Some(payoff), Some(payoff_min), Some(payoff_max), Some(description)) = (
+                        s["name"].as_str().map(|n| n.to_string()),
+                        s["probability"].as_f64(),
+                        s["payoff"].as_f64(),
+                        s["payoff_min"].as_f64(),
+                        s["payoff_max"].as_f64(),
+                        s["description"].as_str().map(|d| d.to_string()),
+                    ) {
+                        Some(crate::types::ScenarioData {
+                            name,
+                            probability,
+                            payoff,
+                            payoff_min,
+                            payoff_max,
+                            description,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if scenario_vec.is_empty() { None } else { Some(scenario_vec) }
+        } else {
+            None
+        };
+
+        // Step 6: Expected Value Data - create only if we have required fields
+        let expected_value = if let Some(ev_obj) = parsed["expected_value"].as_object() {
+            if let (Some(expected_return), Some(volatility), Some(sharpe_ratio), Some(kelly_position_size), Some(interpretation)) = (
+                ev_obj["expected_return"].as_f64(),
+                ev_obj["volatility"].as_f64(),
+                ev_obj["sharpe_ratio"].as_f64(),
+                ev_obj["kelly_position_size"].as_f64(),
+                ev_obj["interpretation"].as_str().map(|s| s.to_string()),
+            ) {
+                Some(crate::types::ExpectedValueData {
+                    expected_return,
+                    volatility,
+                    sharpe_ratio,
+                    kelly_position_size,
+                    interpretation,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Step 7: Risk Assessment Data - create only if we have required fields
+        let risk_assessment = if let Some(risk_obj) = parsed["risk_assessment"].as_object() {
+            if let (Some(worst_case), Some(worst_case_probability), Some(tail_risk_probability), Some(liquidity_assessment)) = (
+                risk_obj["worst_case"].as_f64(),
+                risk_obj["worst_case_probability"].as_f64(),
+                risk_obj["tail_risk_probability"].as_f64(),
+                risk_obj["liquidity_assessment"].as_str().map(|s| s.to_string()),
+            ) {
+                let concentration_risks = risk_obj["concentration_risks"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                
+                let recovery_days = risk_obj["recovery_days"].as_i64().map(|n| n as usize);
+                
+                let risk_checklist = risk_obj["risk_checklist"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|item| {
+                                if let Some(obj) = item.as_object() {
+                                    let name = obj["name"].as_str()?.to_string();
+                                    let passed = obj["passed"].as_bool().unwrap_or(false);
+                                    Some((name, passed))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                Some(crate::types::RiskAssessmentData {
+                    worst_case,
+                    worst_case_probability,
+                    recovery_days,
+                    tail_risk_probability,
+                    concentration_risks,
+                    liquidity_assessment,
+                    risk_checklist,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Extract citations if present in JSON (optional)
         let citations = if let Some(citations_arr) = parsed["citations"].as_array() {
             citations_arr
                 .iter()
@@ -86,6 +285,12 @@ impl ExplanationParser {
 
         Ok(Explanation {
             signal_id,
+            reference_class,
+            ensemble,
+            bayesian_update,
+            scenarios,
+            expected_value,
+            risk_assessment,
             market_analysis,
             signal_drivers,
             risks,
@@ -113,6 +318,12 @@ impl ExplanationParser {
 
         Explanation {
             signal_id,
+            reference_class: None,
+            ensemble: None,
+            bayesian_update: None,
+            scenarios: None,
+            expected_value: None,
+            risk_assessment: None,
             market_analysis,
             signal_drivers,
             risks,
@@ -353,6 +564,12 @@ This signal has high confidence based on ensemble agreement."#;
     fn test_validate_empty_explanation() {
         let bad_explanation = Explanation {
             signal_id: "test".to_string(),
+            reference_class: None,
+            ensemble: None,
+            bayesian_update: None,
+            scenarios: None,
+            expected_value: None,
+            risk_assessment: None,
             market_analysis: None,
             signal_drivers: None,
             risks: None,
@@ -370,6 +587,12 @@ This signal has high confidence based on ensemble agreement."#;
     fn test_validate_good_explanation() {
         let good_explanation = Explanation {
             signal_id: "test".to_string(),
+            reference_class: None,
+            ensemble: None,
+            bayesian_update: None,
+            scenarios: None,
+            expected_value: None,
+            risk_assessment: None,
             market_analysis: Some("Market analysis content".to_string()),
             signal_drivers: None,
             risks: None,

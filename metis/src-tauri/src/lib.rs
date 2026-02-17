@@ -197,6 +197,79 @@ async fn retry_explanation(
     Ok(format_explanation_response(result))
 }
 
+/// Handle a follow-up chat message in an active conversation
+#[tauri::command]
+async fn chat_with_llm(
+    session_id: String,
+    user_message: String,
+    conversation_summary: Option<String>,
+) -> Result<serde_json::Value, String> {
+    // Wait for RAG to be ready
+    let mut attempts = 0;
+    loop {
+        let status = get_rag_status();
+        if status.status == "ready" {
+            break;
+        }
+        if status.status == "failed" {
+            return Err(format!("RAG engine failed to initialize: {}", status.error.unwrap_or_default()));
+        }
+        if attempts >= 50 {
+            return Err("RAG engine still initializing after 5 seconds, please try again".to_string());
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        attempts += 1;
+    }
+    
+    let rag = get_rag_engine()?;
+    let session_mgr = rag_engine::get_session_manager()?;
+
+    // Get the RAG engine to call chat_response
+    let rag_lock = rag.lock().await;
+    
+    // Build conversation context (from summary or just use recent messages)
+    let context = if let Some(summary) = conversation_summary {
+        summary
+    } else {
+        // Fall back to building context from session history
+        let session_lock = session_mgr.lock().await;
+        let history = session_lock.get_conversation_history();
+        
+        // Build context string from last 5 messages
+        let recent_messages: Vec<String> = history
+            .iter()
+            .rev()
+            .take(5)
+            .rev()
+            .map(|msg| format!("{}: {}", msg.role, msg.content))
+            .collect();
+        
+        recent_messages.join("\n")
+    };
+
+    // Generate chat response
+    let response = rag_lock.chat_response(&context, &user_message).await
+        .map_err(|e| format!("Chat response failed: {}", e))?;
+
+    // Track tokens and add to session
+    let response_tokens = rag::token_counter::estimate_tokens(&response);
+    let user_tokens = rag::token_counter::estimate_tokens(&user_message);
+
+    let mut session_lock = session_mgr.lock().await;
+    let _ = session_lock.add_message("user", &user_message, user_tokens).await;
+    let (warn, handoff) = session_lock.add_message("assistant", &response, response_tokens).await
+        .map_err(|e| format!("Session tracking failed: {}", e))?;
+    drop(session_lock);
+
+    // Return response with metadata
+    Ok(serde_json::json!({
+        "message": response,
+        "session_id": session_id,
+        "token_warning": warn,
+        "session_handoff": handoff,
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run_tauri() {
     // Initialize Python interpreter for multi-threaded use
@@ -296,6 +369,7 @@ pub fn run_tauri() {
             explain_trading_signal,
             set_document_scope,
             retry_explanation,
+            chat_with_llm,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

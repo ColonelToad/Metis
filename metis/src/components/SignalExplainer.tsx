@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Card, Spin, Alert, Button, Tag, List, Collapse, Empty, Space, App } from 'antd';
+import { Card, Spin, Alert, Button, Tag, List, Collapse, Empty, Space } from 'antd';
 import { ReloadOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { TradingSignal } from '../contexts/SignalContext';
+import { ChatInterface } from './ChatInterface';
 
 interface Citation {
   doc_id: string;
@@ -38,7 +39,6 @@ interface ExplanationResponse {
 }
 
 export default function SignalExplainer({ signal }: SignalExplainerProps) {
-  const { modal } = App.useApp();
   const [status, setStatus] = useState<ExplanationStatus>('idle');
   const [explanation, setExplanation] = useState<Explanation | null>(null);
   const [retryToken, setRetryToken] = useState<string | null>(null);
@@ -299,47 +299,17 @@ export default function SignalExplainer({ signal }: SignalExplainerProps) {
         </Card>
       )}
 
-      {/* Raw LLM Output */}
-      <Card
-        title="Raw Analysis"
-        bordered={false}
-        extra={
-          <Button
-            type="text"
-            size="small"
-            onClick={() => {
-              modal.info({
-                title: 'Full LLM Output',
-                width: 800,
-                content: (
-                  <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                    {explanation.raw_text}
-                  </div>
-                ),
-              });
-            }}
-          >
-            View Full
-          </Button>
-        }
-      >
-        <div
-          style={{
-            background: '#f5f5f5',
-            padding: 12,
-            borderRadius: 4,
-            maxHeight: 200,
-            overflow: 'auto',
-            fontSize: 12,
-            color: '#333',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-          }}
-        >
-          {explanation.raw_text.substring(0, 500)}
-          {explanation.raw_text.length > 500 && '...'}
-        </div>
-      </Card>
+      {/* Interactive Chat / Raw Analysis */}
+      <ChatInterface
+        sessionId={signal.id}
+        conversationSummary={`Previous analysis for ${signal.instrument} ${signal.direction}\n${explanation.raw_text.substring(0, 300)}...`}
+        title="Ask Follow-Up Questions"
+        onStateChange={(state) => {
+          if (state.tokenWarning) {
+            console.warn('Token budget warning');
+          }
+        }}
+      />
 
       {/* Metadata */}
       <div style={{ fontSize: 12, color: '#999', textAlign: 'right' }}>

@@ -56,6 +56,12 @@ Note: This is a template-based explanation. Full chain-of-thought analysis unava
 
         Explanation {
             signal_id: signal.id.clone(),
+            reference_class: None,
+            ensemble: None,
+            bayesian_update: None,
+            scenarios: None,
+            expected_value: None,
+            risk_assessment: None,
             market_analysis: Some("Template-based analysis".to_string()),
             signal_drivers: None,
             risks: None,

@@ -56,24 +56,98 @@ class RAGPipeline:
         self.embedding_model = SentenceTransformer(embedding_model)
         self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
         
+        # Retrieval mode: "normal" (live), "test" (from test file), "mock" (hardcoded)
+        self.retrieval_mode = os.getenv("RAG_RETRIEVAL_MODE", "normal").lower()
+        
         # Backend selection
         self.vector_backend = (vector_backend or os.getenv("VECTOR_BACKEND", "lance")).lower()
         self.collection = None
         self.lance = None
 
-        if self.vector_backend == "milvus":
-            if connections is None:
-                raise RuntimeError("Milvus backend selected but pymilvus is not installed. Install pymilvus or set VECTOR_BACKEND=lance.")
-            connections.connect("default", host=milvus_host, port=19530)
-            logger.info(f"Connected to Milvus at {milvus_host}:{milvus_port}")
-            self._init_collection()
+        if self.retrieval_mode == "test":
+            logger.info("RAG Retrieval Mode: TEST (loading from test documents)")
+            self._load_test_documents()
+        elif self.retrieval_mode == "mock":
+            logger.info("RAG Retrieval Mode: MOCK (using hardcoded documents)")
+            self._init_mock_documents()
         else:
-            # Default to LanceDB; pick mode-specific path
-            mode = os.getenv("METIS_MODE", "DEV").upper()
-            base_dir = _Path(__file__).resolve().parents[1]
-            db_dir = base_dir / ("data/lance" if mode == "REAL" else "data/dev/lance")
-            self.lance = LanceVectorStore(db_dir, self.collection_name, self.embedding_dim)
-            logger.info(f"Connected to LanceDB at {db_dir}")
+            logger.info("RAG Retrieval Mode: NORMAL (live retrieval)")
+            
+            if self.vector_backend == "milvus":
+                if connections is None:
+                    raise RuntimeError("Milvus backend selected but pymilvus is not installed. Install pymilvus or set VECTOR_BACKEND=lance.")
+                connections.connect("default", host=milvus_host, port=19530)
+                logger.info(f"Connected to Milvus at {milvus_host}:{milvus_port}")
+                self._init_collection()
+            else:
+                # Default to LanceDB; pick mode-specific path
+                mode = os.getenv("METIS_MODE", "DEV").upper()
+                base_dir = _Path(__file__).resolve().parents[1]
+                db_dir = base_dir / ("data/lance" if mode == "REAL" else "data/dev/lance")
+                self.lance = LanceVectorStore(db_dir, self.collection_name, self.embedding_dim)
+                logger.info(f"Connected to LanceDB at {db_dir}")
+    
+    def _load_test_documents(self):
+        """Load test documents from test_documents.json for testing."""
+        test_file = _Path(__file__).resolve().parent / "tests" / "test_documents.json"
+        if test_file.exists():
+            try:
+                with open(test_file, 'r') as f:
+                    self.test_documents = json.load(f)
+                logger.info(f"Loaded {len(self.test_documents)} test documents")
+            except Exception as e:
+                logger.error(f"Failed to load test documents: {e}")
+                self.test_documents = self._get_default_mock_documents()
+        else:
+            logger.warning(f"Test documents file not found: {test_file}")
+            self.test_documents = self._get_default_mock_documents()
+    
+    def _init_mock_documents(self):
+        """Initialize hardcoded mock documents for CI/CD and testing."""
+        self.mock_documents = self._get_default_mock_documents()
+        logger.info(f"Initialized {len(self.mock_documents)} mock documents")
+    
+    @staticmethod
+    def _get_default_mock_documents() -> List[Dict]:
+        """Return default mock documents for testing without external dependencies."""
+        return [
+            {
+                "doc_id": "mock_eia_001",
+                "title": "EIA Weekly Natural Gas Storage Report",
+                "content": """Working gas inventories in the United States totaled 1,847 billion cubic feet (Bcf) 
+for the week ended February 16, 2026. This represents a decrease of 23 Bcf from the previous week.
+The current level is 95% of the 5-year average. Storage withdrawals during winter months are normal
+as demand increases due to heating season.""",
+                "source": "EIA",
+                "published_date": datetime.utcnow().isoformat(),
+                "url": "https://www.eia.gov/",
+                "score": 0.95,
+            },
+            {
+                "doc_id": "mock_weather_001",
+                "title": "NOAA Arctic Oscillation Analysis",
+                "content": """Arctic Oscillation Index shows strongly negative phase with 89% model agreement.
+Temperature anomalies: Northern US +8.5°F, Central US +6.2°F. Cold pool expected to persist
+through February with 70% probability. Confidence: HIGH based on GFS, ECMWF, GEFS ensemble agreement.""",
+                "source": "NOAA",
+                "published_date": datetime.utcnow().isoformat(),
+                "url": "https://www.noaa.gov/",
+                "score": 0.92,
+            },
+            {
+                "doc_id": "mock_congress_001",
+                "title": "S.567 Clean Energy Infrastructure Bill - Status Update",
+                "content": """S.567 (Clean Energy Infrastructure Bill) passed Senate Energy Committee on Feb 14, 2026
+with 12-8 bipartisan vote. Bill includes $50B for transmission upgrades and natural gas infrastructure.
+Expected floor vote in Senate within 2 weeks. House companion bill H.R.1234 has 47 cosponsors.
+Implications: Increased capex requirements for utilities, potential long-term demand supports.""",
+                "source": "Congress",
+                "published_date": datetime.utcnow().isoformat(),
+                "url": "https://congress.gov/",
+                "score": 0.88,
+            },
+        ]
+
     
     def _init_collection(self):
         """Initialize Milvus collection for document embeddings."""
@@ -197,7 +271,12 @@ class RAGPipeline:
         source_filter: Optional[str] = None
     ) -> List[Dict]:
         """
-        Retrieve most relevant documents for a query.
+        Retrieve most relevant documents for a query with mode-aware behavior.
+        
+        Modes:
+        - "normal": Live retrieval from vector database (LanceDB/Milvus)
+        - "test": Return documents from test_documents.json
+        - "mock": Return hardcoded mock documents
         
         Args:
             query: Query text
@@ -207,6 +286,25 @@ class RAGPipeline:
         Returns:
             List of retrieved documents with scores
         """
+        logger.info(f"Retrieving documents for query: '{query[:80]}...' (mode={self.retrieval_mode}, top_k={top_k})")
+        
+        # Test mode: return documents from test file
+        if self.retrieval_mode == "test":
+            logger.debug(f"Test mode: returning up to {top_k} test documents")
+            docs = getattr(self, 'test_documents', [])
+            if source_filter:
+                docs = [d for d in docs if d.get("source") == source_filter]
+            return docs[:top_k]
+        
+        # Mock mode: return hardcoded documents
+        if self.retrieval_mode == "mock":
+            logger.debug(f"Mock mode: returning up to {top_k} mock documents")
+            docs = getattr(self, 'mock_documents', self._get_default_mock_documents())
+            if source_filter:
+                docs = [d for d in docs if d.get("source") == source_filter]
+            return docs[:top_k]
+        
+        # Normal mode: live retrieval from vector database
         # Generate query embedding
         query_embedding = self.embedding_model.encode(query)
         
