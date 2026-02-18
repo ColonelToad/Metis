@@ -46,7 +46,10 @@ async fn main() {
             println!("Confidence: {:.2}", explanation.confidence_score);
             println!("Generated at: {}", explanation.generated_at);
         }
-        rag::pipeline::ExplanationResult::Timeout { partial_explanation, .. } => {
+        rag::pipeline::ExplanationResult::Timeout {
+            partial_explanation,
+            ..
+        } => {
             println!("--- EXPLANATION (Timeout) ---");
             if let Some(explanation) = partial_explanation {
                 println!("{}", explanation.raw_text);
@@ -55,12 +58,18 @@ async fn main() {
                 println!("Confidence: {:.2}", explanation.confidence_score);
             }
         }
-        rag::pipeline::ExplanationResult::MissingDocuments { explanation, missing_docs } => {
+        rag::pipeline::ExplanationResult::MissingDocuments {
+            explanation,
+            missing_docs,
+        } => {
             println!("--- EXPLANATION (Partial - Missing Docs) ---");
             println!("{}", explanation.raw_text);
             println!("\nMissing documents: {:?}", missing_docs);
         }
-        rag::pipeline::ExplanationResult::TemplateFallback { explanation, reason } => {
+        rag::pipeline::ExplanationResult::TemplateFallback {
+            explanation,
+            reason,
+        } => {
             println!("--- EXPLANATION (Fallback: {}) ---", reason);
             println!("{}", explanation.raw_text);
         }

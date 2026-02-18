@@ -2,11 +2,11 @@ use crate::{
     document_scope::DocumentScope,
     document_store::DocumentStore,
     embedding::EmbeddingEngine,
-    explanation_parser::ExplanationParser,
     explanation_cache::ExplanationCache,
+    explanation_parser::ExplanationParser,
     llm::LocalLLMEngine,
     template::TemplateEngine,
-    types::{Explanation, TradingSignal, Document},
+    types::{Document, Explanation, TradingSignal},
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -17,9 +17,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExplanationResult {
     /// Successful explanation with full reasoning
-    Success {
-        explanation: Explanation,
-    },
+    Success { explanation: Explanation },
     /// LLM timed out but generated partial explanation
     Timeout {
         partial_explanation: Option<Explanation>,
@@ -72,23 +70,20 @@ impl ExplainabilityRAG {
         }
 
         // Try LLM-based explanation with timeout (45s to account for first-run model initialization)
-        match tokio::time::timeout(
-            Duration::from_secs(180),
-            self.explain_with_llm(signal),
-        )
-        .await
-        {
+        match tokio::time::timeout(Duration::from_secs(180), self.explain_with_llm(signal)).await {
             // Success case
             Ok(Ok(ExplanationResult::Success { explanation })) => {
                 let result = ExplanationResult::Success { explanation };
                 self.explanation_cache.put(signal, result.clone()).await;
-                return result;
+                result
             }
 
             // LLM generated output but returned error result
             Ok(Ok(other_result)) => {
-                self.explanation_cache.put(signal, other_result.clone()).await;
-                return other_result;
+                self.explanation_cache
+                    .put(signal, other_result.clone())
+                    .await;
+                other_result
             }
 
             // LLM failed with error
@@ -99,7 +94,7 @@ impl ExplainabilityRAG {
                     reason: format!("LLM error: {}", e),
                 };
                 self.explanation_cache.put(signal, result.clone()).await;
-                return result;
+                result
             }
 
             // LLM timeout - try to generate quick template while showing timeout
@@ -113,20 +108,28 @@ impl ExplainabilityRAG {
                     retry_token,
                 };
                 // Don't cache timeouts - they're transient
-                return result;
+                result
             }
         }
     }
 
     /// Retry explanation using the retry token
-    pub async fn retry_explanation(&self, signal: &TradingSignal, _retry_token: &str) -> ExplanationResult {
+    pub async fn retry_explanation(
+        &self,
+        signal: &TradingSignal,
+        _retry_token: &str,
+    ) -> ExplanationResult {
         // Just re-run the explanation (token is for audit trail)
         self.explain_signal(signal).await
     }
 
     /// Handle a follow-up question/chat message (no signal context)
     /// Used for continuing conversations after an explanation
-    pub async fn chat_response(&self, conversation_context: &str, user_message: &str) -> Result<String> {
+    pub async fn chat_response(
+        &self,
+        conversation_context: &str,
+        user_message: &str,
+    ) -> Result<String> {
         // Build a simple prompt for chat mode
         let prompt = format!(
             r#"<|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -144,7 +147,7 @@ User question:
         );
 
         // Call LLM with the prompt
-        let response = self.llm.generate(&prompt, 500).await?;  // 500 token limit for chat responses
+        let response = self.llm.generate(&prompt, 500).await?; // 500 token limit for chat responses
         Ok(response)
     }
 
@@ -157,7 +160,11 @@ User question:
         let embed_start = std::time::Instant::now();
         let query_embedding = self.embedder.embed(&query).await?;
         let embed_duration = embed_start.elapsed();
-        tracing::info!("Query embedding completed in {:.2}s for signal {}", embed_duration.as_secs_f64(), signal.id);
+        tracing::info!(
+            "Query embedding completed in {:.2}s for signal {}",
+            embed_duration.as_secs_f64(),
+            signal.id
+        );
 
         // 3. Retrieve documents with active scope
         let retrieve_start = std::time::Instant::now();
@@ -168,14 +175,24 @@ User question:
             .unwrap_or_default();
         let retrieve_duration = retrieve_start.elapsed();
         let original_doc_count = docs.len();
-        tracing::info!("Document retrieval completed in {:.2}s, found {} documents for signal {}", retrieve_duration.as_secs_f64(), original_doc_count, signal.id);
+        tracing::info!(
+            "Document retrieval completed in {:.2}s, found {} documents for signal {}",
+            retrieve_duration.as_secs_f64(),
+            original_doc_count,
+            signal.id
+        );
 
         // 4. Filter docs by active scope
         let filtered_docs: Vec<Document> = docs
             .into_iter()
             .filter(|doc| self.active_scope.matches_document(doc, None))
             .collect();
-        tracing::debug!("Filtered {} documents to {} matching scope for signal {}", original_doc_count, filtered_docs.len(), signal.id);
+        tracing::debug!(
+            "Filtered {} documents to {} matching scope for signal {}",
+            original_doc_count,
+            filtered_docs.len(),
+            signal.id
+        );
 
         // 5. Build and execute prompt
         let prompt = self.build_cot_prompt(signal, &filtered_docs);
@@ -183,27 +200,39 @@ User question:
         tracing::debug!("Starting LLM generation for signal {}", signal.id);
         let raw_text = self.llm.generate(&prompt, 512).await?;
         let llm_duration = llm_start.elapsed();
-        tracing::info!("LLM generation completed in {:.2}s for signal {}", llm_duration.as_secs_f64(), signal.id);
+        tracing::info!(
+            "LLM generation completed in {:.2}s for signal {}",
+            llm_duration.as_secs_f64(),
+            signal.id
+        );
 
         // 6. Parse output
         let parse_start = std::time::Instant::now();
         let explanation = ExplanationParser::parse(&raw_text, signal.id.clone(), &filtered_docs);
         let parse_duration = parse_start.elapsed();
-        tracing::debug!("Explanation parsing completed in {:.2}s for signal {}", parse_duration.as_secs_f64(), signal.id);
+        tracing::debug!(
+            "Explanation parsing completed in {:.2}s for signal {}",
+            parse_duration.as_secs_f64(),
+            signal.id
+        );
 
         // 7. Validate result
         match ExplanationParser::validate(&explanation) {
             Ok(()) => {
                 tracing::info!("Explanation validation passed for signal {}", signal.id);
-                return Ok(ExplanationResult::Success { explanation });
+                Ok(ExplanationResult::Success { explanation })
             }
             Err(e) => {
-                tracing::warn!("Explanation validation failed: {} for signal {}", e, signal.id);
+                tracing::warn!(
+                    "Explanation validation failed: {} for signal {}",
+                    e,
+                    signal.id
+                );
                 // Return partial result
-                return Ok(ExplanationResult::MissingDocuments {
+                Ok(ExplanationResult::MissingDocuments {
                     explanation,
                     missing_docs: vec![],
-                });
+                })
             }
         }
     }
@@ -211,12 +240,14 @@ User question:
     fn build_query(&self, signal: &TradingSignal) -> String {
         // Sanitize all text inputs to prevent embedding issues with special characters
         let direction = Self::sanitize_for_embedding(&signal.direction.to_lowercase());
-        let policy_text = signal.context.recent_policy_events
+        let policy_text = signal
+            .context
+            .recent_policy_events
             .iter()
             .map(|e| Self::sanitize_for_embedding(e))
             .collect::<Vec<_>>()
             .join(" ");
-        
+
         format!(
             "natural gas {} trading grid stress {} degrees temperature anomaly {} policy {}",
             direction,
@@ -228,13 +259,10 @@ User question:
 
     /// Sanitize text for embedding by removing/replacing problematic characters
     fn sanitize_for_embedding(text: &str) -> String {
-        text
-            .replace('\n', " ")  // Replace newlines with spaces
-            .replace('\r', " ")  // Replace carriage returns with spaces
-            .replace('\t', " ")  // Replace tabs with spaces
-            .split_whitespace()  // Split on whitespace
+        text.replace(['\n', '\r', '\t'], " ") // Replace tabs with spaces
+            .split_whitespace() // Split on whitespace
             .collect::<Vec<_>>()
-            .join(" ")           // Rejoin with single spaces
+            .join(" ") // Rejoin with single spaces
     }
 
     fn build_cot_prompt(&self, signal: &TradingSignal, docs: &[Document]) -> String {
@@ -256,11 +284,13 @@ User question:
                     )
                 })
                 .collect::<Vec<_>>()
-                .join(" | ")  // Single line, pipe-separated
+                .join(" | ") // Single line, pipe-separated
         };
 
         // Sanitize signal context for safe embedding
-        let policy_event = signal.context.recent_policy_events
+        let policy_event = signal
+            .context
+            .recent_policy_events
             .first()
             .map(|s| Self::sanitize_for_embedding(s))
             .unwrap_or_else(|| "none".to_string());

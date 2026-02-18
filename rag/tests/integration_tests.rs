@@ -79,9 +79,7 @@ mod tests {
             content: "Cold front incoming".to_string(),
             embedding: vec![0.0; 384],
             metadata: None,
-            created_at: chrono::Local::now()
-                .format("%Y-%m-%d")
-                .to_string(),
+            created_at: chrono::Local::now().format("%Y-%m-%d").to_string(),
         };
 
         assert!(scope.matches_document(&weather_doc));
@@ -102,9 +100,7 @@ mod tests {
             content: "Storage levels".to_string(),
             embedding: vec![0.0; 384],
             metadata: None,
-            created_at: chrono::Local::now()
-                .format("%Y-%m-%d")
-                .to_string(),
+            created_at: chrono::Local::now().format("%Y-%m-%d").to_string(),
         };
 
         let non_matching_doc = Document {
@@ -115,9 +111,7 @@ mod tests {
             content: "Forecast".to_string(),
             embedding: vec![0.0; 384],
             metadata: None,
-            created_at: chrono::Local::now()
-                .format("%Y-%m-%d")
-                .to_string(),
+            created_at: chrono::Local::now().format("%Y-%m-%d").to_string(),
         };
 
         assert!(scope.matches_document(&matching_doc));
@@ -294,9 +288,7 @@ Specific risks: forecast uncertainty (30%), storage report timing.
             content: "Bill text".to_string(),
             embedding: vec![0.0; 384],
             metadata: None,
-            created_at: chrono::Local::now()
-                .format("%Y-%m-%d")
-                .to_string(),
+            created_at: chrono::Local::now().format("%Y-%m-%d").to_string(),
         };
 
         let multiplier = scope.relevance_multiplier(&congress_doc);

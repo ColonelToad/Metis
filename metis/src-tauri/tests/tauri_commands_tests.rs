@@ -199,8 +199,8 @@ mod tauri_command_tests {
         assert!(!json_str.is_empty());
 
         // Should deserialize back cleanly
-        let _: serde_json::Value = serde_json::from_str(&json_str)
-            .expect("Response should serialize/deserialize");
+        let _: serde_json::Value =
+            serde_json::from_str(&json_str).expect("Response should serialize/deserialize");
     }
 
     #[test]

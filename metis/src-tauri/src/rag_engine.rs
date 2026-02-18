@@ -1,14 +1,13 @@
+use once_cell::sync::OnceCell;
 /// RAG Engine management for Tauri app
 /// Provides global access to ExplainabilityRAG instance
-
-use rag::{ExplainabilityRAG, ExplanationResult, SessionManager, startup_index};
-use once_cell::sync::OnceCell;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use rag::{startup_index, ExplainabilityRAG, ExplanationResult, SessionManager};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
 
 static RAG_ENGINE: OnceCell<Arc<Mutex<ExplainabilityRAG>>> = OnceCell::new();
 static SESSION_MANAGER: OnceCell<Arc<Mutex<SessionManager>>> = OnceCell::new();
@@ -21,7 +20,7 @@ static RAG_ERROR: OnceCell<String> = OnceCell::new();
 /// Initialize RAG engine on app startup, blocking until documents are indexed
 pub async fn init_rag_engine(model_path: &str, db_path: &str) -> Result<(), String> {
     RAG_STATUS.store(1, Ordering::SeqCst); // Initializing
-    
+
     let rag = ExplainabilityRAG::new(model_path, db_path, false)
         .await
         .map_err(|e| {
@@ -31,14 +30,12 @@ pub async fn init_rag_engine(model_path: &str, db_path: &str) -> Result<(), Stri
             error_msg
         })?;
 
-    RAG_ENGINE
-        .set(Arc::new(Mutex::new(rag)))
-        .map_err(|_| {
-            let error_msg = "RAG engine already initialized".to_string();
-            let _ = RAG_ERROR.set(error_msg.clone());
-            RAG_STATUS.store(3, Ordering::SeqCst); // Failed
-            error_msg
-        })?;
+    RAG_ENGINE.set(Arc::new(Mutex::new(rag))).map_err(|_| {
+        let error_msg = "RAG engine already initialized".to_string();
+        let _ = RAG_ERROR.set(error_msg.clone());
+        RAG_STATUS.store(3, Ordering::SeqCst); // Failed
+        error_msg
+    })?;
 
     // Create channel for indexing completion signal
     let (tx, mut rx) = mpsc::channel::<Result<usize, String>>(1);
@@ -76,7 +73,10 @@ pub async fn init_rag_engine(model_path: &str, db_path: &str) -> Result<(), Stri
     match tokio::time::timeout(Duration::from_secs(30), rx.recv()).await {
         Ok(Some(Ok(doc_count))) => {
             RAG_STATUS.store(2, Ordering::SeqCst); // Ready
-            tracing::info!("RAG engine initialized successfully with {} documents indexed", doc_count);
+            tracing::info!(
+                "RAG engine initialized successfully with {} documents indexed",
+                doc_count
+            );
             Ok(())
         }
         Ok(Some(Err(e))) => {
@@ -106,7 +106,7 @@ pub fn init_session_manager() -> Result<(), String> {
     SESSION_MANAGER
         .set(Arc::new(Mutex::new(session_manager)))
         .map_err(|_| "Session manager already initialized".to_string())?;
-    
+
     tracing::info!("Session manager initialized successfully");
     Ok(())
 }
@@ -134,13 +134,13 @@ pub fn get_rag_status() -> RagStatusResponse {
         2 => "ready".to_string(),
         _ => "failed".to_string(),
     };
-    
+
     let error = if status_code >= 3 {
         RAG_ERROR.get().cloned()
     } else {
         None
     };
-    
+
     RagStatusResponse { status, error }
 }
 
@@ -344,7 +344,7 @@ pub async fn get_session_stats() -> Result<SessionStatsResponse, String> {
     let session_mgr = get_session_manager()?;
     let sm_lock = session_mgr.lock().await;
     let stats = sm_lock.get_stats();
-    
+
     Ok(SessionStatsResponse {
         active_session_id: stats.active_session_id,
         active_tokens: stats.active_tokens,

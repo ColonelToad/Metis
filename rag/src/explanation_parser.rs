@@ -10,11 +10,7 @@ pub struct ExplanationParser;
 impl ExplanationParser {
     /// Parse raw LLM output into structured Explanation
     /// Tries JSON first, then falls back to heuristic text parsing
-    pub fn parse(
-        raw_text: &str,
-        signal_id: String,
-        available_docs: &[Document],
-    ) -> Explanation {
+    pub fn parse(raw_text: &str, signal_id: String, available_docs: &[Document]) -> Explanation {
         // First, try to parse as JSON
         if let Ok(parsed) = Self::parse_json(raw_text, signal_id.clone(), available_docs) {
             return parsed;
@@ -45,14 +41,10 @@ impl ExplanationParser {
             .map(|s| s.to_string());
 
         // Step 2: Signal Drivers (extracted from ensemble or direct field)
-        let signal_drivers = parsed["signal_drivers"]
-            .as_str()
-            .map(|s| s.to_string());
+        let signal_drivers = parsed["signal_drivers"].as_str().map(|s| s.to_string());
 
         // Step 3: Risks
-        let risks = parsed["risks"]
-            .as_str()
-            .map(|s| s.to_string());
+        let risks = parsed["risks"].as_str().map(|s| s.to_string());
 
         // Step 4: Expected Outcome
         let expected_outcome = parsed["expected_value"]
@@ -155,7 +147,14 @@ impl ExplanationParser {
             let scenario_vec: Vec<crate::types::ScenarioData> = scen_arr
                 .iter()
                 .filter_map(|s| {
-                    if let (Some(name), Some(probability), Some(payoff), Some(payoff_min), Some(payoff_max), Some(description)) = (
+                    if let (
+                        Some(name),
+                        Some(probability),
+                        Some(payoff),
+                        Some(payoff_min),
+                        Some(payoff_max),
+                        Some(description),
+                    ) = (
                         s["name"].as_str().map(|n| n.to_string()),
                         s["probability"].as_f64(),
                         s["payoff"].as_f64(),
@@ -176,14 +175,24 @@ impl ExplanationParser {
                     }
                 })
                 .collect();
-            if scenario_vec.is_empty() { None } else { Some(scenario_vec) }
+            if scenario_vec.is_empty() {
+                None
+            } else {
+                Some(scenario_vec)
+            }
         } else {
             None
         };
 
         // Step 6: Expected Value Data - create only if we have required fields
         let expected_value = if let Some(ev_obj) = parsed["expected_value"].as_object() {
-            if let (Some(expected_return), Some(volatility), Some(sharpe_ratio), Some(kelly_position_size), Some(interpretation)) = (
+            if let (
+                Some(expected_return),
+                Some(volatility),
+                Some(sharpe_ratio),
+                Some(kelly_position_size),
+                Some(interpretation),
+            ) = (
                 ev_obj["expected_return"].as_f64(),
                 ev_obj["volatility"].as_f64(),
                 ev_obj["sharpe_ratio"].as_f64(),
@@ -206,11 +215,18 @@ impl ExplanationParser {
 
         // Step 7: Risk Assessment Data - create only if we have required fields
         let risk_assessment = if let Some(risk_obj) = parsed["risk_assessment"].as_object() {
-            if let (Some(worst_case), Some(worst_case_probability), Some(tail_risk_probability), Some(liquidity_assessment)) = (
+            if let (
+                Some(worst_case),
+                Some(worst_case_probability),
+                Some(tail_risk_probability),
+                Some(liquidity_assessment),
+            ) = (
                 risk_obj["worst_case"].as_f64(),
                 risk_obj["worst_case_probability"].as_f64(),
                 risk_obj["tail_risk_probability"].as_f64(),
-                risk_obj["liquidity_assessment"].as_str().map(|s| s.to_string()),
+                risk_obj["liquidity_assessment"]
+                    .as_str()
+                    .map(|s| s.to_string()),
             ) {
                 let concentration_risks = risk_obj["concentration_risks"]
                     .as_array()
@@ -220,9 +236,9 @@ impl ExplanationParser {
                             .collect()
                     })
                     .unwrap_or_default();
-                
+
                 let recovery_days = risk_obj["recovery_days"].as_i64().map(|n| n as usize);
-                
+
                 let risk_checklist = risk_obj["risk_checklist"]
                     .as_array()
                     .map(|arr| {
@@ -303,18 +319,19 @@ impl ExplanationParser {
     }
 
     /// Fallback parser for free-form text output
-    fn parse_text(
-        raw_text: &str,
-        signal_id: String,
-        available_docs: &[Document],
-    ) -> Explanation {
-        let market_analysis = Self::extract_section(raw_text, &["Probabilistic Forecast", "Market Condition"]);
-        let signal_drivers = Self::extract_section(raw_text, &["Signal Drivers", "Reference Class", "Ensemble"]);
+    fn parse_text(raw_text: &str, signal_id: String, available_docs: &[Document]) -> Explanation {
+        let market_analysis =
+            Self::extract_section(raw_text, &["Probabilistic Forecast", "Market Condition"]);
+        let signal_drivers =
+            Self::extract_section(raw_text, &["Signal Drivers", "Reference Class", "Ensemble"]);
         let risks = Self::extract_section(raw_text, &["Risk", "Risk Assessment", "Risk Factors"]);
-        let expected_outcome = Self::extract_section(raw_text, &["Expected Value", "Expected Outcome", "Forecast"]);
+        let expected_outcome = Self::extract_section(
+            raw_text,
+            &["Expected Value", "Expected Outcome", "Forecast"],
+        );
 
         let citations = Self::extract_citations_from_text(raw_text, available_docs);
-        let confidence_score = Self::estimate_confidence(&raw_text);
+        let confidence_score = Self::estimate_confidence(raw_text);
 
         Explanation {
             signal_id,
@@ -397,15 +414,15 @@ impl ExplanationParser {
     /// Estimate confidence score based on text quality signals
     /// 0.0 (low) to 1.0 (high)
     fn estimate_confidence(raw_text: &str) -> f64 {
-        let mut score: f64 = 0.5;  // Base score
+        let mut score: f64 = 0.5; // Base score
 
         // Boost for key signals
         let text_len = raw_text.len();
         if text_len > 200 {
-            score += 0.15;  // Detailed response
+            score += 0.15; // Detailed response
         }
         if text_len > 500 {
-            score += 0.1;   // Very detailed
+            score += 0.1; // Very detailed
         }
 
         // Boost for probabilistic language
@@ -429,7 +446,7 @@ impl ExplanationParser {
         }
 
         let min_score = score.min(1.0);
-        min_score.max(0.0)  // Clamp [0, 1]
+        min_score.max(0.0) // Clamp [0, 1]
     }
 
     /// Validate explanation has minimum quality
@@ -522,7 +539,8 @@ mod tests {
     fn test_confidence_scoring() {
         let short = "Brief.";
         let long = "This is a very detailed explanation with lots of content and multiple paragraphs explaining the reasoning process.";
-        let with_probability = "There is a 70% probability that the market will move upward given these conditions.";
+        let with_probability =
+            "There is a 70% probability that the market will move upward given these conditions.";
 
         let score_short = ExplanationParser::estimate_confidence(short);
         let score_long = ExplanationParser::estimate_confidence(long);

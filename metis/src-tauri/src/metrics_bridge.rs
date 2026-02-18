@@ -1,9 +1,8 @@
+use serde_json::{json, Value};
+use std::path::PathBuf;
 /// Metrics bridge - calls Python service to query metrics
 /// Similar to pipeline_bridge.rs but for metrics queries
-
 use std::process::Command;
-use std::path::PathBuf;
-use serde_json::{json, Value};
 use tracing::{error, info};
 
 /// Call Python metrics service and parse JSON response
@@ -43,14 +42,14 @@ except Exception as e:
 "#,
         command, command, command, command
     );
-    
+
     // Execute Python from project root so it can find research/ folder
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
-    
+
     let output = Command::new("python")
         .current_dir(project_root)
         .arg("-c")
@@ -60,13 +59,13 @@ except Exception as e:
             error!("Failed to call metrics service: {}", e);
             format!("Failed to call metrics service: {}", e)
         })?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         error!("Metrics service error: {}", stderr);
         return Err(format!("Metrics query failed: {}", stderr));
     }
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     match serde_json::from_str::<Value>(&stdout) {
         Ok(json_result) => {
@@ -89,7 +88,7 @@ pub async fn get_dashboard_summary() -> Result<Value, String> {
 /// Get recent runs
 pub async fn get_recent_runs(limit: u32) -> Result<Value, String> {
     info!("Fetching recent runs: limit={}", limit);
-    
+
     // For now, just get dashboard which includes recent runs
     // Could extend to separate call if needed
     call_metrics_service("recent", &[])

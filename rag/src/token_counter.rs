@@ -32,20 +32,16 @@ pub fn count_message_tokens(messages: &[(String, String)]) -> usize {
 
 /// Calculate remaining token budget
 pub fn calculate_remaining_budget(total_budget: usize, used_tokens: usize) -> usize {
-    if used_tokens >= total_budget {
-        0
-    } else {
-        total_budget - used_tokens
-    }
+    total_budget.saturating_sub(used_tokens)
 }
 
 /// Determine token warning level
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenWarningLevel {
-    Normal,      // < 50%
-    Warning,     // 50-80%
-    Critical,    // 80-95%
-    Exhausted,   // > 95%
+    Normal,    // < 50%
+    Warning,   // 50-80%
+    Critical,  // 80-95%
+    Exhausted, // > 95%
 }
 
 pub fn get_warning_level(used_percent: usize) -> TokenWarningLevel {
@@ -75,7 +71,7 @@ mod tests {
             ("user".to_string(), "Hello".to_string()),
             ("assistant".to_string(), "Hi there!".to_string()),
         ];
-        
+
         let total = count_message_tokens(&messages);
         assert!(total > 2); // At least more than heuristic
     }

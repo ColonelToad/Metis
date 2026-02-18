@@ -27,11 +27,11 @@ impl PythonRAGBridge {
             Python::with_gil(|py| {
                 // Properly escape ALL special characters that could break Python string literal
                 let escaped = text
-                    .replace('\\', "\\\\")  // Backslash first (must be first!)
-                    .replace('"', "\\\"")   // Double quotes
-                    .replace('\n', "\\n")   // Newlines
-                    .replace('\r', "\\r")   // Carriage returns
-                    .replace('\t', "\\t")   // Tabs
+                    .replace('\\', "\\\\") // Backslash first (must be first!)
+                    .replace('"', "\\\"") // Double quotes
+                    .replace('\n', "\\n") // Newlines
+                    .replace('\r', "\\r") // Carriage returns
+                    .replace('\t', "\\t") // Tabs
                     .replace('\x00', "\\x00"); // Null bytes
 
                 let code = format!(

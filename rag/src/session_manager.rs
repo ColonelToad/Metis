@@ -1,6 +1,5 @@
 /// Session Manager for conversation context with sliding window support
 /// Manages token budgets and graceful session handoffs
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -36,13 +35,13 @@ pub enum SessionStatus {
 pub struct SessionManager {
     active_session: ConversationSession,
     standby_session: Option<ConversationSession>,
-    
+
     // Configuration thresholds
-    context_window: usize,                    // Total token budget (e.g., 2048)
-    warning_threshold_percent: usize,         // 50% = spawn standby
-    handoff_threshold_percent: usize,         // 80% = switch to standby
-    max_messages_per_session: usize,          // Prevent unbounded growth
-    
+    context_window: usize,            // Total token budget (e.g., 2048)
+    warning_threshold_percent: usize, // 50% = spawn standby
+    handoff_threshold_percent: usize, // 80% = switch to standby
+    max_messages_per_session: usize,  // Prevent unbounded growth
+
     // Statistics
     total_sessions: usize,
     total_handoffs: usize,
@@ -106,7 +105,9 @@ impl SessionManager {
         // Trim old messages if session gets too large
         while self.active_session.messages.len() > self.max_messages_per_session {
             if let Some(removed) = self.active_session.messages.pop_front() {
-                self.active_session.total_tokens = self.active_session.total_tokens
+                self.active_session.total_tokens = self
+                    .active_session
+                    .total_tokens
                     .saturating_sub(removed.token_count);
             }
         }
@@ -116,8 +117,7 @@ impl SessionManager {
 
     /// Spawn standby session with compressed summary of current conversation
     async fn spawn_standby_session(&mut self) -> Result<(), String> {
-        let summary =
-            self.create_conversation_summary(&self.active_session, 300); // 300 token budget for summary
+        let summary = self.create_conversation_summary(&self.active_session, 300); // 300 token budget for summary
         let summary_tokens = summary.len() / 4; // Rough estimate: 1 token ≈ 4 chars
 
         let mut new_session = ConversationSession::new();
@@ -147,11 +147,11 @@ impl SessionManager {
     async fn attempt_handoff(&mut self) -> Result<bool, String> {
         if let Some(standby) = self.standby_session.take() {
             let old_session_id = self.active_session.session_id.clone();
-            
+
             // Move standby to active
             self.active_session = standby;
             self.active_session.status = SessionStatus::Active;
-            
+
             self.total_handoffs += 1;
             self.total_sessions += 1;
 
@@ -169,7 +169,11 @@ impl SessionManager {
 
     /// Create a compressed summary of conversation
     /// Extracts: key decision points, recent context, open questions
-    fn create_conversation_summary(&self, session: &ConversationSession, max_tokens: usize) -> String {
+    fn create_conversation_summary(
+        &self,
+        session: &ConversationSession,
+        max_tokens: usize,
+    ) -> String {
         let mut summary = String::new();
         let max_chars = max_tokens * 4; // Rough estimate
 
@@ -186,7 +190,11 @@ impl SessionManager {
                 .iter()
                 .rev()
             {
-                summary.push_str(&format!("**{}**: {}\n", msg.role, &msg.content[..std::cmp::min(100, msg.content.len())]));
+                summary.push_str(&format!(
+                    "**{}**: {}\n",
+                    msg.role,
+                    &msg.content[..std::cmp::min(100, msg.content.len())]
+                ));
             }
             summary.push('\n');
         }
@@ -196,7 +204,9 @@ impl SessionManager {
             "## Statistics\n- Total messages: {}\n- Total tokens: {}\n- Session duration: {:?}\n",
             session.messages.len(),
             session.total_tokens,
-            session.last_activity.signed_duration_since(session.created_at)
+            session
+                .last_activity
+                .signed_duration_since(session.created_at)
         ));
 
         // Truncate if needed
@@ -211,7 +221,7 @@ impl SessionManager {
     /// Get current session statistics
     pub fn get_stats(&self) -> SessionStats {
         let active_percent = (self.active_session.total_tokens * 100) / self.context_window;
-        
+
         SessionStats {
             active_session_id: self.active_session.session_id.clone(),
             active_tokens: self.active_session.total_tokens,
@@ -235,6 +245,12 @@ impl SessionManager {
     /// Get the full conversation history from active session
     pub fn get_conversation_history(&self) -> Vec<Message> {
         self.active_session.messages.iter().cloned().collect()
+    }
+}
+
+impl Default for ConversationSession {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -271,7 +287,7 @@ mod tests {
     async fn test_session_creation() {
         let manager = SessionManager::new(2048);
         let stats = manager.get_stats();
-        
+
         assert_eq!(stats.context_window, 2048);
         assert_eq!(stats.message_count, 0);
         assert_eq!(stats.has_standby, false);
@@ -280,7 +296,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_message() {
         let mut manager = SessionManager::new(2048);
-        
+
         let (warn, handoff) = manager
             .add_message("user", "Hello", 10)
             .await
@@ -288,7 +304,7 @@ mod tests {
 
         assert!(!warn);
         assert!(!handoff);
-        
+
         let stats = manager.get_stats();
         assert_eq!(stats.message_count, 1);
         assert_eq!(stats.active_tokens, 10);
@@ -297,17 +313,17 @@ mod tests {
     #[tokio::test]
     async fn test_warning_threshold() {
         let mut manager = SessionManager::new(200); // Small window
-        
+
         // Fill to 45% - no warning
         let (warn1, _) = manager
-            .add_message("user", "x", 90)  // 90 / 200 = 45%
+            .add_message("user", "x", 90) // 90 / 200 = 45%
             .await
             .expect("Failed");
         assert!(!warn1);
 
         // Add more to exceed 50% - should warn
         let (warn2, _) = manager
-            .add_message("assistant", "y", 20)  // 110 / 200 = 55%
+            .add_message("assistant", "y", 20) // 110 / 200 = 55%
             .await
             .expect("Failed");
         assert!(warn2);

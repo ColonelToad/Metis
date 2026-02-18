@@ -8,10 +8,10 @@ use std::path::PathBuf;
 /// Metadata for documents to support filtering and scoping
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentMetadata {
-    pub source: String,                    // "Congress", "EIA", "Weather", etc.
-    pub category: String,                  // "policy", "market_data", "weather", etc.
-    pub tags: Vec<String>,                 // User-defined tags for scoping
-    pub focus_weight: f64,                 // 1.0 = normal, 2.0 = boost
+    pub source: String,                       // "Congress", "EIA", "Weather", etc.
+    pub category: String,                     // "policy", "market_data", "weather", etc.
+    pub tags: Vec<String>,                    // User-defined tags for scoping
+    pub focus_weight: f64,                    // 1.0 = normal, 2.0 = boost
     pub date_range: Option<(String, String)>, // ISO 8601 date strings
 }
 

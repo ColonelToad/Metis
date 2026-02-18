@@ -48,16 +48,16 @@ where
     D: serde::Deserializer<'de>,
 {
     use serde::de;
-    
+
     struct TimestampVisitor;
-    
+
     impl<'de> serde::de::Visitor<'de> for TimestampVisitor {
         type Value = DateTime<Utc>;
-        
+
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             formatter.write_str("a timestamp string (ISO 8601) or DateTime")
         }
-        
+
         fn visit_str<E>(self, value: &str) -> Result<DateTime<Utc>, E>
         where
             E: de::Error,
@@ -71,7 +71,7 @@ where
                 })
                 .map_err(E::custom)
         }
-        
+
         fn visit_string<E>(self, value: String) -> Result<DateTime<Utc>, E>
         where
             E: de::Error,
@@ -79,14 +79,14 @@ where
             self.visit_str(&value)
         }
     }
-    
+
     deserializer.deserialize_string(TimestampVisitor)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Explanation {
     pub signal_id: String,
-    
+
     // 8-Step Framework Fields
     /// Step 1: Reference class lookup from historical data
     pub reference_class: Option<ReferenceClassData>,
@@ -100,13 +100,13 @@ pub struct Explanation {
     pub expected_value: Option<ExpectedValueData>,
     /// Step 6: Risk assessment and tail events
     pub risk_assessment: Option<RiskAssessmentData>,
-    
+
     // Legacy fields (deprecated but kept for backwards compatibility)
     pub market_analysis: Option<String>,
     pub signal_drivers: Option<String>,
     pub risks: Option<String>,
     pub expected_outcome: Option<String>,
-    
+
     pub citations: Vec<Citation>,
     pub raw_text: String,
     pub confidence_score: f64,

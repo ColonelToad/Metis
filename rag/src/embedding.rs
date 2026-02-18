@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::python_bridge::PythonRAGBridge;
+use anyhow::Result;
 
 pub struct EmbeddingEngine {
     bridge: Option<PythonRAGBridge>,

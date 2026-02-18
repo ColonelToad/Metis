@@ -1,7 +1,7 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use pyo3::types::PyDict;
 use chrono::TimeZone;
+use pyo3::types::PyDict;
+use serde::{Deserialize, Serialize};
 
 use crate::document_store::DocumentStore;
 use crate::types::Document;
@@ -39,7 +39,9 @@ pub struct DocumentIndexer {
 
 impl DocumentIndexer {
     /// Create new indexer
-    pub async fn new(document_store: std::sync::Arc<tokio::sync::Mutex<DocumentStore>>) -> Result<Self> {
+    pub async fn new(
+        document_store: std::sync::Arc<tokio::sync::Mutex<DocumentStore>>,
+    ) -> Result<Self> {
         Ok(Self { document_store })
     }
 
@@ -80,10 +82,8 @@ impl DocumentIndexer {
     async fn call_python_ingester(&self, scope: &str) -> Result<Vec<Document>> {
         let scope_str = scope.to_string();
 
-        let documents = tokio::task::spawn_blocking(move || {
-            Self::python_ingest(&scope_str)
-        })
-        .await??;
+        let documents =
+            tokio::task::spawn_blocking(move || Self::python_ingest(&scope_str)).await??;
 
         Ok(documents)
     }
@@ -96,16 +96,17 @@ impl DocumentIndexer {
             // Get current working directory and construct RAG path
             // When running from Tauri (metis/src-tauri), need to go up two levels to reach rag/
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            
-            let rag_path = cwd.parent()
+
+            let rag_path = cwd
+                .parent()
                 .and_then(|p| p.parent())
                 .map(|p| p.join("rag"))
                 .unwrap_or_else(|| cwd.join("rag"))
                 .to_string_lossy()
                 .to_string();
-            
+
             tracing::info!("Python ingestion - rag_path: {}", rag_path);
-            
+
             // Use new Phase 1 database context loader instead of broken document_ingester
             let code = format!(
                 r#"
@@ -156,8 +157,11 @@ except Exception as e:
                     let doc_list_obj = locals
                         .get_item("_documents")
                         .map_err(|e| anyhow::anyhow!("Failed to get _documents: {}", e))?
-                        .ok_or_else(|| anyhow::anyhow!("_documents not found in Python namespace"))?;
-                    let doc_dicts: Vec<std::collections::HashMap<String, String>> = doc_list_obj.extract()?;
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("_documents not found in Python namespace")
+                        })?;
+                    let doc_dicts: Vec<std::collections::HashMap<String, String>> =
+                        doc_list_obj.extract()?;
 
                     // Convert Python dicts to Rust Document objects
                     let documents: Result<Vec<Document>> = doc_dicts
@@ -170,16 +174,17 @@ except Exception as e:
                                 source: dict.get("source").cloned().unwrap_or_default(),
                                 category: dict.get("category").cloned().unwrap_or_default(),
                                 timestamp: chrono::DateTime::parse_from_rfc3339(
-                                    &dict.get("timestamp").cloned().unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+                                    &dict
+                                        .get("timestamp")
+                                        .cloned()
+                                        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
                                 )
                                 .unwrap_or_else(|_| {
-                                    chrono::FixedOffset::east_opt(0)
-                                        .unwrap()
-                                        .from_utc_datetime(
-                                            &chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0)
-                                                .expect("valid epoch datetime")
-                                                .naive_utc(),
-                                        )
+                                    chrono::FixedOffset::east_opt(0).unwrap().from_utc_datetime(
+                                        &chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0)
+                                            .expect("valid epoch datetime")
+                                            .naive_utc(),
+                                    )
                                 })
                                 .with_timezone(&chrono::Utc),
                             })
@@ -207,7 +212,10 @@ pub async fn startup_index(
     let indexer = DocumentIndexer::new(document_store).await?;
     let stats = indexer.run_ingestion("startup").await?;
 
-    tracing::info!("Startup indexing complete: {} documents indexed", stats.total_documents);
+    tracing::info!(
+        "Startup indexing complete: {} documents indexed",
+        stats.total_documents
+    );
 
     Ok(stats)
 }
@@ -221,7 +229,10 @@ pub async fn daily_refresh(
     let indexer = DocumentIndexer::new(document_store).await?;
     let stats = indexer.run_ingestion("daily_refresh").await?;
 
-    tracing::info!("Daily refresh complete: {} documents indexed", stats.total_documents);
+    tracing::info!(
+        "Daily refresh complete: {} documents indexed",
+        stats.total_documents
+    );
 
     Ok(stats)
 }

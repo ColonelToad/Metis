@@ -6,20 +6,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentScope {
     pub name: String,
-    pub sources: Vec<String>,              // Filter by source: ["Congress", "EIA", "Weather"]
-    pub categories: Vec<String>,           // Filter by category: ["policy", "market_data"]
-    pub tags: Vec<String>,                 // Filter by tags: ["storage", "supply"]
+    pub sources: Vec<String>, // Filter by source: ["Congress", "EIA", "Weather"]
+    pub categories: Vec<String>, // Filter by category: ["policy", "market_data"]
+    pub tags: Vec<String>,    // Filter by tags: ["storage", "supply"]
     pub date_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
-    pub focus_weight: f64,                 // 1.0 = normal, 2.0 = boost relevance
+    pub focus_weight: f64, // 1.0 = normal, 2.0 = boost relevance
 }
 
 impl Default for DocumentScope {
     fn default() -> Self {
         Self {
             name: "default".to_string(),
-            sources: vec![],      // No filter = all sources
-            categories: vec![],   // No filter = all categories
-            tags: vec![],         // No filter = all tags
+            sources: vec![],    // No filter = all sources
+            categories: vec![], // No filter = all categories
+            tags: vec![],       // No filter = all tags
             date_range: None,
             focus_weight: 1.0,
         }
@@ -40,7 +40,7 @@ impl DocumentScope {
             categories: vec!["policy".to_string()],
             tags: vec!["bills".to_string(), "amendments".to_string()],
             date_range: Some((Utc::now() - Duration::days(days), Utc::now())),
-            focus_weight: 2.0,  // Boost recent bills
+            focus_weight: 2.0, // Boost recent bills
         }
     }
 
@@ -62,7 +62,11 @@ impl DocumentScope {
             name: format!("recent_weather_grid_{}_days", days),
             sources: vec!["NOAA".to_string(), "CAISO".to_string()],
             categories: vec!["weather".to_string(), "grid".to_string()],
-            tags: vec!["temperature".to_string(), "demand".to_string(), "stress".to_string()],
+            tags: vec![
+                "temperature".to_string(),
+                "demand".to_string(),
+                "stress".to_string(),
+            ],
             date_range: Some((Utc::now() - Duration::days(days), Utc::now())),
             focus_weight: 1.5,
         }
@@ -137,7 +141,7 @@ impl DocumentScope {
                     return false;
                 }
             } else {
-                return false;  // No metadata, can't match tags
+                return false; // No metadata, can't match tags
             }
         }
 
@@ -150,7 +154,7 @@ impl DocumentScope {
         if self.matches_document(doc, None) {
             self.focus_weight
         } else {
-            0.0  // Document doesn't match scope
+            0.0 // Document doesn't match scope
         }
     }
 }
@@ -207,10 +211,8 @@ mod tests {
     #[test]
     fn test_date_range_filter() {
         let now = Utc::now();
-        let scope = DocumentScope::new().with_date_range(
-            now - Duration::days(7),
-            now + Duration::days(1),
-        );
+        let scope =
+            DocumentScope::new().with_date_range(now - Duration::days(7), now + Duration::days(1));
 
         let recent_doc = Document {
             id: "recent".to_string(),
