@@ -12,9 +12,11 @@ import sys
 import os
 import argparse
 import traceback
+import time
 from datetime import datetime
 from pathlib import Path
 import sqlite3
+from typing import Optional, List, Tuple, Dict
 
 # Add parent directory (research/) to Python path so we can import from data_ingest/
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -76,12 +78,16 @@ def get_frequency_description(frequency: str) -> str:
     }
     return descriptions.get(frequency, frequency)
 
-def run_all(frequency: str = "all"):
+def run_all(frequency: str = "all", collector=None) -> Tuple[bool, List[Dict]]:
     """
     Run ingesters filtered by frequency.
     
     Args:
         frequency: 'daily', 'weekly', 'monthly', or 'all'
+        collector: Optional MetricsCollector instance to log results
+    
+    Returns:
+        (overall_success: bool, results: list of dicts with ingester status)
     """
     ingesters = get_ingesters_for_frequency(frequency)
     
@@ -90,29 +96,85 @@ def run_all(frequency: str = "all"):
     print(f"{'='*60}\n")
     
     results = []
+    all_ok = True
     
     for name, module in ingesters:
+        start_time = time.time()
+        status = "success"
+        error_msg = None
+        row_count = 0
+        
         try:
             print(f"\n--- Running {name} ingester ---")
             # Call the main() function for each ingester
             if hasattr(module, 'main'):
-                module.main()
+                result = module.main()
+                # If ingester returns row count, use it; otherwise 0
+                if isinstance(result, int):
+                    row_count = result
             else:
                 print(f"WARNING: No main() function found in {name}")
-                results.append((name, "FAILED: No main() function"))
-                continue
-            results.append((name, "SUCCESS"))
+                status = "failed"
+                error_msg = "No main() function"
+                all_ok = False
         except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
             print(f"ERROR in {name}: {e}")
             traceback.print_exc()
-            results.append((name, f"FAILED: {str(e)}"))
+            status = "failed"
+            error_msg = str(e)
+            all_ok = False
+            
+            # Log to metrics collector if provided
+            if collector:
+                collector.add_ingester_result(
+                    ingester_name=name,
+                    status=status,
+                    duration_ms=duration_ms,
+                    row_count=0,
+                    error_msg=error_msg
+                )
+            
+            results.append({
+                "name": name,
+                "status": status,
+                "duration_ms": duration_ms,
+                "row_count": 0,
+                "error": error_msg
+            })
+            continue
+        
+        duration_ms = (time.time() - start_time) * 1000
+        
+        # Log to metrics collector if provided
+        if collector:
+            collector.add_ingester_result(
+                ingester_name=name,
+                status=status,
+                duration_ms=duration_ms,
+                row_count=row_count,
+                error_msg=error_msg
+            )
+        
+        results.append({
+            "name": name,
+            "status": status,
+            "duration_ms": duration_ms,
+            "row_count": row_count,
+            "error": error_msg
+        })
     
+    # Print summary
     print(f"\n{'='*60}")
     print("Ingestion Summary:")
     print(f"{'='*60}")
-    for name, status in results:
-        status_str = "[OK]" if "SUCCESS" in status else "[XX]"
-        print(f"{status_str} {name:30} {status}")
+    for result in results:
+        status_str = "[OK]" if result["status"] == "success" else "[XX]"
+        print(f"{status_str} {result['name']:30} {result['status']:8} ({result['duration_ms']:.0f}ms, {result['row_count']} rows)")
+        if result["error"]:
+            print(f"      Error: {result['error']}")
+    
+    return all_ok, results
 
 def main():
     """Entry point for command-line usage."""
@@ -125,7 +187,8 @@ def main():
     )
     args = parser.parse_args()
     
-    run_all(args.frequency)
+    all_ok, results = run_all(args.frequency)
+    sys.exit(0 if all_ok else 1)
 
 if __name__ == "__main__":
     main()

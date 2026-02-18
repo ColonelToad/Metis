@@ -11,6 +11,7 @@ import GridStatusScreen from './components/GridStatusScreen';
 import ClimateScreen from './components/ClimateScreen';
 import PolicyScreen from './components/PolicyScreen';
 import BacktestScreen from './components/BacktestScreen';
+import AdminScreen from './components/AdminScreen';
 import {
   AppstoreOutlined,
   BulbOutlined,
@@ -21,7 +22,8 @@ import {
   ThunderboltOutlined,
   CloudOutlined,
   FileProtectOutlined,
-  ExperimentOutlined
+  ExperimentOutlined,
+  FormatPainterOutlined
 } from '@ant-design/icons';
 import { IntlProvider } from 'react-intl';
 import enUS from 'antd/locale/en_US';
@@ -43,6 +45,7 @@ const menuItems = [
   { key: 'climate', icon: <CloudOutlined />, label: 'Climate' },
   { key: 'policy', icon: <FileProtectOutlined />, label: 'Policy' },
   { key: 'backtest', icon: <ExperimentOutlined />, label: 'Backtest' },
+  { key: 'admin', icon: <FormatPainterOutlined />, label: 'Admin' },
   { key: 'settings', icon: <SettingOutlined />, label: 'Settings' },
 ];
 
@@ -105,6 +108,8 @@ function AppContent() {
         return <PolicyScreen />;
       case 'backtest':
         return <BacktestScreen />;
+      case 'admin':
+        return <AdminScreen />;
       case 'settings':
         return <SettingsScreen />;
       default:

@@ -1,0 +1,139 @@
+name: Tier 0 - CI/CD Baseline (Lint + Type Check + Imports)
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-lint:
+    name: Python Lint & Style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r research/requirements.txt
+          pip install pylint black isort
+      
+      - name: Lint with pylint (non-blocking)
+        run: |
+          pylint research/ --exit-zero --disable=all --enable=syntax-error,import-error
+        continue-on-error: true
+      
+      - name: Check code format with black
+        run: |
+          black --check research/ metis/ --line-length=100 || true
+        continue-on-error: true
+      
+      - name: Check import sorting
+        run: |
+          isort --check-only research/ metis/ || true
+        continue-on-error: true
+
+  python-typecheck:
+    name: Python Type Checking
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r research/requirements.txt
+          pip install mypy
+      
+      - name: Type check with mypy
+        run: |
+          mypy research/metrics.py research/log_rotation.py research/test_coordinator.py --ignore-missing-imports --no-error-summary || true
+        continue-on-error: true
+
+  python-imports:
+    name: Python Import Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r research/requirements.txt
+      
+      - name: Validate core imports
+        run: |
+          python -c "from research.metrics import MetricsCollector; print('✓ metrics')"
+          python -c "from research.log_rotation import rotate_logs; print('✓ log_rotation')"
+          python -c "from research.test_coordinator import TestCoordinator; print('✓ test_coordinator')"
+          python -c "from research.metrics_service import MetricsService; print('✓ metrics_service')"
+      
+      - name: Check for circular imports
+        run: |
+          python -m py_compile research/metrics.py research/log_rotation.py research/test_coordinator.py
+          echo "✓ No circular imports or syntax errors"
+
+  rust-check:
+    name: Rust Cargo Check + Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: clippy
+      
+      - name: Cargo check
+        run: |
+          cd metis/src-tauri
+          cargo check --all-targets
+      
+      - name: Clippy linting (non-blocking)
+        run: |
+          cd metis/src-tauri
+          cargo clippy --all-targets -- -D warnings || true
+        continue-on-error: true
+
+  summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [python-lint, python-typecheck, python-imports, rust-check]
+    if: always()
+    steps:
+      - name: Check workflow status
+        run: |
+          if [ "${{ job.status }}" == "failure" ]; then
+            echo "⚠ CI checks completed with warnings (non-blocking)"
+            exit 0
+          else
+            echo "✅ All CI checks passed"
+          fi

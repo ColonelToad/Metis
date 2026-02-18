@@ -1,0 +1,220 @@
+name: Tier 2 - Scaling & Chaos Study
+
+on:
+  schedule:
+    # Run every Sunday at 2 AM UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Which test suite to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - scaling_only
+          - chaos_only
+
+concurrency:
+  group: scaling-chaos-${{ github.ref }}
+  cancel-in-progress: false  # Don't cancel long-running tests
+
+jobs:
+  scaling-study:
+    name: RAG Scaling Study (50-5000 docs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event.inputs.test_suite != 'chaos_only'
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r research/requirements.txt
+      
+      - name: Run RAG scaling study
+        run: |
+          python research/test_rag_scaling.py | tee scaling-results.json
+      
+      - name: Analyze scaling results
+        run: |
+          python -c "
+          import json
+          
+          with open('scaling-results.json') as f:
+              results = json.load(f)
+          
+          print('## RAG Scaling Study Results')
+          print()
+          print(f'Doc Counts Tested: {results[\"doc_counts\"]}')
+          print(f'Indexing Times (ms): {results[\"indexing_times_ms\"]}')
+          print(f'Query Times (ms): {results[\"query_times_ms\"]}')
+          
+          if 'max_recommended_docs' in results:
+              print(f'Max Recommended Docs: {results[\"max_recommended_docs\"]}')
+          
+          # Find potential breaking point
+          if results.get('max_docs_before_timeout'):
+              print(f'⚠ Breaking point: {results[\"max_docs_before_timeout\"]} docs')
+          else:
+              print('✅ No breaking point found in test range')
+          "
+      
+      - name: Store results in metrics DB
+        run: |
+          python -c "
+          import json
+          from research.metrics import MetricsCollector
+          
+          collector = MetricsCollector()
+          run_id = collector.start_run(environment='BENCHMARKING')
+          
+          with open('scaling-results.json') as f:
+              results = json.load(f)
+          
+          # Store individual results
+          for doc_count, index_time, query_time in zip(
+              results['doc_counts'],
+              results['indexing_times_ms'],
+              results['query_times_ms']
+          ):
+              collector.add_metric(f'rag_scaling_docs_{doc_count}_index_ms', index_time)
+              collector.add_metric(f'rag_scaling_docs_{doc_count}_query_ms', query_time)
+          
+          collector.finalize_run(status='success', notes='Weekly RAG scaling study')
+          print(f'✅ Results stored to metrics DB: {run_id}')
+          "
+      
+      - name: Archive scaling results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: scaling-study-results
+          path: scaling-results.json
+          retention-days: 90
+
+  chaos-ingester:
+    name: Chaos Test - Ingester Failures
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event.inputs.test_suite != 'scaling_only'
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r research/requirements.txt
+      
+      - name: Run chaos - ingester failures
+        run: |
+          python research/test_chaos_ingester_failures.py | tee chaos-ingest-results.json
+      
+      - name: Verify graceful degradation
+        run: |
+          python -c "
+          import json
+          
+          with open('chaos-ingest-results.json') as f:
+              results = json.load(f)
+          
+          print('## Chaos Test Results - Ingester Failures')
+          print(f'Tests Run: {results[\"tests_run\"]}')
+          print(f'Tests Passed: {results[\"tests_passed\"]}')
+          print(f'Graceful Degradation: {results[\"graceful_degradation\"]}')
+          
+          if results['graceful_degradation']:
+              print('✅ Pipeline handles ingester failures gracefully')
+          else:
+              print('⚠ Pipeline does not degrade gracefully')
+          "
+      
+      - name: Archive chaos results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: chaos-ingest-results
+          path: chaos-ingest-results.json
+          retention-days: 90
+
+  chaos-rag:
+    name: Chaos Test - RAG Unavailable
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event.inputs.test_suite != 'scaling_only'
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r research/requirements.txt
+      
+      - name: Run chaos - RAG unavailable
+        run: |
+          python research/test_chaos_rag_unavailable.py | tee chaos-rag-results.json
+      
+      - name: Verify resilience
+        run: |
+          python -c "
+          import json
+          
+          with open('chaos-rag-results.json') as f:
+              results = json.load(f)
+          
+          print('## Chaos Test Results - RAG Unavailable')
+          print(f'Tests Run: {results[\"tests_run\"]}')
+          print(f'Tests Passed: {results[\"tests_passed\"]}')
+          print(f'Has Fallback: {results[\"has_fallback\"]}')
+          
+          if results['has_fallback']:
+              print(f'✅ Fallback mechanism: {results[\"fallback_mechanism\"]}')
+          else:
+              print('⚠ No fallback mechanism available')
+          "
+      
+      - name: Archive chaos results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: chaos-rag-results
+          path: chaos-rag-results.json
+          retention-days: 90
+
+  report:
+    name: Test Report
+    runs-on: ubuntu-latest
+    needs: [scaling-study, chaos-ingester, chaos-rag]
+    if: always()
+    steps:
+      - name: Create summary
+        run: |
+          echo "# Tier 2 Scaling & Chaos Study Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Scaling Study | ${{ needs.scaling-study.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Chaos - Ingesters | ${{ needs.chaos-ingester.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Chaos - RAG | ${{ needs.chaos-rag.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Full results available in Artifacts" >> $GITHUB_STEP_SUMMARY

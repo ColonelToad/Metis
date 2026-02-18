@@ -2,8 +2,12 @@
 pub mod orchestrator;
 pub mod rag_engine;
 mod pipeline_bridge;
+mod metrics_bridge;
+mod test_bridge;
 
 use pipeline_bridge::{get_pipeline_results, get_pipeline_status, health_check, run_pipeline};
+use metrics_bridge::{get_dashboard_summary, get_recent_runs, get_ingester_health, get_failures, check_metrics_available};
+use test_bridge::{run_test_suite, list_test_suites, get_test_status, get_test_results, get_active_tests};
 use rag_engine::{get_rag_engine, get_rag_status, init_rag_engine, init_session_manager, get_session_stats, format_explanation_response, ExplanationResponse, RagStatusResponse};
 use pyo3::prepare_freethreaded_python;
 use std::path::PathBuf;
@@ -270,6 +274,74 @@ async fn chat_with_llm(
     }))
 }
 
+// ============================================================================
+// METRICS QUERIES FOR ADMIN SCREEN
+// ============================================================================
+
+/// Get dashboard summary (recent runs, ingester health, trends)
+#[tauri::command]
+async fn metrics_get_dashboard() -> Result<serde_json::Value, String> {
+    get_dashboard_summary().await
+}
+
+/// Get recent runs
+#[tauri::command]
+async fn metrics_get_recent_runs(limit: u32) -> Result<serde_json::Value, String> {
+    get_recent_runs(limit).await
+}
+
+/// Get ingester health (success rates, latencies)
+#[tauri::command]
+async fn metrics_get_ingester_health(days: u32) -> Result<serde_json::Value, String> {
+    get_ingester_health(days).await
+}
+
+/// Get recent failures
+#[tauri::command]
+async fn metrics_get_failures(days: u32) -> Result<serde_json::Value, String> {
+    get_failures(days).await
+}
+
+/// Check if metrics service is available
+#[tauri::command]
+async fn metrics_check_available() -> Result<serde_json::Value, String> {
+    check_metrics_available().await
+}
+
+// ============================================================================
+// TEST COORDINATOR COMMANDS FOR ADMIN SCREEN
+// ============================================================================
+
+/// List available test suites
+#[tauri::command]
+async fn test_list_suites() -> Result<serde_json::Value, String> {
+    list_test_suites().await
+}
+
+/// Start a test suite
+#[tauri::command]
+async fn test_run_suite(suite_id: String) -> Result<serde_json::Value, String> {
+    run_test_suite(suite_id).await
+}
+
+/// Get status of a test run
+#[tauri::command]
+async fn test_get_status(run_id: String) -> Result<serde_json::Value, String> {
+    get_test_status(run_id).await
+}
+
+/// Get results of a test run
+#[tauri::command]
+async fn test_get_results(run_id: String) -> Result<serde_json::Value, String> {
+    get_test_results(run_id).await
+}
+
+/// Get list of currently running tests
+#[tauri::command]
+async fn test_get_active() -> Result<serde_json::Value, String> {
+    get_active_tests().await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run_tauri() {
     // Initialize Python interpreter for multi-threaded use
@@ -370,6 +442,16 @@ pub fn run_tauri() {
             set_document_scope,
             retry_explanation,
             chat_with_llm,
+            metrics_get_dashboard,
+            metrics_get_recent_runs,
+            metrics_get_ingester_health,
+            metrics_get_failures,
+            metrics_check_available,
+            test_list_suites,
+            test_run_suite,
+            test_get_status,
+            test_get_results,
+            test_get_active,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

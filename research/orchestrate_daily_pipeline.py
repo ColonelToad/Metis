@@ -11,6 +11,7 @@ import time
 import json
 from pathlib import Path
 from datetime import datetime
+from typing import Tuple, List, Dict, Any, Optional
 
 def get_mode() -> str:
     """Get execution mode from environment (DEV or REAL)"""
@@ -47,26 +48,27 @@ def setup_logging():
     
     return logger
 
-def run_ingest_phase(mode: str, logger) -> tuple[bool, float, list]:
+def run_ingest_phase(mode: str, logger, collector=None) -> tuple[bool, float, list]:
     """Run data ingestion phase. Returns (success, time, errors)"""
     logger.info(f"[INGEST] Starting ingestion phase (mode: {mode})")
     start = time.time()
     errors = []
     
     try:
-        from research.data_ingest.run_all_ingesters import main as ingest_main
-        import io
-        from contextlib import redirect_stdout, redirect_stderr
+        from research.data_ingest.run_all_ingesters import run_all as ingest_run_all
         
-        # Capture output to suppress noise
-        f_out = io.StringIO()
-        f_err = io.StringIO()
-        with redirect_stdout(f_out), redirect_stderr(f_err):
-            ingest_main()
+        # Run ingesters and pass collector for metrics
+        ingest_ok, ingester_results = ingest_run_all(frequency="all", collector=collector)
         
         elapsed = time.time() - start
-        logger.info(f"[INGEST] Phase completed in {elapsed:.2f}s")
-        return True, elapsed, errors
+        
+        if not ingest_ok:
+            logger.warning(f"[INGEST] Phase completed with failures in {elapsed:.2f}s")
+            errors.append("Some ingesters failed")
+        else:
+            logger.info(f"[INGEST] Phase completed successfully in {elapsed:.2f}s")
+        
+        return ingest_ok, elapsed, errors
     except Exception as e:
         elapsed = time.time() - start
         error_msg = f"Ingestion failed: {str(e)}"
@@ -167,9 +169,21 @@ def main() -> dict:
     Returns dict with status, signals, metrics, and errors
     Reads METIS_MODE from environment variable
     """
-    mode = get_mode()
+    # Initialize log rotation (archive old logs)
+    from research.log_rotation import rotate_logs
+    rotate_logs()
     
+    # Initialize metrics collector
+    from research.metrics import MetricsCollector
+    collector = MetricsCollector()
+    
+    mode = get_mode()
     logger = setup_logging()
+    
+    # Start metrics collection
+    run_id = collector.start_run(environment=mode)
+    logger.info(f"Metrics run_id: {run_id}")
+    
     logger.info(f"═" * 60)
     logger.info(f"PIPELINE START (mode: {mode})")
     logger.info(f"═" * 60)
@@ -178,27 +192,36 @@ def main() -> dict:
     all_errors = []
     
     # Phase 1: Ingestion
-    ingest_ok, ingest_time, ingest_errors = run_ingest_phase(mode, logger)
+    ingest_ok, ingest_time, ingest_errors = run_ingest_phase(mode, logger, collector)
+    collector.add_metric("ingest_time_ms", ingest_time * 1000)
     all_errors.extend(ingest_errors)
     
     # Phase 2: Features
     features_ok, features_time, features_errors = run_features_phase(mode, logger)
+    collector.add_metric("features_time_ms", features_time * 1000)
     all_errors.extend(features_errors)
     
     # Phase 3: Inference
     inference_ok, inference_time, inference_errors, signals = run_inference_phase(mode, logger)
+    collector.add_metric("inference_time_ms", inference_time * 1000)
     all_errors.extend(inference_errors)
     
     # Compute totals
     total_time = time.time() - pipeline_start
+    collector.add_metric("pipeline_total_ms", total_time * 1000)
+    collector.add_metric("signals_generated_count", len(signals))
     
     # Determine overall status
     all_ok = ingest_ok and features_ok and inference_ok
-    status = "complete" if all_ok else "partial"
+    final_status = "success" if all_ok else "partial"
+    
+    # Finalize metrics collection
+    error_notes = "; ".join(all_errors) if all_errors else None
+    collector.finalize_run(status=final_status, notes=error_notes)
     
     # Build result dict for Rust
     result = {
-        "status": status,
+        "status": final_status,
         "signals": signals,
         "metrics": {
             "total_time": total_time,
@@ -211,6 +234,7 @@ def main() -> dict:
             "ingest_success": ingest_ok,
             "features_success": features_ok,
             "inference_success": inference_ok,
+            "metrics_run_id": run_id,
         },
         "errors": all_errors,
     }
@@ -225,6 +249,7 @@ def main() -> dict:
     logger.info(f"║ Signals:        {len(signals):6d}" + " " * 46 + "║")
     logger.info(f"║ Total:          {total_time:6.2f}s" + " " * 45 + "║")
     logger.info(f"║ Mode:           {mode}" + " " * 45 + "║")
+    logger.info(f"║ Metrics run_id: {run_id[-16:]}" + " " * 40 + "║")
     logger.info(f"╚" + "═" * 58 + "╝")
     
     # Log errors if any
