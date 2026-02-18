@@ -1,9 +1,9 @@
 # Metis Data Ingestion at System Startup
 # Purpose: Run data ingesters on system startup with intelligent scheduling
 # Trigger: Windows Task Scheduler (at system startup)
-# Delay: 10 minutes after startup to ensure system stability
+# Features: Daily safeguard, smart system resource detection, parallel execution
 
-param([string]$Delay = 10)  # Delay in minutes before starting ingestion
+param([switch]$Force)  # Override daily safeguard check
 
 $ProjectRoot = "C:\Users\legot\Metis"
 $ResearchDir = Join-Path $ProjectRoot "research"
@@ -18,12 +18,44 @@ $LogFile = Join-Path $LogDir "ingest_startup_$(Get-Date -Format 'yyyy-MM-dd_HH-m
 function Log { param([string]$Msg); $Msg | Tee-Object -FilePath $LogFile -Append }
 
 Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] === STARTUP INGESTION TRIGGERED ==="
-Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Waiting $Delay minutes for system stability..."
 
-# Wait for system to stabilize
-Start-Sleep -Seconds ($Delay * 60)
+# Date safeguard: check if ingestion already ran today
+$Today = Get-Date -Format "yyyy-MM-dd"
+$TodayLogs = @(Get-ChildItem -Path $LogDir -Filter "ingest_startup_${Today}_*.log" -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne (Split-Path $LogFile -Leaf) })
 
-Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] System stable, determining ingestion schedule..."
+if ($TodayLogs.Count -gt 0 -and -not $Force) {
+    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Ingestion already completed today. Exiting to prevent duplicate runs."
+    exit 0
+}
+
+# Smart system stabilization: check resources instead of fixed delay
+function Wait-SystemStability {
+    param([int]$MaxWaitSeconds = 300, [int]$CheckIntervalSeconds = 5)
+    
+    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Waiting for system stability (up to 5 minutes)..."
+    $StartTime = Get-Date
+    
+    while ((Get-Date) -lt $StartTime.AddSeconds($MaxWaitSeconds)) {
+        try {
+            $CPUUsage = (Get-WmiObject win32_processor | Measure-Object -Property LoadPercentage -Average).Average
+            $Memory = Get-WmiObject win32_operatingsystem
+            $MemUsagePercent = 100 - ([math]::Round(($Memory.FreePhysicalMemory / $Memory.TotalVisibleMemorySize) * 100))
+            
+            if ($CPUUsage -lt 30 -and $MemUsagePercent -lt 70) {
+                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] System stable (CPU: $CPUUsage%, Memory: $MemUsagePercent%). Proceeding."
+                return
+            }
+        } catch {
+            # If WMI fails, just continue after waiting
+        }
+        
+        Start-Sleep -Seconds $CheckIntervalSeconds
+    }
+    
+    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Max wait time reached. Proceeding anyway."
+}
+
+Wait-SystemStability
 
 # Set environment
 [System.Environment]::SetEnvironmentVariable("METIS_MODE", "REAL", "Process")
@@ -37,7 +69,6 @@ if (Test-Path $EnvFile) {
             [System.Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim(), "Process")
         }
     }
-    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Loaded .env"
 }
 
 # Determine which ingesters to run based on schedule
@@ -47,44 +78,65 @@ $DayOfMonth = $Now.Day
 $IsMonday = $DayOfWeek -eq [System.DayOfWeek]::Monday
 $IsFirstOfMonth = $DayOfMonth -eq 1
 
-Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Schedule check: Day=$DayOfWeek, Date=$DayOfMonth"
-
-if ($IsMonday -and $IsFirstOfMonth) {
-    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] SCHEDULE: Monday 1st - will run daily + weekly + monthly"
-} elseif ($IsMonday) {
-    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] SCHEDULE: Monday - will run daily + weekly"
-} elseif ($IsFirstOfMonth) {
-    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] SCHEDULE: 1st of month - will run daily + monthly"
-} else {
-    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] SCHEDULE: Regular day - will run daily only"
-}
-
-# Run ingesters in sequence based on schedule
+# Run ingesters in parallel based on schedule
 try {
-    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ========================================"
-    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Running DAILY ingesters..."
-    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ========================================"
-    & python "$(Join-Path $ProjectRoot 'ingest_wrapper.py')" --frequency daily 2>&1 | Tee-Object -FilePath $LogFile -Append
-    $DailyCode = $LASTEXITCODE
+    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Running ingesters in parallel..."
     
+    $Jobs = @()
+    $JobMap = @{}
+    
+    # Start daily ingester
+    $DailyJob = Start-Job -ScriptBlock {
+        Set-Location $args[0]
+        python "ingest_wrapper.py" --frequency daily 2>&1
+    } -ArgumentList $ProjectRoot
+    $Jobs += $DailyJob
+    $JobMap[$DailyJob.Id] = "DAILY"
+    
+    # Start weekly ingester if Monday
     if ($IsMonday) {
-        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ========================================"
-        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Running WEEKLY ingesters (Monday)..."
-        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ========================================"
-        & python "$(Join-Path $ProjectRoot 'ingest_wrapper.py')" --frequency weekly 2>&1 | Tee-Object -FilePath $LogFile -Append
-        $WeeklyCode = $LASTEXITCODE
+        $WeeklyJob = Start-Job -ScriptBlock {
+            Set-Location $args[0]
+            python "ingest_wrapper.py" --frequency weekly 2>&1
+        } -ArgumentList $ProjectRoot
+        $Jobs += $WeeklyJob
+        $JobMap[$WeeklyJob.Id] = "WEEKLY"
     }
     
+    # Start monthly ingester if first of month
     if ($IsFirstOfMonth) {
-        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ========================================"
-        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Running MONTHLY ingesters (1st of month)..."
-        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ========================================"
-        & python "$(Join-Path $ProjectRoot 'ingest_wrapper.py')" --frequency monthly 2>&1 | Tee-Object -FilePath $LogFile -Append
-        $MonthlyCode = $LASTEXITCODE
+        $MonthlyJob = Start-Job -ScriptBlock {
+            Set-Location $args[0]
+            python "ingest_wrapper.py" --frequency monthly 2>&1
+        } -ArgumentList $ProjectRoot
+        $Jobs += $MonthlyJob
+        $JobMap[$MonthlyJob.Id] = "MONTHLY"
     }
     
-    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] === STARTUP INGESTION COMPLETED SUCCESSFULLY ==="
-    exit 0
+    # Wait for all jobs to complete and collect results
+    $FailedAny = $false
+    foreach ($Job in $Jobs) {
+        $JobType = $JobMap[$Job.Id]
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Waiting for $JobType ingester..."
+        
+        $Output = Receive-Job -Job $Job -Wait
+        $Output | Tee-Object -FilePath $LogFile -Append
+        
+        if ($Job.State -ne 'Completed') {
+            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ERROR: $JobType ingester failed with state: $($Job.State)"
+            $FailedAny = $true
+        }
+        
+        Remove-Job -Job $Job
+    }
+    
+    if ($FailedAny) {
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] === STARTUP INGESTION FAILED ==="
+        exit 1
+    } else {
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] === STARTUP INGESTION COMPLETED SUCCESSFULLY ==="
+        exit 0
+    }
     
 } catch {
     Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ERROR: $_"
