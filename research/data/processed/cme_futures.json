@@ -1,20 +1,22 @@
 {
-  "created": "2026-03-02T06:30:18.223750",
+  "created": "2026-03-06T17:54:18.930443",
   "contracts": [
     "crude_oil_wti",
+    "crude_oil_brent",
     "natural_gas",
     "heating_oil",
     "rbob_gasoline"
   ],
   "symbols": {
     "crude_oil_wti": "CL=F",
+    "crude_oil_brent": "BZ=F",
     "natural_gas": "NG=F",
     "heating_oil": "HO=F",
     "rbob_gasoline": "RB=F"
   },
   "data_source": "Yahoo Finance",
-  "total_records": 2004,
-  "date_range": "2024-03-04 00:00:00 to 2026-02-27 00:00:00",
+  "total_records": 2515,
+  "date_range": "2024-03-06 00:00:00 to 2026-03-05 00:00:00",
   "indicators": [
     "Close_YoY_Pct: Year-over-year price change %",
     "Close_MTD_Pct: Daily price change %",

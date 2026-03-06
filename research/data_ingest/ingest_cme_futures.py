@@ -25,7 +25,7 @@ from typing import List, Dict, Optional
 import json
 import threading
 import signal
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import os
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,13 @@ CME_FUTURES = {
         "contract_unit": "barrels",
         "multiplier": 1000,
         "description": "NYMEX West Texas Intermediate Crude Oil Futures"
+    },
+    "crude_oil_brent": {
+        "symbol": "BZ=F",
+        "name": "Brent Crude Oil",
+        "contract_unit": "barrels",
+        "multiplier": 1000,
+        "description": "ICE Brent Crude Oil Futures"
     },
     "natural_gas": {
         "symbol": "NG=F",
@@ -162,6 +169,10 @@ class CMEFuturesClient:
             # Reset index to make Date a column
             data = data.reset_index()
             data.rename(columns={'Date': 'Date'}, inplace=True)
+            
+            # Flatten multi-level columns if they exist
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = [col[0] for col in data.columns]
             
             logger.info(f"Fetched {len(data)} records for {symbol}")
             return data
@@ -321,6 +332,93 @@ def save_futures_data(df: pd.DataFrame, output_path: Optional[Path] = None) -> P
     return output_path
 
 
+def save_futures_to_database(df: pd.DataFrame, engine) -> int:
+    """
+    Save CME futures data to cme_futures_daily table.
+    
+    Args:
+        df: DataFrame with futures data
+        engine: SQLAlchemy engine
+        
+    Returns:
+        Number of rows inserted
+    """
+    if df.empty:
+        logger.warning("No data to save to database")
+        return 0
+    
+    # Normalize data for database
+    db_data = []
+    for contract in df["contract"].unique():
+        contract_df = df[df["contract"] == contract].copy()
+        
+        # Get contract metadata
+        contract_config = CME_FUTURES.get(contract, {})
+        
+        for _, row in contract_df.iterrows():
+            db_row = {
+                "date": pd.to_datetime(row["Date"]),
+                "contract_type": contract,
+                "symbol": contract_config.get("symbol", ""),
+                "contract_name": contract_config.get("name", ""),
+                "open": float(row.get("Open", 0)) if pd.notna(row.get("Open")) else None,
+                "high": float(row.get("High", 0)) if pd.notna(row.get("High")) else None,
+                "low": float(row.get("Low", 0)) if pd.notna(row.get("Low")) else None,
+                "close": float(row.get("Close", 0)) if pd.notna(row.get("Close")) else None,
+                "volume": int(row.get("Volume", 0)) if pd.notna(row.get("Volume")) else None,
+                "return_1d": float(row.get("Close_MTD_Pct", 0)) if pd.notna(row.get("Close_MTD_Pct")) else None,
+                "volatility_20d": float(row.get("Volatility_20d", 0)) if pd.notna(row.get("Volatility_20d")) else None,
+                "ma_20": float(row.get("MA_20", 0)) if pd.notna(row.get("MA_20")) else None,
+                "ma_200": float(row.get("MA_200", 0)) if pd.notna(row.get("MA_200")) else None,
+            }
+            db_data.append(db_row)
+    
+    if db_data:
+        db_df = pd.DataFrame(db_data)
+        try:
+            # Use append mode to handle duplicates gracefully (UNIQUE constraint)
+            db_df.to_sql("cme_futures_daily", engine, if_exists="append", index=False)
+            logger.info(f"Saved {len(db_df)} futures records to cme_futures_daily table")
+            return int(len(db_df))
+        except Exception as e:
+            logger.warning(f"Pandas insert failed: {e}, trying SQLite insert directly")
+            # Fallback: insert with explicit SQL
+            try:
+                rows_inserted = 0
+                for _, row in db_df.iterrows():
+                    sql = """
+                        INSERT OR IGNORE INTO cme_futures_daily
+                        (date, contract_type, symbol, contract_name, open, high, low, close, volume,
+                         return_1d, volatility_20d, ma_20, ma_200)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                    with engine.connect() as conn:
+                        conn.execute(text(sql), {
+                            "date": str(row["date"]),
+                            "contract_type": str(row["contract_type"]),
+                            "symbol": str(row["symbol"]),
+                            "contract_name": str(row["contract_name"]),
+                            "open": float(row["open"]) if not pd.isna(row["open"]) else None,
+                            "high": float(row["high"]) if not pd.isna(row["high"]) else None,
+                            "low": float(row["low"]) if not pd.isna(row["low"]) else None,
+                            "close": float(row["close"]) if not pd.isna(row["close"]) else None,
+                            "volume": int(row["volume"]) if not pd.isna(row["volume"]) else None,
+                            "return_1d": float(row["return_1d"]) if not pd.isna(row["return_1d"]) else None,
+                            "volatility_20d": float(row["volatility_20d"]) if not pd.isna(row["volatility_20d"]) else None,
+                            "ma_20": float(row["ma_20"]) if not pd.isna(row["ma_20"]) else None,
+                            "ma_200": float(row["ma_200"]) if not pd.isna(row["ma_200"]) else None,
+                        })
+                        conn.commit()
+                    rows_inserted += 1
+                logger.info(f"Inserted {rows_inserted} futures records (with explicit SQL)")
+                return int(rows_inserted)
+            except Exception as e2:
+                logger.error(f"Direct SQL insert also failed: {e2}")
+                return 0
+    
+    return 0
+
+
 def ingest_cme_futures():
     """Main ingestion function for CME futures."""
     logger.info("Starting CME futures data ingestion...")
@@ -349,10 +447,15 @@ def ingest_cme_futures():
         # Calculate indicators
         df = calculate_futures_indicators(df)
         
-        # Save to disk
+        # Save to disk (CSV for backwards compatibility)
         output_path = save_futures_data(df)
         
-        logger.info(f"Futures ingestion complete. Total records: {len(df)}")
+        # Save to database
+        rows_saved = 0
+        if engine is not None:
+            rows_saved = save_futures_to_database(df, engine)
+        
+        logger.info(f"Futures ingestion complete. Total records: {len(df)}, DB rows: {rows_saved}")
         
         # Update metadata to track successful fetch
         incremental_utils.update_fetch_metadata("cme_futures", start_date, end_date, success=True)
@@ -373,11 +476,11 @@ def ingest_cme_futures():
                     date_val = "N/A"
                 logger.info(f"  {contract}: {close_val:.2f} (updated {date_val})")
         
-        return df
+        return rows_saved
     else:
         logger.warning("No futures data retrieved")
         incremental_utils.update_fetch_metadata("cme_futures", start_date, end_date, success=False)
-        return pd.DataFrame()
+        return 0
 
 
 def main() -> None:

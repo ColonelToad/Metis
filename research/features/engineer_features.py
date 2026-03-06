@@ -327,6 +327,106 @@ class FeatureEngineer:
         
         return df
     
+    def load_cme_futures_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Load CME futures data (WTI, Brent, HO, RB) from cme_futures_daily table."""
+        
+        query = """
+        SELECT date, contract_type, close, volatility_20d, ma_20
+        FROM cme_futures_daily
+        WHERE date >= :start_date
+        ORDER BY date
+        """
+        
+        with self.engine.connect() as conn:
+            cme = pd.read_sql(
+                text(query),
+                conn,
+                params={"start_date": self.start_date.isoformat()}
+            )
+        
+        if not cme.empty:
+            cme['date'] = pd.to_datetime(cme['date'])
+            
+            # Pivot contracts to get separate columns
+            for contract in cme['contract_type'].unique():
+                contract_data = cme[cme['contract_type'] == contract][['date', 'close', 'volatility_20d', 'ma_20']]
+                contract_data.columns = ['date', f'{contract}_close', f'{contract}_volatility_20d', f'{contract}_ma_20']
+                
+                # Merge to main dataframe
+                df = df.merge(contract_data, on='date', how='left')
+            
+            # Calculate cross-asset spreads
+            if 'crude_oil_wti_close' in df.columns and 'crude_oil_brent_close' in df.columns:
+                df['wti_brent_spread'] = df['crude_oil_wti_close'] - df['crude_oil_brent_close']
+                df['wti_brent_spread_pct'] = (df['wti_brent_spread'] / df['crude_oil_brent_close'] * 100).fillna(0)
+            
+            # HO-WTI crack spread (heating oil relative to WTI)
+            if 'heating_oil_close' in df.columns and 'crude_oil_wti_close' in df.columns:
+                df['ho_wti_crack'] = df['heating_oil_close'] - (df['crude_oil_wti_close'] * 0.42)  # Rough conversion
+                df['ho_wti_spread_pct'] = (df['ho_wti_crack'] / (df['crude_oil_wti_close'] * 0.42) * 100).fillna(0)
+            
+            # NG correlation to crude (lead/lag to be analyzed separately)
+            if 'natural_gas_close' in df.columns and 'crude_oil_wti_close' in df.columns:
+                df['ng_wti_ratio'] = df['natural_gas_close'] / (df['crude_oil_wti_close'] + 1e-8)
+            
+            print(f"[FEATURES] Loaded CME futures data ({len(cme['contract_type'].unique())} contracts)")
+        else:
+            print("[FEATURES] Warning: No CME futures data found")
+        
+        return df
+    
+    def load_power_lmp_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Load multi-ISO power LMP data from grid_lmp_multi_iso table."""
+        
+        query = """
+        SELECT 
+            DATE(timestamp) as date,
+            iso,
+            AVG(lmp) as lmp_avg
+        FROM grid_lmp_multi_iso
+        WHERE DATE(timestamp) >= :start_date
+        GROUP BY DATE(timestamp), iso
+        ORDER BY DATE(timestamp), iso
+        """
+        
+        with self.engine.connect() as conn:
+            lmp = pd.read_sql(
+                text(query),
+                conn,
+                params={"start_date": self.start_date.isoformat()}
+            )
+        
+        if not lmp.empty:
+            lmp['date'] = pd.to_datetime(lmp['date'])
+            
+            # Pivot ISOs to separate columns
+            for iso in lmp['iso'].unique():
+                iso_data = lmp[lmp['iso'] == iso][['date', 'lmp_avg']]
+                iso_data.columns = ['date', f'lmp_{iso.lower()}_avg']
+                df = df.merge(iso_data, on='date', how='left')
+            
+            # Calculate composite LMP index (equal-weighted across ISOs)
+            lmp_cols = [col for col in df.columns if col.startswith('lmp_') and col.endswith('_avg')]
+            if lmp_cols:
+                df['lmp_composite_avg'] = df[lmp_cols].mean(axis=1)
+                df['lmp_composite_std'] = df[lmp_cols].std(axis=1)
+                df['lmp_composite_max'] = df[lmp_cols].max(axis=1)
+                df['lmp_composite_min'] = df[lmp_cols].min(axis=1)
+            
+            # NG-to-power basis: how much more expensive is power relative to NG fuel value
+            # Rough: LMP should correlate to NG price; basis = LMP - (NG_price * conversion_factor)
+            if 'natural_gas_close' in df.columns and 'lmp_composite_avg' in df.columns:
+                # Power generation efficiency: ~1 MMBtu of gas -> ~1 MWh with losses
+                # LMP in $/MWh, NG in $/MMBtu, so direct comparison with efficiency factor
+                df['ng_power_basis'] = df['lmp_composite_avg'] - (df['natural_gas_close'] * 10)  # 10x factor for scale
+                df['ng_power_basis_pct'] = (df['ng_power_basis'] / (df['natural_gas_close'] * 10 + 1e-8) * 100).fillna(0)
+            
+            print(f"[FEATURES] Loaded LMP data ({len(lmp['iso'].unique())} ISOs)")
+        else:
+            print("[FEATURES] Warning: No LMP data found")
+        
+        return df
+    
     def engineer_features(self) -> pd.DataFrame:
         """Main pipeline: load all data and engineer features."""
         
@@ -342,6 +442,10 @@ class FeatureEngineer:
         df = self.load_bls_ppi_features(df)
         df = self.load_census_permit_features(df)
         df = self.load_congress_features(df)
+        
+        # Load new energy complex features
+        df = self.load_cme_futures_features(df)
+        df = self.load_power_lmp_features(df)
         
         # Fill missing values
         # Forward fill for lagged features, back fill for forward-looking

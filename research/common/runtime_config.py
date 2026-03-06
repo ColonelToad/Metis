@@ -1,8 +1,8 @@
 """
 Runtime mode configuration
-- Mode is controlled by METIS_MODE env var: DEV (default) or REAL
+- Mode is controlled by METIS_MODE env var: DEV (default), PROD, or REAL
 - DEV: no external API calls; use synthetic/generator data
-- REAL: call APIs when keys available
+- PROD or REAL: call APIs when keys available
 """
 import os
 from dotenv import load_dotenv
@@ -13,7 +13,8 @@ MODE = os.getenv("METIS_MODE", "DEV").upper()
 
 
 def is_real_mode() -> bool:
-    return MODE == "REAL"
+    """Check if running in production mode (REAL or PROD)."""
+    return MODE in ("REAL", "PROD")
 
 
 def mode_label() -> str:
@@ -31,7 +32,9 @@ def log_mode(prefix: str = ""):
 
 
 def require_real_mode(feature: str):
+    """Check if real mode is enabled; print skip message if not."""
     if not is_real_mode():
-        print(f"Skipping {feature}: METIS_MODE={MODE} (DEV)")
+        mode_str = "PROD" if MODE == "PROD" else MODE
+        print(f"Skipping {feature}: METIS_MODE={mode_str} ({MODE})")
         return False
     return True

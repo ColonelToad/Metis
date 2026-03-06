@@ -132,6 +132,60 @@ CREATE TABLE IF NOT EXISTS ng_futures_daily (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ng_futures_date ON ng_futures_daily(date);
+
+CREATE TABLE IF NOT EXISTS cme_futures_daily (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TIMESTAMP NOT NULL,
+    contract_type TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    contract_name TEXT,
+    open FLOAT,
+    high FLOAT,
+    low FLOAT,
+    close FLOAT,
+    volume INTEGER,
+    return_1d FLOAT,
+    volatility_20d FLOAT,
+    ma_20 FLOAT,
+    ma_200 FLOAT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(date, contract_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cme_futures_date_contract ON cme_futures_daily(date, contract_type);
+CREATE INDEX IF NOT EXISTS idx_cme_futures_contract ON cme_futures_daily(contract_type);
+
+CREATE TABLE IF NOT EXISTS grid_lmp_multi_iso (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TIMESTAMP NOT NULL,
+    iso TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    node_type TEXT,
+    location_name TEXT,
+    market TEXT,
+    lmp FLOAT,
+    energy_component FLOAT,
+    congestion_component FLOAT,
+    loss_component FLOAT,
+    data_fetch_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(timestamp, iso, node_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_grid_lmp_timestamp_iso ON grid_lmp_multi_iso(timestamp, iso);
+CREATE INDEX IF NOT EXISTS idx_grid_lmp_iso_node ON grid_lmp_multi_iso(iso, node_id);
+CREATE INDEX IF NOT EXISTS idx_grid_lmp_timestamp ON grid_lmp_multi_iso(timestamp);
+
+CREATE TABLE IF NOT EXISTS grid_lmp (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TIMESTAMP NOT NULL,
+    lmp FLOAT,
+    node_id TEXT,
+    iso TEXT DEFAULT 'CAISO',
+    data_fetch_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(timestamp, node_id, iso)
+);
+
+CREATE INDEX IF NOT EXISTS idx_grid_lmp_timestamp_iso_compat ON grid_lmp(timestamp, iso);
 """
 
 def create_schema():
