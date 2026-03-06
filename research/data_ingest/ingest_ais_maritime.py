@@ -127,7 +127,7 @@ async def stream_ais_data(duration_minutes: int = 60) -> List[Dict]:
     ws_url = "wss://stream.aisstream.io/v0/stream"
     
     try:
-        async with websockets.connect(ws_url) as websocket:
+        async with websockets.connect(ws_url, open_timeout=30) as websocket:
             # Subscribe to vessel data at terminals
             subscription = {
                 "APIKey": AISSTREAM_API_KEY,
@@ -150,7 +150,7 @@ async def stream_ais_data(duration_minutes: int = 60) -> List[Dict]:
             
             while datetime.utcnow() < end_time:
                 try:
-                    message = await asyncio.wait_for(websocket.recv(), timeout=5.0)
+                    message = await asyncio.wait_for(websocket.recv(), timeout=15.0)
                     data = json.loads(message)
                     
                     # Parse message type

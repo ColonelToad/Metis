@@ -36,7 +36,7 @@ INGESTER_CONFIG = {
     "lmp": {
         "mode": "incremental",        # only new data
         "lookback_days": 7,           # but always check last 7 days for corrections
-        "db_table": "caiso_lmp"
+        "db_table": "grid_lmp"
     },
     
     "ingest_fred": {
