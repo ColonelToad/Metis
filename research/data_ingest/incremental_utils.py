@@ -110,15 +110,28 @@ def get_last_ingestion_date(engine, table_name: str) -> Optional[datetime]:
     try:
         from sqlalchemy import text
         with engine.begin() as conn:
-            result = conn.execute(text(f"""
-                SELECT MAX(date) as last_date FROM {table_name}
-            """))
-            row = result.fetchone()
-            if row and row[0]:
-                date_val = row[0]
-                if isinstance(date_val, str):
-                    return datetime.fromisoformat(date_val)
-                return date_val
+            # Try 'timestamp' column first (for grid_lmp, etc.)
+            try:
+                result = conn.execute(text(f"""
+                    SELECT MAX(timestamp) as last_date FROM {table_name}
+                """))
+                row = result.fetchone()
+                if row and row[0]:
+                    date_val = row[0]
+                    if isinstance(date_val, str):
+                        return datetime.fromisoformat(date_val)
+                    return date_val
+            except Exception:
+                # Fall back to 'date' column (for other tables)
+                result = conn.execute(text(f"""
+                    SELECT MAX(date) as last_date FROM {table_name}
+                """))
+                row = result.fetchone()
+                if row and row[0]:
+                    date_val = row[0]
+                    if isinstance(date_val, str):
+                        return datetime.fromisoformat(date_val)
+                    return date_val
     except Exception as e:
         logger.warning(f"Could not get last ingestion date for {table_name}: {e}")
     
@@ -130,15 +143,28 @@ def get_first_ingestion_date(engine, table_name: str) -> Optional[datetime]:
     try:
         from sqlalchemy import text
         with engine.begin() as conn:
-            result = conn.execute(text(f"""
-                SELECT MIN(date) as first_date FROM {table_name}
-            """))
-            row = result.fetchone()
-            if row and row[0]:
-                date_val = row[0]
-                if isinstance(date_val, str):
-                    return datetime.fromisoformat(date_val)
-                return date_val
+            # Try 'timestamp' column first (for grid_lmp, etc.)
+            try:
+                result = conn.execute(text(f"""
+                    SELECT MIN(timestamp) as first_date FROM {table_name}
+                """))
+                row = result.fetchone()
+                if row and row[0]:
+                    date_val = row[0]
+                    if isinstance(date_val, str):
+                        return datetime.fromisoformat(date_val)
+                    return date_val
+            except Exception:
+                # Fall back to 'date' column (for other tables)
+                result = conn.execute(text(f"""
+                    SELECT MIN(date) as first_date FROM {table_name}
+                """))
+                row = result.fetchone()
+                if row and row[0]:
+                    date_val = row[0]
+                    if isinstance(date_val, str):
+                        return datetime.fromisoformat(date_val)
+                    return date_val
     except Exception as e:
         logger.warning(f"Could not get first ingestion date for {table_name}: {e}")
     

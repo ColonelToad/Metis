@@ -386,14 +386,15 @@ def save_futures_to_database(df: pd.DataFrame, engine) -> int:
             try:
                 rows_inserted = 0
                 for _, row in db_df.iterrows():
-                    sql = """
+                    sql = text("""
                         INSERT OR IGNORE INTO cme_futures_daily
                         (date, contract_type, symbol, contract_name, open, high, low, close, volume,
                          return_1d, volatility_20d, ma_20, ma_200)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """
+                        VALUES (:date, :contract_type, :symbol, :contract_name, :open, :high, :low, :close, :volume,
+                         :return_1d, :volatility_20d, :ma_20, :ma_200)
+                    """)
                     with engine.connect() as conn:
-                        conn.execute(text(sql), {
+                        conn.execute(sql, {
                             "date": str(row["date"]),
                             "contract_type": str(row["contract_type"]),
                             "symbol": str(row["symbol"]),
