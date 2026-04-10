@@ -604,9 +604,9 @@ if __name__ == "__main__":
         freq_val = freq_df[len(splits['train']):len(splits['train'])+len(splits['val'])]
         freq_test = freq_df[len(splits['train'])+len(splits['val']):]
         
-        freq_train.to_parquet(os.path.join(OUTPUT_DIR, f"train_{freq_name}_features.parquet"), index=False, compression='snappy')
-        freq_val.to_parquet(os.path.join(OUTPUT_DIR, f"val_{freq_name}_features.parquet"), index=False, compression='snappy')
-        freq_test.to_parquet(os.path.join(OUTPUT_DIR, f"test_{freq_name}_features.parquet"), index=False, compression='snappy')
+        freq_train.to_parquet(os.path.join(OUTPUT_DIR, f"train_{freq_name}_features.parquet"), index=False, compression='zstd')
+        freq_val.to_parquet(os.path.join(OUTPUT_DIR, f"val_{freq_name}_features.parquet"), index=False, compression='zstd')
+        freq_test.to_parquet(os.path.join(OUTPUT_DIR, f"test_{freq_name}_features.parquet"), index=False, compression='zstd')
         
         print(f"[FEATURES] Saved {freq_name} train/val/test splits (parquet)")
     

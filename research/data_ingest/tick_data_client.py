@@ -119,7 +119,7 @@ class TickDataIngester:
         ].sort_values('timestamp').reset_index(drop=True)
         
         # Cache as parquet
-        combined.to_parquet(cache_file, compression='snappy')
+        combined.to_parquet(cache_file, compression='zstd')
         logger.info(f"Cached {len(combined)} ticks to {cache_file}")
         
         return combined

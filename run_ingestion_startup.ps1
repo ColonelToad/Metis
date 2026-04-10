@@ -135,6 +135,24 @@ try {
         exit 1
     } else {
         Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] === STARTUP INGESTION COMPLETED SUCCESSFULLY ==="
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Starting R2 cloud backup..."
+        
+        # Backup to R2
+        try {
+            $BackupResult = & python (Join-Path $ResearchDir "r2_auto_backup.py") 2>&1
+            $BackupResult | Tee-Object -FilePath $LogFile -Append
+            
+            if ($LASTEXITCODE -eq 0) {
+                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ✓ R2 backup completed successfully"
+            } else {
+                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ⚠ R2 backup encountered issues (non-blocking)"
+            }
+        } catch {
+            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ⚠ R2 backup failed: $_"
+            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Ingestion succeeded, backup is non-critical"
+        }
+        
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] === STARTUP INGESTION AND BACKUP COMPLETED ==="
         exit 0
     }
     

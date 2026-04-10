@@ -39,6 +39,47 @@ from data_ingest import ingest_bls_ppi
 from data_ingest import ingest_fred_building_permits
 from data_ingest import ingest_eia_jet_fuel
 
+# Import log rotation
+from log_rotation import rotate_logs
+
+# Import R2 uploader for post-ingestion backup
+def backup_to_r2():
+    """Upload database and cache to R2 after successful ingestion."""
+    try:
+        import subprocess
+        from pathlib import Path
+        
+        # Run the comprehensive auto-backup script
+        backup_script = Path(__file__).parent.parent / "r2_auto_backup.py"
+        if not backup_script.exists():
+            logger.warning(f"R2 backup script not found: {backup_script}")
+            return
+        
+        logger.info("Running R2 backup...")
+        result = subprocess.run(
+            [__import__('sys').executable, str(backup_script)],
+            cwd=Path(__file__).parent.parent.parent,
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        # Log the backup output
+        if result.stdout:
+            for line in result.stdout.split('\n'):
+                if line.strip():
+                    logger.info(line)
+        
+        if result.returncode == 0:
+            logger.info("✓ R2 backup completed successfully")
+        else:
+            logger.warning(f"⚠ R2 backup encountered issues (non-blocking)")
+            if result.stderr:
+                logger.warning(result.stderr)
+    
+    except Exception as e:
+        logger.warning(f"R2 backup failed (non-critical): {e}")
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -252,6 +293,9 @@ def run_all(frequency: str = "all", collector=None, force_weekly: bool = False) 
 
 def main():
     """Entry point for command-line usage."""
+    # Rotate old logs before starting ingestion
+    rotate_logs()
+    
     parser = argparse.ArgumentParser(
         description="Run data ingesters by frequency (respects Monday schedule for weekly tasks)"
     )
@@ -266,9 +310,20 @@ def main():
         action="store_true",
         help="Force weekly ingesters to run even if not Monday"
     )
+    parser.add_argument(
+        "--no-backup",
+        action="store_true",
+        help="Skip R2 backup after ingestion"
+    )
     args = parser.parse_args()
     
     all_ok, results = run_all(args.frequency, force_weekly=args.force_weekly)
+    
+    # Backup to R2 after successful ingestion (unless --no-backup is set)
+    if all_ok and not args.no_backup:
+        logger.info("Ingestion completed successfully, starting R2 backup...")
+        backup_to_r2()
+    
     sys.exit(0 if all_ok else 1)
 
 if __name__ == "__main__":
