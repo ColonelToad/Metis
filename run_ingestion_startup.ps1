@@ -3,7 +3,7 @@
 # Trigger: Windows Task Scheduler (at system startup)
 # Features: Daily safeguard, smart system resource detection, parallel execution
 
-param([switch]$Force)  # Override daily safeguard check
+param([switch]$Force, [int]$Delay = 10)  # Override daily safeguard check; optional delay before starting
 
 $ProjectRoot = "C:\Users\legot\Metis"
 $ResearchDir = Join-Path $ProjectRoot "research"
@@ -143,12 +143,12 @@ try {
             $BackupResult | Tee-Object -FilePath $LogFile -Append
             
             if ($LASTEXITCODE -eq 0) {
-                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ✓ R2 backup completed successfully"
+                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] R2 backup completed successfully"
             } else {
-                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ⚠ R2 backup encountered issues (non-blocking)"
+                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] R2 backup encountered issues (non-blocking)"
             }
         } catch {
-            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ⚠ R2 backup failed: $_"
+            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] R2 backup failed: $_"
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Ingestion succeeded, backup is non-critical"
         }
         
