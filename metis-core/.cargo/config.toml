@@ -1,0 +1,14 @@
+# Cargo configuration for SIMD builds
+# Enable AVX2 CPU feature for x86_64 targets
+
+[build]
+# RUSTFLAGS enables AVX2 intrinsics and sets CPU target
+# +avx2: Enable AVX2 instructions
+# +fma: Enable FMA (fused multiply-add)
+rustflags = ["-C", "target-feature=+avx2,+fma", "-C", "target-cpu=native"]
+
+[profile.release]
+# Already set in Cargo.toml, but can be overridden here if needed
+opt-level = 3
+lto = true
+codegen-units = 1

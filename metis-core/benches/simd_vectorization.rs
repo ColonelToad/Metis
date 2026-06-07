@@ -6,7 +6,31 @@ use metis_core::simd::{
     normalize_temperature_simd,
 };
 
+/// Helper function to lock the benchmark thread to the primary Performance Core.
+/// This prevents the OS scheduler from migrating the tight SIMD loops to an E-Core.
+fn pin_to_p_core() {
+    if let Some(core_ids) = core_affinity::get_core_ids() {
+        if !core_ids.is_empty() {
+            // Index 0 maps to the first P-Core on Intel hybrid architectures
+            let target_core = core_ids[0];
+            if core_affinity::set_for_current(target_core) {
+                // Using a carriage return to overwrite the line so it doesn't
+                // heavily clutter Criterion's standard output formatting.
+                print!(
+                    "Thread securely pinned to P-Core (ID: {})\n",
+                    target_core.id
+                );
+            } else {
+                println!("Warning: Failed to pin thread to P-Core.");
+            }
+        }
+    }
+}
+
 fn benchmark_simd_normalization(c: &mut Criterion) {
+    // Lock the thread before starting the run
+    pin_to_p_core();
+
     let temps = vec![72.5, 68.3, 75.1, 70.2, 69.8, 73.4, 71.9, 74.2];
     let mean = 71.0f32;
     let std = 2.5f32;
@@ -27,6 +51,9 @@ fn benchmark_simd_normalization(c: &mut Criterion) {
 }
 
 fn benchmark_euclidean_distance(c: &mut Criterion) {
+    // Lock the thread before starting the run
+    pin_to_p_core();
+
     let a: Vec<f32> = (0..1024).map(|i| i as f32).collect();
     let b: Vec<f32> = (0..1024).map(|i| (i as f32) + 0.1).collect();
 

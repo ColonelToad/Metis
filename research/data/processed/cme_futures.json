@@ -1,5 +1,5 @@
 {
-  "created": "2026-05-18T00:38:16.708711",
+  "created": "2026-06-01T08:05:30.427611",
   "contracts": [
     "crude_oil_wti",
     "crude_oil_brent",
@@ -16,7 +16,7 @@
   },
   "data_source": "Yahoo Finance",
   "total_records": 2505,
-  "date_range": "2024-05-20 00:00:00 to 2026-05-15 00:00:00",
+  "date_range": "2024-06-03 00:00:00 to 2026-05-29 00:00:00",
   "indicators": [
     "Close_YoY_Pct: Year-over-year price change %",
     "Close_MTD_Pct: Daily price change %",
