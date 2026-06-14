@@ -5,13 +5,20 @@ Usage:
     python research/backtest/run_backtest.py
     python research/backtest/run_backtest.py --threshold 0.75 --holding-days 10
     python research/backtest/run_backtest.py --train-end 2020-12-31
+    python research/backtest/run_backtest.py --regime-filter elevated  # only trade in elevated+ markets
+
+--regime-filter options:
+    elevated  : trade when prior 5-day peak regime >= elevated (|z| > 1.5)
+    shock     : trade only in confirmed shock/crisis periods
 
 Outputs (research/backtest/output/):
-    equity_curve.png   - full equity curve with in/out-of-sample split
-    trade_log.csv      - every trade with P&L and regime tag
-    metrics.txt        - printed report captured to file
+    equity_curve.png         - full equity curve with in/out-of-sample split
+    equity_curve_filtered.png - regime-filtered version (when --regime-filter used)
+    trade_log.csv            - every trade with P&L and regime tag
+    metrics.txt              - printed report captured to file
 """
 import argparse
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -22,6 +29,7 @@ import matplotlib.patches as mpatches
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+DB_PATH   = REPO_ROOT / "data" / "metis.db"
 sys.path.insert(0, str(REPO_ROOT))
 
 from research.backtest import signals as sig_module
@@ -81,14 +89,38 @@ def plot_equity_curve(trades: pd.DataFrame, train_end: str | None, out_path: Pat
     print(f"  Saved: {out_path}")
 
 
+def load_regime_filter(min_regime: str) -> pd.Series:
+    """
+    Load prior-week peak regime from shock_regimes table.
+    Returns a Series indexed by date with the 5-day trailing peak regime,
+    shifted forward 5 days so we're using *last week's* state to gate *this week's* trade.
+    """
+    order = {"normal": 0, "elevated": 1, "shock": 2, "crisis": 3}
+    threshold = order.get(min_regime, 1)
+
+    conn = sqlite3.connect(DB_PATH)
+    reg = pd.read_sql(
+        "SELECT date, severity FROM shock_regimes ORDER BY date",
+        conn, parse_dates=["date"],
+    ).set_index("date")
+    conn.close()
+
+    # 5-day trailing peak severity, then shift 5 forward (use last week, not current week)
+    peak = reg["severity"].rolling(5, min_periods=1).max().shift(5)
+    return (peak >= threshold).rename("regime_ok")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="EIA injection-surprise backtest")
-    parser.add_argument("--threshold",    type=float, default=0.5,
-                        help="Z-score threshold to take a position (default 0.5)")
-    parser.add_argument("--holding-days", type=int,   default=5,
+    parser.add_argument("--threshold",     type=float, default=0.5,
+                        help="EIA z-score threshold to take a position (default 0.5)")
+    parser.add_argument("--holding-days",  type=int,   default=5,
                         help="Trading days to hold each trade (default 5)")
-    parser.add_argument("--train-end",    type=str,   default="2022-12-31",
+    parser.add_argument("--train-end",     type=str,   default="2022-12-31",
                         help="In-sample cutoff date (default 2022-12-31)")
+    parser.add_argument("--regime-filter", type=str,   default=None,
+                        choices=["elevated", "shock"],
+                        help="Only trade when prior 5-day peak regime >= this level")
     args = parser.parse_args()
 
     print("Loading price data...")
@@ -100,6 +132,18 @@ def main() -> None:
     n_trades_possible = (eia_signal["signal"] != 0).sum()
     print(f"  Signal rows: {len(eia_signal)}  |  Active signals: {n_trades_possible}")
 
+    # Apply regime filter before engine (no look-ahead: uses prior week's regime)
+    if args.regime_filter:
+        print(f"Applying regime filter: prior regime >= '{args.regime_filter}'")
+        regime_ok = load_regime_filter(args.regime_filter)
+        # Align to EIA signal dates; only keep rows where regime was elevated/shock last week
+        aligned = regime_ok.reindex(eia_signal.index, method="ffill")
+        n_before = (eia_signal["signal"] != 0).sum()
+        eia_signal = eia_signal.copy()
+        eia_signal.loc[~aligned.fillna(False), "signal"] = 0
+        n_after = (eia_signal["signal"] != 0).sum()
+        print(f"  Trades before filter: {n_before}  |  After filter: {n_after}")
+
     print("Running backtest...")
     trades = engine.run(
         signals=eia_signal,
@@ -110,7 +154,7 @@ def main() -> None:
     print(f"  Executed trades: {len(trades)}")
 
     if trades.empty:
-        print("No trades generated. Check threshold or data range.")
+        print("No trades generated. Check threshold, date range, or regime filter.")
         sys.exit(1)
 
     # Add regime tags
@@ -127,14 +171,15 @@ def main() -> None:
         metrics.print_report(out_sample, label=f"OUT-OF-SAMPLE  ({args.train_end} ->)")
 
     # ── Save outputs ───────────────────────────────────────────────────────────
-    trades_out = OUTPUT_DIR / "trade_log.csv"
+    suffix = f"_{args.regime_filter}" if args.regime_filter else ""
+    trades_out = OUTPUT_DIR / f"trade_log{suffix}.csv"
     trades.to_csv(trades_out, index=False)
     print(f"\n  Saved: {trades_out}")
 
-    plot_equity_curve(trades, args.train_end, OUTPUT_DIR / "equity_curve.png")
+    plot_equity_curve(trades, args.train_end, OUTPUT_DIR / f"equity_curve{suffix}.png")
 
     # Capture full report to text file
-    report_path = OUTPUT_DIR / "metrics.txt"
+    report_path = OUTPUT_DIR / f"metrics{suffix}.txt"
     with open(report_path, "w") as f:
         f.write(f"Strategy  : EIA Injection Surprise\n")
         f.write(f"Threshold : {args.threshold}\n")
