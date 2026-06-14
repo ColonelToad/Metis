@@ -20,7 +20,7 @@ Three-layer hybrid system:
 
 **Core data flow**:
 ```
-Python ML signals → PyO3 bridge (metis-core/src/bridge.rs)
+Python ML signals → PyO3 bridge (execution/metis-core/src/bridge.rs)
                  → Rust engine fusion (fusion.rs)
                  → Order book + execution algos
                  → FIX protocol → market
@@ -45,17 +45,12 @@ python research/data_ingest/backfill_cme_direct.py
 python research/data_ingest/backfill_lmp_prod.py
 ```
 
-### Rust execution engine (`execution/` workspace)
+### Rust execution workspace (`execution/`) — includes metis-core
 ```bash
-cargo build --release
-cargo test
-cargo bench
-```
-
-### Rust core library (`metis-core/` — PyO3 extension)
-```bash
-cargo build --release   # produces libmetis_core.so / .pyd
-cargo bench             # simd_vectorization, lockfree_fusion, bridge_latency, realistic_simd
+cargo build --release           # builds all members including metis-core PyO3 extension
+cargo test --workspace
+cargo bench -p metis-core       # simd_vectorization, lockfree_fusion, bridge_latency, realistic_simd
+cargo check --workspace         # fast check without full compile
 ```
 
 ### Tauri desktop app (`metis/`)
@@ -72,10 +67,10 @@ npm run test:service     # orchestrator integration tests
 
 | File | Purpose |
 |------|---------|
-| `metis-core/src/bridge.rs` | PyO3 interface — Python signals → Rust engine |
-| `metis-core/src/fusion.rs` | Lock-free multi-modal signal aggregation |
-| `metis-core/src/simd.rs` | SIMD vectorized alternative data processing |
-| `metis-core/src/numa.rs` | Windows thread-core pinning |
+| `execution/metis-core/src/bridge.rs` | PyO3 interface — Python signals → Rust engine |
+| `execution/metis-core/src/fusion.rs` | Lock-free multi-modal signal aggregation |
+| `execution/metis-core/src/simd.rs` | SIMD vectorized alternative data processing |
+| `execution/metis-core/src/numa.rs` | Windows thread-core pinning |
 | `metis/src-tauri/src/bin/orchestrator.rs` | Main Tauri binary + Axum server |
 | `metis/src/App.tsx` | React root |
 | `research/orchestrate_daily_pipeline.py` | Full data + signal generation pipeline |
@@ -92,8 +87,9 @@ npm run test:service     # orchestrator integration tests
 - `fix_client/` — FIX protocol session handler (tokio-tungstenite)
 - `signal_interface/` — Python→Rust IPC bridge
 - `ais_vessel_tracking/` — alternative data collection
+- `metis-core/` — PyO3 bridge, SIMD, lock-free fusion, NUMA (member of this workspace)
 
-`metis-core/` is a separate crate (not part of `execution/` workspace).
+`metis/src-tauri/` is a separate standalone crate (Tauri's build tooling requires it).
 
 ## Release Profile (Rust)
 

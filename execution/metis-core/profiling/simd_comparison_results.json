@@ -1,0 +1,90 @@
+{
+  "benchmarks": {
+    "scalar": {
+      "windows": {
+        "mean": 190.36124999999998,
+        "stdev": 238.2551164268741,
+        "min": 63.719,
+        "max": 547.51,
+        "count": 4
+      },
+      "wsl": {
+        "mean": 286.91,
+        "stdev": 305.7378416225247,
+        "min": 9.25,
+        "max": 625.13,
+        "count": 6
+      },
+      "difference_percent": 50.71869931511799,
+      "faster_platform": "Windows"
+    },
+    "simd_avx2": {
+      "windows": {
+        "mean": 93.96936666666666,
+        "stdev": 106.42364738379655,
+        "min": 1.9772,
+        "max": 226.88,
+        "count": 6
+      },
+      "wsl": {
+        "mean": 61.13166666666667,
+        "stdev": 65.28206994777867,
+        "min": 2.19,
+        "max": 139.14,
+        "count": 6
+      },
+      "difference_percent": -34.94511154521632,
+      "faster_platform": "WSL"
+    }
+  },
+  "system_analysis": {
+    "Trial_1": {
+      "windows": {
+        "cpu_mhz_avg": 1700.0,
+        "cpu_mhz_min": 1700.0,
+        "cpu_mhz_max": 1700.0,
+        "mem_percent_avg": 33.52212389380531,
+        "load_avg_max": 0.0
+      },
+      "wsl": {
+        "cpu_mhz_avg": 2688.0,
+        "cpu_mhz_min": 2688.0,
+        "cpu_mhz_max": 2688.0,
+        "mem_percent_avg": 0.0,
+        "load_avg_max": 2.01
+      }
+    },
+    "Trial_2": {
+      "windows": {
+        "cpu_mhz_avg": 1700.0,
+        "cpu_mhz_min": 1700.0,
+        "cpu_mhz_max": 1700.0,
+        "mem_percent_avg": 33.59310344827586,
+        "load_avg_max": 0.0
+      },
+      "wsl": {
+        "cpu_mhz_avg": 2688.0,
+        "cpu_mhz_min": 2688.0,
+        "cpu_mhz_max": 2688.0,
+        "mem_percent_avg": 0.0,
+        "load_avg_max": 2.12
+      }
+    },
+    "Trial_3": {
+      "windows": {
+        "cpu_mhz_avg": 1700.0,
+        "cpu_mhz_min": 1700.0,
+        "cpu_mhz_max": 1700.0,
+        "mem_percent_avg": 33.32592592592592,
+        "load_avg_max": 0.0
+      },
+      "wsl": {
+        "cpu_mhz_avg": 2688.0,
+        "cpu_mhz_min": 2688.0,
+        "cpu_mhz_max": 2688.0,
+        "mem_percent_avg": 0.0,
+        "load_avg_max": 1.9
+      }
+    }
+  }
+}

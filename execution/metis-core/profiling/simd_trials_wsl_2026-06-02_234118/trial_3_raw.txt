@@ -1,0 +1,70 @@
+   Compiling pyo3-build-config v0.23.5
+   Compiling serde_core v1.0.228
+   Compiling pyo3-macros-backend v0.23.5
+   Compiling serde v1.0.228
+   Compiling pyo3-ffi v0.23.5
+   Compiling serde_json v1.0.149
+   Compiling pyo3 v0.23.5
+   Compiling ciborium v0.2.2
+   Compiling pyo3-macros v0.23.5
+   Compiling tinytemplate v1.2.1
+   Compiling criterion v0.5.1
+   Compiling chrono v0.4.42
+   Compiling metis-core v0.1.0 (/mnt/c/Users/legot/Metis/metis-core)
+warning: unused import: `crate::pin_thread_to_core`
+ --> src/bridge.rs:6:5
+  |
+6 | use crate::pin_thread_to_core;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: `metis-core` (lib) generated 1 warning (run `cargo fix --lib -p metis-core` to apply 1 suggestion)
+warning: unused import: `BenchmarkId`
+ --> benches/simd_vectorization.rs:1:61
+  |
+1 | use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+  |                                                             ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: `metis-core` (bench "simd_vectorization") generated 1 warning (run `cargo fix --bench "simd_vectorization"` to apply 1 suggestion)
+    Finished `bench` profile [optimized + debuginfo] target(s) in 1m 07s
+     Running benches/simd_vectorization.rs (target/release/deps/simd_vectorization-2bed3884e4a41526)
+Benchmarking simd_normalization/scalar
+Benchmarking simd_normalization/scalar: Warming up for 3.0000 s
+Benchmarking simd_normalization/scalar: Collecting 100 samples in estimated 5.0000 s (495M iterations)
+Benchmarking simd_normalization/scalar: Analyzing
+simd_normalization/scalar
+                        time:   [9.8894 ns 10.141 ns 10.403 ns]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking simd_normalization/simd_avx2
+Benchmarking simd_normalization/simd_avx2: Warming up for 3.0000 s
+Benchmarking simd_normalization/simd_avx2: Collecting 100 samples in estimated 5.0000 s (1.8B iterations)
+Benchmarking simd_normalization/simd_avx2: Analyzing
+simd_normalization/simd_avx2
+                        time:   [2.4784 ns 2.5669 ns 2.6740 ns]
+Found 9 outliers among 100 measurements (9.00%)
+  4 (4.00%) high mild
+  5 (5.00%) high severe
+
+Benchmarking euclidean_distance/scalar
+Benchmarking euclidean_distance/scalar: Warming up for 3.0000 s
+Benchmarking euclidean_distance/scalar: Collecting 100 samples in estimated 5.0024 s (4.2M iterations)
+Benchmarking euclidean_distance/scalar: Analyzing
+euclidean_distance/scalar
+                        time:   [625.13 ns 644.54 ns 666.76 ns]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high severe
+Benchmarking euclidean_distance/simd_avx2
+Benchmarking euclidean_distance/simd_avx2: Warming up for 3.0000 s
+Benchmarking euclidean_distance/simd_avx2: Collecting 100 samples in estimated 5.0005 s (35M iterations)
+Benchmarking euclidean_distance/simd_avx2: Analyzing
+euclidean_distance/simd_avx2
+                        time:   [139.14 ns 149.76 ns 160.04 ns]
+Found 5 outliers among 100 measurements (5.00%)
+  4 (4.00%) high mild
+  1 (1.00%) high severe
+

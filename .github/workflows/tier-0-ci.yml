@@ -86,18 +86,17 @@ jobs:
       - name: Validate core imports
         run: |
           python -c "from research.metrics import MetricsCollector; print('✓ metrics')"
-          python -c "from research.log_rotation import rotate_logs; print('✓ log_rotation')"
-          python -c "from research.metrics_service import MetricsService; print('✓ metrics_service')"
+          python -c "from research.config import *; print('✓ config')"
         env:
           PYTHONPATH: ${{ github.workspace }}
 
       - name: Check for syntax errors
         run: |
-          python -m py_compile research/metrics.py research/log_rotation.py research/orchestrate_daily_pipeline.py
+          python -m py_compile research/metrics.py research/config.py research/ops/orchestrate_daily_pipeline.py research/ops/log_rotation.py
           echo "✓ No syntax errors"
 
   rust-check:
-    name: Rust Check (execution + metis-core)
+    name: Rust Check (execution workspace)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -112,29 +111,20 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('execution/Cargo.lock') }}
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev python3-dev
 
-      - name: Cargo check — execution workspace
+      - name: Cargo check — full workspace (includes metis-core)
         run: cargo check --workspace --all-targets
         working-directory: execution
 
-      - name: Cargo check — metis-core
-        run: cargo check --all-targets
-        working-directory: metis-core
-
-      - name: Clippy — execution workspace (non-blocking)
+      - name: Clippy — full workspace (non-blocking)
         run: cargo clippy --workspace --all-targets -- -D warnings
         working-directory: execution
-        continue-on-error: true
-
-      - name: Clippy — metis-core (non-blocking)
-        run: cargo clippy --all-targets -- -D warnings
-        working-directory: metis-core
         continue-on-error: true
 
   rust-tauri:

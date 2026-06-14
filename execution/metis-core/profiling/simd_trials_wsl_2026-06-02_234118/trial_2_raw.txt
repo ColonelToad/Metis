@@ -1,0 +1,106 @@
+   Compiling proc-macro2 v1.0.105
+   Compiling libc v0.2.180
+   Compiling target-lexicon v0.12.16
+   Compiling quote v1.0.43
+   Compiling syn v2.0.114
+   Compiling pyo3-build-config v0.23.5
+   Compiling crossbeam-utils v0.8.21
+   Compiling serde_core v1.0.228
+   Compiling num-traits v0.2.19
+   Compiling zerocopy v0.8.33
+   Compiling serde v1.0.228
+   Compiling zerocopy-derive v0.8.33
+   Compiling serde_derive v1.0.228
+   Compiling crossbeam-epoch v0.9.18
+   Compiling zmij v1.0.12
+   Compiling crossbeam-deque v0.8.6
+   Compiling pyo3-macros-backend v0.23.5
+   Compiling pyo3-ffi v0.23.5
+   Compiling parking_lot_core v0.9.12
+   Compiling half v2.7.1
+   Compiling serde_json v1.0.149
+   Compiling ciborium-ll v0.2.2
+   Compiling rayon-core v1.13.0
+   Compiling pyo3 v0.23.5
+   Compiling getrandom v0.2.16
+   Compiling errno v0.3.14
+   Compiling signal-hook-registry v1.4.8
+   Compiling nanorand v0.7.0
+   Compiling pyo3-macros v0.23.5
+   Compiling rayon v1.11.0
+   Compiling tinytemplate v1.2.1
+   Compiling parking_lot v0.12.5
+   Compiling plotters v0.3.7
+   Compiling ciborium v0.2.2
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling tokio-macros v2.6.0
+   Compiling crossbeam-queue v0.3.12
+   Compiling crossbeam-channel v0.5.15
+   Compiling is-terminal v0.4.17
+   Compiling mio v1.1.1
+   Compiling socket2 v0.6.1
+   Compiling chrono v0.4.42
+   Compiling tokio v1.49.0
+   Compiling criterion v0.5.1
+   Compiling flume v0.11.1
+   Compiling crossbeam v0.8.4
+   Compiling ndarray v0.15.6
+   Compiling metis-core v0.1.0 (/mnt/c/Users/legot/Metis/metis-core)
+warning: unused import: `crate::pin_thread_to_core`
+ --> src/bridge.rs:6:5
+  |
+6 | use crate::pin_thread_to_core;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: `metis-core` (lib) generated 1 warning (run `cargo fix --lib -p metis-core` to apply 1 suggestion)
+warning: unused import: `BenchmarkId`
+ --> benches/simd_vectorization.rs:1:61
+  |
+1 | use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+  |                                                             ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: `metis-core` (bench "simd_vectorization") generated 1 warning (run `cargo fix --bench "simd_vectorization"` to apply 1 suggestion)
+    Finished `bench` profile [optimized + debuginfo] target(s) in 1m 42s
+     Running benches/simd_vectorization.rs (target/release/deps/simd_vectorization-2bed3884e4a41526)
+Benchmarking simd_normalization/scalar
+Benchmarking simd_normalization/scalar: Warming up for 3.0000 s
+Benchmarking simd_normalization/scalar: Collecting 100 samples in estimated 5.0000 s (505M iterations)
+Benchmarking simd_normalization/scalar: Analyzing
+simd_normalization/scalar
+                        time:   [9.9402 ns 10.268 ns 10.610 ns]
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+Benchmarking simd_normalization/simd_avx2
+Benchmarking simd_normalization/simd_avx2: Warming up for 3.0000 s
+Benchmarking simd_normalization/simd_avx2: Collecting 100 samples in estimated 5.0000 s (2.1B iterations)
+Benchmarking simd_normalization/simd_avx2: Analyzing
+simd_normalization/simd_avx2
+                        time:   [2.1897 ns 2.2417 ns 2.3010 ns]
+Found 8 outliers among 100 measurements (8.00%)
+  6 (6.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking euclidean_distance/scalar
+Benchmarking euclidean_distance/scalar: Warming up for 3.0000 s
+Benchmarking euclidean_distance/scalar: Collecting 100 samples in estimated 5.0006 s (8.3M iterations)
+Benchmarking euclidean_distance/scalar: Analyzing
+euclidean_distance/scalar
+                        time:   [514.90 ns 529.78 ns 547.62 ns]
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) high mild
+  3 (3.00%) high severe
+Benchmarking euclidean_distance/simd_avx2
+Benchmarking euclidean_distance/simd_avx2: Warming up for 3.0000 s
+Benchmarking euclidean_distance/simd_avx2: Collecting 100 samples in estimated 5.0002 s (42M iterations)
+Benchmarking euclidean_distance/simd_avx2: Analyzing
+euclidean_distance/simd_avx2
+                        time:   [111.02 ns 113.04 ns 115.24 ns]
+Found 8 outliers among 100 measurements (8.00%)
+  4 (4.00%) high mild
+  4 (4.00%) high severe
+

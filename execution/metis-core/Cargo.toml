@@ -1,0 +1,42 @@
+[package]
+name = "metis-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "metis_core"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+crossbeam.workspace = true
+parking_lot.workspace = true
+flume.workspace = true
+pyo3.workspace = true
+core_affinity.workspace = true
+ndarray.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+criterion.workspace = true
+
+# Windows NUMA / thread affinity — cannot be a workspace dep (target-conditional)
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winbase", "processthreadsapi", "winnt", "sysinfoapi", "handleapi"] }
+
+[[bench]]
+name = "simd_vectorization"
+harness = false
+
+[[bench]]
+name = "lockfree_fusion"
+harness = false
+
+[[bench]]
+name = "bridge_latency"
+harness = false
+
+[[bench]]
+name = "realistic_simd"
+harness = false
