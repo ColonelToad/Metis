@@ -28,15 +28,79 @@ import requests
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = REPO_ROOT / "data" / "metis.db"
 
-# Canonical NG price shocks, 2010-present
+# Canonical NG price shocks, 2000-present
 # Sources: EIA short-term energy outlooks, FERC reports, public record
 MANUAL_EVENTS: list[dict] = [
+    # ── Pre-shale era (2000-2009) ──────────────────────────────────────────────
+    {
+        "name": "2000-2001 Western Energy Crisis",
+        "start": "2000-11-01", "end": "2001-04-30",
+        "type": "demand_shock", "severity": 3, "source": "manual",
+        "region": "nationwide",
+        "description": (
+            "Post-Y2K industrial boom + cold winter drove HH to $10/MMBtu. "
+            "California rolling blackouts; tight supply before shale era. "
+            "Marks the upper boundary of the pre-shale price regime."
+        ),
+    },
+    {
+        "name": "Iraq War / Winter 2003 Spike",
+        "start": "2003-01-15", "end": "2003-03-31",
+        "type": "macro", "severity": 2, "source": "manual",
+        "region": "nationwide",
+        "description": (
+            "HH briefly hit $9.50 in Jan-Feb 2003. Prices driven primarily by "
+            "cold winter and tight post-2001 supply, not the Iraq invasion directly "
+            "(Iraq was not a US NG supplier). Iraq War (Mar 20) added macro risk "
+            "premium but NG prices fell after the invasion as weather normalized."
+        ),
+    },
+    {
+        "name": "Hurricane Katrina + Rita",
+        "start": "2005-08-25", "end": "2005-11-30",
+        "type": "supply_shock", "severity": 4, "source": "manual",
+        "region": "gulf_coast",
+        "description": (
+            "Katrina (Cat 5, Aug 29) then Rita (Cat 5, Sep 24) destroyed offshore "
+            "platforms and pipelines in the Gulf of Mexico — the heart of US gas "
+            "production at the time. HH spot spiked to $14+/MMBtu. ~1.5 Tcf/year "
+            "of production capacity offline for months. Largest US supply shock "
+            "before shale era. Permanently accelerated LNG import terminal buildout."
+        ),
+    },
+    {
+        "name": "2008 Financial Crisis + Demand Collapse",
+        "start": "2008-07-01", "end": "2009-03-31",
+        "type": "demand_collapse", "severity": 4, "source": "manual",
+        "region": "nationwide",
+        "description": (
+            "NG peaked at $13.58 in July 2008 on oil correlation and tight supply, "
+            "then collapsed to $4 by March 2009 as industrial demand cratered with "
+            "the financial crisis. Shale gas (Haynesville, Marcellus) was ramping "
+            "simultaneously — this event marks the structural onset of the shale "
+            "supply surplus that defined the 2009-2020 low-price regime."
+        ),
+    },
+    # ── Shale era (2010-2019) ──────────────────────────────────────────────────
     {
         "name": "Polar Vortex 2014",
         "start": "2014-01-05", "end": "2014-01-10",
         "type": "demand_shock", "severity": 3, "source": "manual",
         "region": "nationwide",
         "description": "Arctic air mass drove NG spot to $7+/MMBtu; demand records set across Midwest/Northeast",
+    },
+    {
+        "name": "Crimea Annexation",
+        "start": "2014-02-27", "end": "2014-05-31",
+        "type": "macro", "severity": 1, "source": "manual",
+        "region": "global",
+        "description": (
+            "Russia annexed Crimea (Feb 27, 2014); first Russia-Ukraine military conflict. "
+            "HH impact was modest (~$1.87 swing) as US was not a gas exporter yet and "
+            "shale supply was abundant. Primary impact was on European TTF and energy "
+            "security policy. Marks the first observable Russia-Ukraine risk premium in "
+            "global gas markets — predecessor to the 2022 full invasion."
+        ),
     },
     {
         "name": "2016 Storage Glut",
@@ -66,6 +130,7 @@ MANUAL_EVENTS: list[dict] = [
         "region": "nationwide",
         "description": "Early winter cold + tight storage drove NG to $4.80; sharpest move since 2014",
     },
+    # ── LNG export era (2020-present) ─────────────────────────────────────────
     {
         "name": "COVID Demand Collapse",
         "start": "2020-03-15", "end": "2020-05-31",
