@@ -1,110 +1,91 @@
-# Metis: HFT-Enhanced Climate Trading System
+# Metis
 
-## Executive Summary
-Metis is a production-oriented quantitative trading system that combines climate ML, policy analysis, and high-frequency trading infrastructure to demonstrate microstructure-aware execution in energy markets.
+Metis is a quantitative research platform for climate-driven energy trading, targeting CME Henry Hub Natural Gas (NG) futures. It combines a Python data and signal pipeline, a Rust low-latency execution engine, and a Tauri desktop interface with LLM-powered signal explanations.
 
-## Architecture Overview
+## Architecture
 
-### Three-Layer Hybrid System
-1. **Research & Signal Generation (Python)**: Climate ML + Policy RAG → Trading signals
-2. **Market Microstructure Engine (Rust + C++)**: Order book simulation + FIX protocol + Execution algorithms
-3. **Visualization & Explanation UI (Tauri + React)**: Unified dashboard with LLM explanations
+The system is organized into three layers that communicate through well-defined interfaces:
 
-## Tech Stack
-- **Python 3.11+**: ML research, feature engineering, backtesting
-- **Rust 1.75+**: Low-latency execution engine, order book simulator, FIX client
-- **Node.js 20+**: React frontend tooling
-- **Tauri 2.0**: Desktop application framework
-- **LanceDB (default)**: Local vector database for RAG
-- **PostgreSQL (optional)**: Relational/time-series storage (Timescale extension optional)
+**Research & Signal Generation (Python)**
+Data ingestion from 13+ sources feeds a feature engineering pipeline and LSTM hybrid model that produces directional signals on NG futures. Sources include EIA storage reports, FRED macroeconomic series, CME futures via Databento, NOAA/Open-Meteo weather, grid LMP prices across ISO regions, AIS vessel tracking, Congressional climate legislation, and Census building permits. Data is stored locally in SQLite with daily backups to Cloudflare R2.
 
-## Project Structure
+**Execution Engine (Rust)**
+A lock-free signal fusion layer aggregates climate, grid, and policy signals using `crossbeam` channels and atomic operations. A limit order book simulator (with CSV and PCAP ingestion) feeds TWAP/VWAP execution algorithms. A FIX protocol client handles market connectivity. `metis-core` exposes a PyO3 bridge so Python signals cross into Rust with minimal latency. SIMD vectorization and NUMA thread pinning are implemented for Windows and Linux targets.
+
+**Interface & Explanation (Tauri + RAG)**
+A Tauri 2.0 desktop application provides real-time dashboards across markets, grid status, climate data, policy, portfolio, and backtesting views. A RAG pipeline (LanceDB + sentence-transformers) indexes signal documentation and policy texts to support LLM-generated explanations of trading decisions.
+
 ```
-metis/
-├── research/              # Python: ML models and backtesting
-│   ├── data_ingest/       # API clients for 10+ data sources
-│   ├── features/          # Climate/policy feature engineering
-│   ├── models/            # LSTM hybrid, baselines
-│   └── backtest/          # Transaction cost simulator
-├── execution/             # Rust: Microstructure engine
-│   ├── orderbook/         # LOB simulator + PCAP parser
-│   ├── execution_algos/   # TWAP/VWAP implementations
-│   ├── fix_client/        # FIX session handler
-│   └── signal_interface/  # Python → Rust bridge
-├── rag/                   # LLM explanation pipeline
-│   ├── indexing/          # Vector DB setup + doc ingestion
-│   ├── retrieval/         # Semantic search
-│   └── generation/        # LLM orchestration
-├── ui/                    # Tauri + React frontend
-│   ├── src-tauri/         # Rust backend
-│   └── src/               # React components
-└── infrastructure/        # Optional DB schemas (no Docker)
+Python signals → PyO3 bridge (metis-core)
+              → lock-free fusion (crossbeam)
+              → order book + execution algos
+              → FIX protocol
+              → RAG explanation pipeline → Tauri UI
 ```
 
-## Quick Start
+## Status
 
-### Prerequisites
-- Python 3.11+
-- Rust 1.75+ (install via rustup)
-- Node.js 20+
-- LanceDB (Python), optional PostgreSQL
-- Git
-
-### Initial Setup (First 3 Days)
-
-#### Day 1: Data & Research Environment
-```bash
-# Install Python dependencies
-cd research
-pip install -r requirements.txt
-
-# Install RAG dependencies
-python -m pip install lancedb pyarrow sentence-transformers loguru
-
-# Optional: configure local PostgreSQL (set DB_URL in .env)
-```
-
-#### Day 2: Rust Order Book Parser
-```bash
-cd execution
-cargo build --release
-cargo test
-
-# Run LOB parser on sample data
-cargo run --bin lob_parser -- --input data/sample_ticks.csv
-```
-
-#### Day 3: Baseline ML Model
-```bash
-cd research/models
-python train_baseline_lstm.py --data-source open-meteo
-```
-
-## Target Instrument
-**CME Henry Hub Natural Gas (NG) Futures**
-- High weather correlation
-- Active HFT participation
-- Accessible historical tick data via CME DataMine/Databento
+| Component | Status |
+|-----------|--------|
+| Python data ingestion (13+ sources) | Active |
+| Feature engineering & LSTM model | Active |
+| Backtesting with transaction costs | Active |
+| Cloudflare R2 backup | Active |
+| Rust order book + execution algos | In progress |
+| PyO3 signal bridge (metis-core) | In progress |
+| FIX protocol client | In progress |
+| RAG indexing pipeline | In progress |
+| Tauri desktop UI | In progress |
 
 ## Performance Targets
-- Signal-to-execution latency: <100ms
-- Order book processing: <10μs per event
-- Backtest throughput: 1M ticks/second
-- RAG retrieval: <2s per query
 
-## Success Criteria
-- [ ] Backtest Sharpe >1.0 on NG futures with climate features
-- [ ] Rust execution layer <5% TWAP tracking error
-- [ ] RAG retrieval 90%+ accuracy on signal explanations
-- [ ] Full UI with synchronized playback
-- [ ] Reproducible setup without Docker (LanceDB default)
-- [ ] Technical writeup with performance profiling
+| Metric | Target |
+|--------|--------|
+| Signal-to-execution latency | < 100ms |
+| Order book processing | < 10μs per event |
+| Backtest throughput | 1M ticks/second |
+| RAG retrieval | < 2s per query |
 
-## Development Roadmap
-See [ROADMAP.md](ROADMAP.md) for 8-week implementation plan.
+## Repository Structure
 
-## Contributing
-This is a research/portfolio project. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+```
+metis/                  # Tauri desktop app (React + Rust backend)
+metis-core/             # Rust PyO3 library — signal fusion, SIMD, NUMA
+execution/              # Rust workspace — order book, execution algos, FIX client
+rag/                    # RAG indexing and retrieval pipeline
+research/
+├── data_ingest/        # API clients for all data sources
+├── features/           # Feature engineering
+├── models/             # LSTM hybrid model
+├── backtest/           # Transaction cost simulator
+├── ops/                # Ingestion orchestration scripts
+└── tests/              # Test suite
+docs/                   # Setup guide and documentation
+notes/                  # Research notes and strategy (gitignored)
+```
+
+## Getting Started
+
+See [docs/setup.md](docs/setup.md) for full environment setup instructions.
+
+**Quick reference:**
+```bash
+# Python pipeline
+pip install -r research/requirements.txt
+python research/ops/ingest_wrapper.py --frequency daily
+
+# Rust execution engine
+cd execution && cargo build --release
+
+# Rust core library (PyO3)
+cd metis-core && cargo build --release
+
+# Tauri desktop app
+cd metis && npm install && npm run tauri:dev
+```
+
+Requires Python 3.11+, Rust 1.75+, Node.js 20+. See [docs/setup.md](docs/setup.md) for platform-specific dependency installation.
 
 ## License
-MIT - See [LICENSE](LICENSE) for details.
+
+MIT

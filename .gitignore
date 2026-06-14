@@ -35,6 +35,9 @@ data/raw/
 data/processed/
 data/tick_data/
 data/historical/
+research/data/processed/
+research/data/raw/
+research/data/tick_data/
 # ML Models
 *.pt
 *.pth
@@ -91,6 +94,7 @@ postgres_data/
 secrets/
 
 # Logs
+archive/
 logs/
 *.log
 npm-debug.log*

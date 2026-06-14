@@ -1,4 +1,4 @@
-name: Tier 0 - CI/CD Baseline (Lint + Type Check + Imports)
+name: Tier 0 - CI Baseline (Lint + Tests + Rust Check)
 
 on:
   push:
@@ -14,131 +14,184 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python-lint:
-    name: Python Lint & Style
+  python-quality:
+    name: Python Quality (black + isort + pylint)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-      
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r research/requirements.txt
-          pip install pylint black isort
-      
-      - name: Lint with pylint (non-blocking)
-        run: |
-          pylint research/ --exit-zero --disable=all --enable=syntax-error,import-error
-        continue-on-error: true
-      
-      - name: Check code format with black
-        run: |
-          black --check research/ metis/ --line-length=100 || true
-        continue-on-error: true
-      
-      - name: Check import sorting
-        run: |
-          isort --check-only research/ metis/ || true
-        continue-on-error: true
 
-  python-typecheck:
-    name: Python Type Checking
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-      
+
+      - name: Install quality tools
+        run: pip install black isort pylint
+
+      - name: Check formatting (black)
+        run: black --check research/ --line-length=100
+
+      - name: Check import ordering (isort)
+        run: isort --check-only research/
+
+      - name: Lint for syntax/import errors (pylint)
+        run: |
+          pylint research/ \
+            --disable=all \
+            --enable=syntax-error,import-error,undefined-variable,undefined-all-variable \
+            --exit-zero \
+            --output-format=colorized
+
+  python-test:
+    name: Python Tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r research/requirements.txt
-          pip install mypy
-      
-      - name: Type check with mypy
-        run: |
-          mypy research/metrics.py research/log_rotation.py research/test_coordinator.py --ignore-missing-imports --no-error-summary || true
-        continue-on-error: true
+          pip install pytest
+
+      - name: Run tests
+        run: pytest research/test_ingestion.py -v
+        env:
+          PYTHONPATH: ${{ github.workspace }}
 
   python-imports:
     name: Python Import Validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-      
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r research/requirements.txt
-      
+
       - name: Validate core imports
         run: |
           python -c "from research.metrics import MetricsCollector; print('✓ metrics')"
           python -c "from research.log_rotation import rotate_logs; print('✓ log_rotation')"
-          python -c "from research.test_coordinator import TestCoordinator; print('✓ test_coordinator')"
           python -c "from research.metrics_service import MetricsService; print('✓ metrics_service')"
-      
-      - name: Check for circular imports
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Check for syntax errors
         run: |
-          python -m py_compile research/metrics.py research/log_rotation.py research/test_coordinator.py
-          echo "✓ No circular imports or syntax errors"
+          python -m py_compile research/metrics.py research/log_rotation.py research/orchestrate_daily_pipeline.py
+          echo "✓ No syntax errors"
 
   rust-check:
-    name: Rust Cargo Check + Clippy
+    name: Rust Check (execution + metis-core)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          override: true
           components: clippy
-      
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev pkg-config
-      
-      - name: Cargo check
-        run: |
-          cd metis/src-tauri
-          cargo check --all-targets
-      
-      - name: Clippy linting (non-blocking)
-        run: |
-          cd metis/src-tauri
-          cargo clippy --all-targets -- -D warnings || true
+          sudo apt-get install -y pkg-config libssl-dev python3-dev
+
+      - name: Cargo check — execution workspace
+        run: cargo check --workspace --all-targets
+        working-directory: execution
+
+      - name: Cargo check — metis-core
+        run: cargo check --all-targets
+        working-directory: metis-core
+
+      - name: Clippy — execution workspace (non-blocking)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: execution
         continue-on-error: true
+
+      - name: Clippy — metis-core (non-blocking)
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: metis-core
+        continue-on-error: true
+
+  rust-tauri:
+    name: Rust Check (Tauri)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-tauri-${{ hashFiles('metis/src-tauri/Cargo.lock') }}
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Cargo check — metis/src-tauri
+        run: cargo check --all-targets
+        working-directory: metis/src-tauri
 
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [python-lint, python-typecheck, python-imports, rust-check]
+    needs: [python-quality, python-test, python-imports, rust-check, rust-tauri]
     if: always()
     steps:
-      - name: Check workflow status
+      - name: Evaluate results
         run: |
-          if [ "${{ job.status }}" == "failure" ]; then
-            echo "⚠ CI checks completed with warnings (non-blocking)"
-            exit 0
-          else
-            echo "✅ All CI checks passed"
-          fi
+          results=(
+            "python-quality:${{ needs.python-quality.result }}"
+            "python-test:${{ needs.python-test.result }}"
+            "python-imports:${{ needs.python-imports.result }}"
+            "rust-check:${{ needs.rust-check.result }}"
+            "rust-tauri:${{ needs.rust-tauri.result }}"
+          )
+          failed=0
+          for r in "${results[@]}"; do
+            name="${r%%:*}"
+            status="${r##*:}"
+            if [ "$status" != "success" ]; then
+              echo "✗ $name: $status"
+              failed=1
+            else
+              echo "✓ $name: passed"
+            fi
+          done
+          [ $failed -eq 0 ] && echo "✅ All CI checks passed" || { echo "❌ CI failed"; exit 1; }

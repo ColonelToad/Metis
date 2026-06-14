@@ -88,7 +88,7 @@ try {
     # Start daily ingester
     $DailyJob = Start-Job -ScriptBlock {
         Set-Location $args[0]
-        python "ingest_wrapper.py" --frequency daily 2>&1
+        python "research/ops/ingest_wrapper.py" --frequency daily 2>&1
     } -ArgumentList $ProjectRoot
     $Jobs += $DailyJob
     $JobMap[$DailyJob.Id] = "DAILY"
@@ -97,7 +97,7 @@ try {
     if ($IsMonday) {
         $WeeklyJob = Start-Job -ScriptBlock {
             Set-Location $args[0]
-            python "ingest_wrapper.py" --frequency weekly 2>&1
+            python "research/ops/ingest_wrapper.py" --frequency weekly 2>&1
         } -ArgumentList $ProjectRoot
         $Jobs += $WeeklyJob
         $JobMap[$WeeklyJob.Id] = "WEEKLY"
@@ -107,7 +107,7 @@ try {
     if ($IsFirstOfMonth) {
         $MonthlyJob = Start-Job -ScriptBlock {
             Set-Location $args[0]
-            python "ingest_wrapper.py" --frequency monthly 2>&1
+            python "research/ops/ingest_wrapper.py" --frequency monthly 2>&1
         } -ArgumentList $ProjectRoot
         $Jobs += $MonthlyJob
         $JobMap[$MonthlyJob.Id] = "MONTHLY"

@@ -19,7 +19,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Setup paths
-RESEARCH_DIR = Path(__file__).parent / "research"
+RESEARCH_DIR = Path(__file__).parent.parent
 DATA_INGEST_DIR = RESEARCH_DIR / "data_ingest"
 
 # Add to Python path
@@ -28,7 +28,7 @@ sys.path.insert(0, str(DATA_INGEST_DIR))
 
 # Load environment
 from dotenv import load_dotenv
-env_file = RESEARCH_DIR / ".env"
+env_file = RESEARCH_DIR.parent / ".env"
 if env_file.exists():
     load_dotenv(env_file)
 
