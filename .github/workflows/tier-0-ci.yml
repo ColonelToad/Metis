@@ -62,7 +62,7 @@ jobs:
           pip install pytest
 
       - name: Run tests
-        run: pytest research/test_ingestion.py -v
+        run: pytest research/tests/test_ingestion.py -v
         env:
           PYTHONPATH: ${{ github.workspace }}
 

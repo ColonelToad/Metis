@@ -35,14 +35,14 @@ pip install -r requirements.txt
 
 # Data ingestion
 python research/ops/ingest_wrapper.py --frequency daily   # daily | weekly | monthly | all
-python research/orchestrate_daily_pipeline.py
+python research/ops/orchestrate_daily_pipeline.py
 
 # Individual runners
-python research/run_ingestion.py
-python research/metrics_service.py
-python research/r2_auto_backup.py
-python research/backfill_cme_direct.py
-python research/backfill_lmp_prod.py
+python research/ops/run_ingestion.py
+python research/ops/metrics_service.py
+python research/ops/r2_auto_backup.py
+python research/data_ingest/backfill_cme_direct.py
+python research/data_ingest/backfill_lmp_prod.py
 ```
 
 ### Rust execution engine (`execution/` workspace)

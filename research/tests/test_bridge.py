@@ -57,7 +57,7 @@ async def get_active_tests() -> Dict[str, Any]:
 
 async def _call_coordinator(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Call test coordinator via Python subprocess"""
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).parent.parent.parent
     
     python_code = f"""
 import sys

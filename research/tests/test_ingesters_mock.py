@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 # Add project root to path
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from research.data_ingest.run_all_ingesters import list_ingesters
@@ -101,10 +101,6 @@ def test_ingesters_mock():
         results["error"] = str(e)
         print(json.dumps(results))
         return 1
-
-
-if __name__ == "__main__":
-    exit(test_ingesters_mock())
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ async def _run_coordinator(method: str, params: Dict[str, Any]) -> Dict[str, Any
     Call test coordinator in subprocess
     This allows long-running tests to execute without blocking Tauri
     """
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).parent.parent.parent
     
     python_code = f"""
 import json

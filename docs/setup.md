@@ -103,7 +103,12 @@ The pipeline will run with partial keys — ingesters that cannot authenticate w
 
 ```bash
 cd research
+
+# Runtime dependencies (pipeline, ingestion, ML, RAG)
 pip install -r requirements.txt
+
+# Development and analysis dependencies (testing, Jupyter, visualization)
+pip install -r requirements-dev.txt
 ```
 
 **Key packages installed:**
