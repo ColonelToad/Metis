@@ -14,6 +14,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── Python formatting ────────────────────────────────────────────────────────
+  # Pattern: run the formatter, check git diff, fail with patch if it changed anything.
+  # Developer fixes locally and re-pushes — CI never auto-commits.
   python-quality:
     name: Python Quality (black + isort + pylint)
     runs-on: ubuntu-latest
@@ -26,15 +29,40 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      # Environment step — if this fails it's a setup problem, not a code problem
       - name: Install quality tools
         run: pip install black isort pylint
 
+      # Install full deps so pylint import checks reflect the actual environment
+      - name: Install project dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r research/requirements.txt
+
+      # Run formatter → check diff → fail with instructions if dirty
       - name: Check formatting (black)
-        run: black --check research/ --line-length=100
+        run: |
+          black research/ --line-length=100
+          if ! git diff --quiet; then
+            echo ""
+            echo "black reformatted the following files. Run 'black research/ --line-length=100' locally and commit:"
+            git diff --stat
+            git diff
+            exit 1
+          fi
 
       - name: Check import ordering (isort)
-        run: isort --check-only research/
+        run: |
+          isort research/
+          if ! git diff --quiet; then
+            echo ""
+            echo "isort reordered imports in the following files. Run 'isort research/' locally and commit:"
+            git diff --stat
+            git diff
+            exit 1
+          fi
 
+      # Informational only — syntax/import errors, exit-zero so it never blocks on env issues
       - name: Lint for syntax/import errors (pylint)
         run: |
           pylint research/ \
@@ -42,7 +70,10 @@ jobs:
             --enable=syntax-error,import-error,undefined-variable,undefined-all-variable \
             --exit-zero \
             --output-format=colorized
+        env:
+          PYTHONPATH: ${{ github.workspace }}
 
+  # ── Python tests ─────────────────────────────────────────────────────────────
   python-test:
     name: Python Tests (pytest)
     runs-on: ubuntu-latest
@@ -55,17 +86,19 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      # Environment step — full deps before any test runs
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r research/requirements.txt
-          pip install pytest
+          pip install pytest pytest-asyncio
 
       - name: Run tests
         run: pytest research/tests/test_ingestion.py -v
         env:
           PYTHONPATH: ${{ github.workspace }}
 
+  # ── Python import validation ──────────────────────────────────────────────────
   python-imports:
     name: Python Import Validation
     runs-on: ubuntu-latest
@@ -78,6 +111,7 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      # Full deps first — import errors must reflect code, not missing packages
       - name: Install dependencies
         run: |
           pip install --upgrade pip
@@ -85,16 +119,22 @@ jobs:
 
       - name: Validate core imports
         run: |
-          python -c "from research.metrics import MetricsCollector; print('✓ metrics')"
-          python -c "from research.config import *; print('✓ config')"
+          python -c "from research.metrics import MetricsCollector; print('metrics OK')"
+          python -c "from research.config import *; print('config OK')"
         env:
           PYTHONPATH: ${{ github.workspace }}
 
       - name: Check for syntax errors
         run: |
-          python -m py_compile research/metrics.py research/config.py research/ops/orchestrate_daily_pipeline.py research/ops/log_rotation.py
-          echo "✓ No syntax errors"
+          python -m py_compile \
+            research/metrics.py \
+            research/config.py \
+            research/ops/orchestrate_daily_pipeline.py \
+            research/ops/log_rotation.py
+          echo "No syntax errors"
 
+  # ── Rust formatting + check ───────────────────────────────────────────────────
+  # Same pattern: run rustfmt → check diff → fail with instructions if dirty.
   rust-check:
     name: Rust Check (execution workspace)
     runs-on: ubuntu-latest
@@ -103,7 +143,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: rustfmt, clippy
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -113,20 +153,36 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-${{ hashFiles('execution/Cargo.lock') }}
 
+      # Environment step — system libs for OpenSSL / PyO3
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev python3-dev
 
+      # Run rustfmt → check diff → fail with patch if dirty
+      - name: Check Rust formatting
+        working-directory: execution
+        run: |
+          cargo fmt --all
+          if ! git diff --quiet; then
+            echo ""
+            echo "cargo fmt changed the following files. Run 'cargo fmt --all' inside execution/ and commit:"
+            git diff --stat
+            git diff
+            exit 1
+          fi
+
       - name: Cargo check — full workspace (includes metis-core)
         run: cargo check --workspace --all-targets
         working-directory: execution
 
-      - name: Clippy — full workspace (non-blocking)
+      # Clippy is informational — warnings visible in logs, never block merge
+      - name: Clippy — full workspace (informational)
         run: cargo clippy --workspace --all-targets -- -D warnings
         working-directory: execution
         continue-on-error: true
 
+  # ── Tauri check ───────────────────────────────────────────────────────────────
   rust-tauri:
     name: Rust Check (Tauri)
     runs-on: ubuntu-22.04
@@ -134,6 +190,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -143,6 +201,7 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-tauri-${{ hashFiles('metis/src-tauri/Cargo.lock') }}
 
+      # Environment step — Tauri system libs
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -154,10 +213,23 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
+      - name: Check Rust formatting (Tauri)
+        working-directory: metis/src-tauri
+        run: |
+          cargo fmt --all
+          if ! git diff --quiet; then
+            echo ""
+            echo "cargo fmt changed files in metis/src-tauri. Run 'cargo fmt --all' there and commit:"
+            git diff --stat
+            git diff
+            exit 1
+          fi
+
       - name: Cargo check — metis/src-tauri
         run: cargo check --all-targets
         working-directory: metis/src-tauri
 
+  # ── Summary gate ─────────────────────────────────────────────────────────────
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
@@ -178,10 +250,10 @@ jobs:
             name="${r%%:*}"
             status="${r##*:}"
             if [ "$status" != "success" ]; then
-              echo "✗ $name: $status"
+              echo "FAIL $name: $status"
               failed=1
             else
-              echo "✓ $name: passed"
+              echo "PASS $name"
             fi
           done
-          [ $failed -eq 0 ] && echo "✅ All CI checks passed" || { echo "❌ CI failed"; exit 1; }
+          [ $failed -eq 0 ] && echo "All CI checks passed" || { echo "CI failed"; exit 1; }
