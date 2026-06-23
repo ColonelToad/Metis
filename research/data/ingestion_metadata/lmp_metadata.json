@@ -1,8 +1,8 @@
 {
-  "last_fetch_failed": "2026-06-05T08:54:05.555887",
-  "last_updated": "2026-06-13T07:05:00.472508",
-  "last_fetch_start": "2026-06-05T04:10:00",
-  "last_fetch_end": "2026-06-13T07:04:43.602373",
-  "last_fetch_success": "2026-06-13T07:05:00.472463",
-  "fetch_count": 128
+  "last_fetch_failed": "2026-06-23T06:25:39.540953",
+  "last_updated": "2026-06-23T06:25:39.540991",
+  "last_fetch_start": "2026-06-13T00:10:00",
+  "last_fetch_end": "2026-06-21T06:52:11.118797",
+  "last_fetch_success": "2026-06-21T06:52:28.179523",
+  "fetch_count": 138
 }
