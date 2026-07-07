@@ -1,126 +1,124 @@
-use anyhow::{Context, Result};
-use llama_cpp_2::model::Special;
-use llama_cpp_2::sampling::LlamaSampler;
-use llama_cpp_2::{
-    context::params::LlamaContextParams,
-    llama_backend::LlamaBackend,
-    llama_batch::LlamaBatch,
-    model::{params::LlamaModelParams, AddBos, LlamaModel},
-};
-use std::num::NonZeroU32;
+use anyhow::anyhow;
+use pyo3::prelude::*;
 use std::path::Path;
-use std::sync::Arc;
 
+/// LLM inference engine using Python backend (via PyO3)
+/// Avoids C++ compilation issues by delegating to Python's llama inference
 pub struct LocalLLMEngine {
-    #[allow(dead_code)]
     model_path: String,
     mock_mode: bool,
-    backend: Option<Arc<LlamaBackend>>,
-    model: Option<Arc<LlamaModel>>,
 }
 
 impl LocalLLMEngine {
-    pub fn new(model_path: impl AsRef<Path>, mock_mode: bool) -> Result<Self> {
+    pub fn new(model_path: impl AsRef<Path>, mock_mode: bool) -> anyhow::Result<Self> {
         let model_path = model_path.as_ref().to_string_lossy().to_string();
 
         if !mock_mode && !Path::new(&model_path).exists() {
             anyhow::bail!("Model file not found: {}", model_path);
         }
 
-        let (backend, model) = if !mock_mode {
-            // Initialize backend
-            let backend = LlamaBackend::init().context("Failed to initialize LlamaBackend")?;
-
-            // Load model
-            let model_params = LlamaModelParams::default();
-            let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
-                .context("Failed to load Llama model")?;
-
-            (Some(Arc::new(backend)), Some(Arc::new(model)))
-        } else {
-            (None, None)
-        };
-
         Ok(Self {
             model_path,
             mock_mode,
-            backend,
-            model,
         })
     }
 
-    pub async fn generate(&self, prompt: &str, max_tokens: usize) -> Result<String> {
+    pub async fn generate(&self, prompt: &str, max_tokens: usize) -> anyhow::Result<String> {
         if self.mock_mode {
             return Ok(self.mock_generate(prompt));
         }
 
-        let model = Arc::clone(self.model.as_ref().context("Model not loaded")?);
-        let backend = Arc::clone(self.backend.as_ref().context("Backend not loaded")?);
         let prompt = prompt.to_string();
+        let model_path = self.model_path.clone();
 
-        // Run inference in a blocking task
+        // Run inference in a blocking task via Python
         tokio::task::spawn_blocking(move || {
-            // Create context
-            let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(2048));
+            Python::with_gil(|py| {
+                // ==========================================================
+                // FIX: Inject local directories into Python's sys.path
+                // ==========================================================
+                if let Ok(sys) = py.import_bound("sys") {
+                    if let Ok(path) = sys.getattr("path") {
+                        // 1. Add your explicit Metis path
+                        let _ = path.call_method1("append", ("C:\\Users\\legot\\Metis",));
 
-            let mut ctx = model
-                .new_context(&backend, ctx_params)
-                .context("Failed to create context")?;
-
-            // Tokenize the prompt (prompt already starts with <|begin_of_text|> so use AddBos::Never)
-            let tokens = model
-                .str_to_token(&prompt, AddBos::Never)
-                .context("Failed to tokenize prompt")?;
-
-            // Create batch and add tokens
-            let mut batch = LlamaBatch::new(512, 1);
-
-            for (i, &token) in tokens.iter().enumerate() {
-                let is_last = i == tokens.len() - 1;
-                batch
-                    .add(token, i as i32, &[0], is_last)
-                    .context("Failed to add token to batch")?;
-            }
-
-            // Decode the batch
-            ctx.decode(&mut batch).context("Failed to decode batch")?;
-
-            // Use greedy sampling - deterministic and more reliable
-            // Avoids probability distribution issues that can occur with temperature sampling
-            let mut sampler = LlamaSampler::greedy();
-
-            // Generate tokens
-            let mut output = String::new();
-            let mut n_cur = tokens.len();
-
-            for _ in 0..max_tokens {
-                // Sample next token
-                let new_token_id = sampler.sample(&ctx, batch.n_tokens() - 1);
-
-                // Check for EOS
-                if model.is_eog_token(new_token_id) {
-                    break;
+                        // 2. Dynamically add the current working directory
+                        if let Ok(cwd) = std::env::current_dir() {
+                            let _ = path.call_method1("append", (cwd.to_string_lossy().as_ref(),));
+                        }
+                    }
                 }
+                // ==========================================================
 
-                // Decode token to string
-                let token_str = model
-                    .token_to_str(new_token_id, Special::Tokenize)
-                    .context("Failed to decode token")?;
+                // Escape quotes and newlines for Python string literal
+                let escaped_prompt = prompt
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\n', "\\n")
+                    .replace('\r', "\\r")
+                    .replace('\t', "\\t");
 
-                output.push_str(&token_str);
+                let model_path_escaped = model_path.replace('\\', "\\\\").replace('"', "\\\"");
 
-                // Prepare for next iteration
-                batch.clear();
-                batch
-                    .add(new_token_id, n_cur as i32, &[0], true)
-                    .context("Failed to add token to batch")?;
+                let code = format!(
+                    r#"
+import os
+import warnings
 
-                ctx.decode(&mut batch).context("Failed to decode batch")?;
+# 1. SILENCE WARNINGS BEFORE ANYTHING LOADS
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+warnings.filterwarnings('ignore')
 
-                n_cur += 1;
-            }
+try:
+    import sys
+    from pathlib import Path
 
-            Ok(output)
+    # PRIMARY: Try llama-cpp-python natively
+    try:
+        from llama_cpp import Llama
+        llm = Llama(model_path="{}", n_ctx=2048, n_gpu_layers=-1, verbose=False)
+        output = llm("{}", max_tokens={}, temperature=0.7)
+        __llm_output__ = output["choices"][0]["text"]
+    except Exception as e1:
+        print(f"\n--- LLAMA-CPP ERROR: {{str(e1)}} ---")
+        
+        # FALLBACK: Try Ollama
+        try:
+            import ollama
+            client = ollama.Client()
+            response = client.generate(
+                model="deepseek-r1:7b-qwen",
+                prompt="{}",
+                stream=False,
+                options={{"num_predict": {}}}
+            )
+            __llm_output__ = response.get("response", "")
+        except Exception as e2:
+            print(f"--- OLLAMA ERROR: {{str(e2)}} ---\n")
+            __llm_output__ = "LLM inference unavailable"
+
+except Exception as e:
+    import traceback
+    traceback.print_exc()
+    raise Exception(f"LLM generation failed: {{str(e)}}")
+"#,
+                    model_path_escaped, escaped_prompt, max_tokens, escaped_prompt, max_tokens
+                );
+
+                // Execute the inference code
+                py.run_bound(&code, None, None)
+                    .map_err(|e| anyhow!("LLM execution failed: {}", e))?;
+
+                // Extract the output
+                let output = py
+                    .eval_bound("__llm_output__", None, None)
+                    .map_err(|e| anyhow!("Output extraction failed: {}", e))?
+                    .extract::<String>()
+                    .map_err(|e| anyhow!("Failed to extract LLM output: {}", e))?;
+
+                Ok(output)
+            })
         })
         .await?
     }

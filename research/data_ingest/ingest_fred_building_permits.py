@@ -191,26 +191,40 @@ def ensure_table(engine) -> None:
 
 
 def upsert_permits(engine, df: pd.DataFrame) -> None:
-    """Upsert permit data into database."""
+    """Upsert permit data into database by filtering out existing dates."""
     if df.empty:
         print("[FRED] No data to upsert")
         return
     
     ensure_table(engine)
     
-    # Use pandas to_sql with proper types
-    df_insert = df.copy()
+    # 1. Find the maximum date currently in the database
+    with engine.connect() as conn:
+        max_date_str = conn.execute(text("SELECT MAX(date) FROM census_permits")).scalar()
+    
+    # 2. Filter the incoming DataFrame to only include strictly new dates
+    if max_date_str:
+        max_date = pd.to_datetime(max_date_str)
+        df_insert = df[df['date'] > max_date].copy()
+    else:
+        df_insert = df.copy()
+        
+    if df_insert.empty:
+        print("[FRED] No new records to insert. All dates already up to date.")
+        return
+    
+    # 3. Insert the new filtered records
     df_insert['timestamp'] = datetime.now().isoformat()
     
     try:
         df_insert.to_sql(
             'census_permits',
             engine,
-            if_exists='append',  # Use 'append' instead of 'replace' to avoid transaction issues
+            if_exists='append',
             index=False,
             method='multi'
         )
-        print(f"[FRED] Upserted {len(df)} permit records")
+        print(f"[FRED] Upserted {len(df_insert)} new permit records")
     except Exception as e:
         print(f"[FRED] Error upserting permits: {e}")
         # Rollback any pending transaction
@@ -218,8 +232,6 @@ def upsert_permits(engine, df: pd.DataFrame) -> None:
             engine.rollback()
         except:
             pass
-        # Dispose of connections to reset state
-        engine.dispose()
         raise
     finally:
         # Always dispose of engine after use

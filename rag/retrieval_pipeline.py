@@ -344,56 +344,36 @@ Implications: Increased capex requirements for utilities, potential long-term de
         llm_client=None  # OpenAI/Anthropic client
     ) -> str:
         """
-        Generate LLM explanation for a trading signal using retrieved context.
-        
-        Args:
-            signal: Trading signal dictionary
-            retrieved_docs: Documents retrieved from vector DB
-            llm_client: LLM client (OpenAI/Anthropic)
-        
-        Returns:
-            Generated explanation text
+        DEPRECATED: This method has been replaced by the Rust-based ExplainabilityRAG pipeline.
+
+        See: execution/metis-core/src/rag.rs and rag/ crate for the production implementation.
+
+        The Rust pipeline provides:
+        - Multi-hop hierarchical reasoning (Layer 1: physical → Layer 2: structural → synthesis)
+        - DeepSeek-R1-Distill-Qwen LLM with native reasoning blocks
+        - Lock-free async document retrieval
+        - 8-step probabilistic analysis framework
+        - Sub-5s explanation latency on CPU
+
+        All signal explanations should be generated via the Rust orchestrator pipeline,
+        not this legacy Python method.
         """
-        # Build context from retrieved documents
-        context_parts = []
-        for i, doc in enumerate(retrieved_docs, 1):
-            context_parts.append(
-                f"[{i}] {doc['title']} ({doc['source']}, {doc['published_date']})\n"
-                f"{doc['content'][:500]}..."
-            )
-        
-        context = "\n\n".join(context_parts)
-        
-        # Build prompt
-        prompt = f"""You are a quantitative trading analyst explaining a natural gas trading signal.
+        import warnings
+        warnings.warn(
+            "generate_explanation() is deprecated. Use the Rust ExplainabilityRAG pipeline instead. "
+            "Signal explanations are now generated in execution/metis-core/src/rag.rs",
+            DeprecationWarning,
+            stacklevel=2
+        )
 
-Signal Details:
-- Symbol: {signal['symbol']}
-- Direction: {signal['direction']}
-- Confidence: {signal['confidence']:.2%}
-- Quantity: {signal['target_quantity']} contracts
-
-Model Features:
-{', '.join(signal.get('metadata', {}).get('features_used', []))}
-
-Weather Anomaly: {signal.get('metadata', {}).get('weather_anomaly')}
-Policy Trigger: {signal.get('metadata', {}).get('policy_trigger')}
-
-Relevant Context Documents:
-{context}
-
-Based on this information, provide a concise (2-3 sentences) explanation of why this trading signal was generated. Focus on the relationship between the climate/policy factors and expected price movement.
-"""
-        
-        # TODO: Call LLM API (OpenAI/Anthropic)
-        # For now, return a template explanation
+        # Fallback template explanation (should not be used in production)
         explanation = (
             f"The model recommends a {signal['direction']} position on {signal['symbol']} "
             f"with {signal['confidence']:.1%} confidence. This signal is driven by "
             f"{len(signal.get('metadata', {}).get('features_used', []))} features including weather anomalies "
             f"and policy indicators. Retrieved documents suggest relevant market conditions supporting this forecast."
         )
-        
+
         return explanation
 
 

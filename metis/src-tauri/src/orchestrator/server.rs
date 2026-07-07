@@ -37,7 +37,7 @@ pub async fn start_http_server(project_root: PathBuf, port: u16) {
 
     info!("Project root: {}", project_root.display());
 
-    let orchestrator = Arc::new(Orchestrator::new(project_root));
+    let orchestrator = Arc::new(Orchestrator::new(project_root).await);
     let job_queue = Arc::new(JobQueue::new());
 
     let state = AppState {

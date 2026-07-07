@@ -17,6 +17,8 @@ htmlcov/
 dist/
 build/
 notes/
+claude/
+.claude/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -108,6 +110,18 @@ results/
 backtest_output/
 execution_logs/
 
-# Vector DB
+# Vector DB (LanceDB, Milvus, Weaviate)
 milvus_data/
 weaviate_data/
+lance/
+*/lance/
+**/lance/
+data/dev/lance/
+research/data/dev/lance/
+rag/lancedb/
+
+# Development data (never commit ingested data)
+data/dev/
+research/data/dev/
+research/data/cache_metadata/
+research/data/ingestion_metadata/

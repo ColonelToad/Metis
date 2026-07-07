@@ -3,6 +3,7 @@ use super::python_runner::{PythonPipelineResult, PythonRunner};
 use super::types::*;
 use chrono::DateTime;
 use parking_lot::RwLock;
+use rag::ExplainabilityRAG;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,14 +15,47 @@ pub struct Orchestrator {
     python_runner: PythonRunner,
     results: Arc<RwLock<HashMap<String, PipelineResult>>>,
     project_root: PathBuf,
+    rag_pipeline: Option<Arc<ExplainabilityRAG>>,
 }
 
 impl Orchestrator {
-    pub fn new(project_root: PathBuf) -> Self {
+    pub async fn new(project_root: PathBuf) -> Self {
+        let python_runner = PythonRunner::new(project_root.clone());
+
+        // Initialize RAG pipeline (optional - log failures but don't fail the whole orchestrator)
+        let rag_pipeline = Self::init_rag_pipeline(&project_root).await;
+        if rag_pipeline.is_none() {
+            warn!("RAG pipeline initialization failed - explanations will not be generated");
+        }
+
         Self {
-            python_runner: PythonRunner::new(project_root.clone()),
+            python_runner,
             results: Arc::new(RwLock::new(HashMap::new())),
             project_root,
+            rag_pipeline,
+        }
+    }
+
+    /// Initialize the RAG pipeline
+    async fn init_rag_pipeline(project_root: &PathBuf) -> Option<Arc<ExplainabilityRAG>> {
+        let model_path = project_root.join("rag/llm/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf");
+        let db_path = project_root.join("rag/lancedb");
+
+        match ExplainabilityRAG::new(
+            model_path.to_string_lossy().as_ref(),
+            db_path.to_string_lossy().as_ref(),
+            false, // not mock mode in production
+        )
+        .await
+        {
+            Ok(rag) => {
+                info!("RAG pipeline initialized successfully");
+                Some(Arc::new(rag))
+            }
+            Err(e) => {
+                warn!("Failed to initialize RAG pipeline: {}", e);
+                None
+            }
         }
     }
 
@@ -42,7 +76,7 @@ impl Orchestrator {
 
         // Run Python pipeline
         match self.python_runner.run_pipeline().await {
-            Ok(python_result) => self.handle_success(&job_id, python_result, mode, start),
+            Ok(python_result) => self.handle_success(&job_id, python_result, mode, start).await,
             Err(e) => {
                 let error_msg = format!("Python pipeline execution failed: {}", e);
                 error!("[{}] {}", job_id, error_msg);
@@ -69,7 +103,7 @@ impl Orchestrator {
     }
 
     /// Handle successful Python execution
-    fn handle_success(
+    async fn handle_success(
         &self,
         job_id: &str,
         python_result: PythonPipelineResult,
@@ -107,7 +141,7 @@ impl Orchestrator {
             job_id, ingest_success, features_success, inference_success
         );
 
-        // Parse signals from Python output
+        // Parse signals from Python output and generate explanations
         let mut signals = Vec::new();
         for signal_json in python_result.signals {
             if let Ok(signal) = self.parse_signal(&signal_json) {
@@ -115,7 +149,40 @@ impl Orchestrator {
                     "[{}] Parsed signal: {} {} @{:.2}",
                     job_id, signal.symbol, signal.direction, signal.confidence
                 );
-                signals.push(signal);
+
+                // Generate explanation if RAG pipeline is available
+                if let Some(rag) = &self.rag_pipeline {
+                    let rag_signal = Self::signal_to_rag(&signal);
+                    let explain_start = Instant::now();
+
+                    match rag.explain_signal(&rag_signal).await {
+                        rag::pipeline::ExplanationResult::Success { explanation } => {
+                            let explain_duration = explain_start.elapsed();
+                            info!(
+                                "[{}] Generated explanation for signal {} in {:.2}s",
+                                job_id,
+                                signal.signal_id,
+                                explain_duration.as_secs_f64()
+                            );
+                            // Store explanation in metadata for later retrieval
+                            let mut signal_with_explanation = signal.clone();
+                            signal_with_explanation.metadata.insert(
+                                "explanation_id".to_string(),
+                                explanation.signal_id.clone(),
+                            );
+                            signals.push(signal_with_explanation);
+                        }
+                        _ => {
+                            warn!(
+                                "[{}] Failed to generate explanation for signal {}",
+                                job_id, signal.signal_id
+                            );
+                            signals.push(signal);
+                        }
+                    }
+                } else {
+                    signals.push(signal);
+                }
             } else {
                 warn!("[{}] Failed to parse signal: {:?}", job_id, signal_json);
             }
@@ -192,6 +259,57 @@ impl Orchestrator {
         }
 
         Ok(result)
+    }
+
+    /// Convert orchestrator signal to RAG signal format
+    fn signal_to_rag(orch_signal: &TradingSignal) -> rag::types::TradingSignal {
+        // Extract context from metadata if available
+        let grid_stress = orch_signal
+            .metadata
+            .get("grid_stress_index")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(50.0);
+
+        let temp_anomaly = orch_signal
+            .metadata
+            .get("temperature_anomaly")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        let primary_region = orch_signal
+            .metadata
+            .get("primary_region")
+            .cloned()
+            .unwrap_or_else(|| "ERCOT".to_string());
+
+        let recent_policy = orch_signal
+            .metadata
+            .get("policy_events")
+            .map(|s| s.split(';').map(|e| e.to_string()).collect())
+            .unwrap_or_default();
+
+        rag::types::TradingSignal {
+            id: orch_signal.signal_id.clone(),
+            instrument: orch_signal.symbol.clone(),
+            direction: match orch_signal.direction.to_uppercase().as_str() {
+                "BUY" => "LONG".to_string(),
+                "SELL" => "SHORT".to_string(),
+                other => other.to_string(),
+            },
+            confidence: orch_signal.confidence,
+            timestamp: orch_signal.timestamp,
+            context: rag::types::TradingContext {
+                current_price: orch_signal
+                    .metadata
+                    .get("current_price")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0),
+                grid_stress_index: grid_stress,
+                temperature_anomaly: temp_anomaly,
+                recent_policy_events: recent_policy,
+                primary_region,
+            },
+        }
     }
 
     /// Parse a signal from JSON
@@ -293,10 +411,10 @@ impl Orchestrator {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_orchestrator_new() {
+    #[tokio::test]
+    async fn test_orchestrator_new() {
         let root = PathBuf::from("/tmp");
-        let orch = Orchestrator::new(root.clone());
+        let orch = Orchestrator::new(root.clone()).await;
         assert_eq!(orch.project_root, root);
     }
 }

@@ -62,14 +62,17 @@ class LanceVectorStore:
         q = self.table.search(query_embedding, vector_column_name="embedding")
         if source_filter:
             q = q.where(f"source = '{source_filter}'")
+            
+        # FIX: Use .to_list() instead of .to_pandas() to stop Heap Corruption
         res = (
             q
             .limit(top_k)
             .select(["id", "title", "content", "source", "published_date", "url"])
-            .to_pandas()
+            .to_list()
         )
+        
         out = []
-        for _, row in res.iterrows():
+        for row in res:
             out.append({
                 "doc_id": row["id"],
                 "score": float(row.get("_distance", 0.0)),

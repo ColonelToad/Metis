@@ -26,8 +26,9 @@ async fn main() {
     let mock_mode = false;
 
     println!("Initializing RAG pipeline (mock_mode: {})...", mock_mode);
+    // Using DeepSeek-R1-Distill-Qwen for multi-step reasoning capability
     let rag = ExplainabilityRAG::new(
-        "./llm/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+        "./llm/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
         "mock.db",
         mock_mode,
     )

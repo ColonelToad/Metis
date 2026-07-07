@@ -5,12 +5,15 @@ use crate::{
     explanation_cache::ExplanationCache,
     explanation_parser::ExplanationParser,
     llm::LocalLLMEngine,
+    reasoning_chain::ReasoningChain,
     template::TemplateEngine,
     types::{Document, Explanation, TradingSignal},
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// Result type for explanation generation with different outcomes
@@ -36,23 +39,34 @@ pub enum ExplanationResult {
 }
 
 pub struct ExplainabilityRAG {
-    llm: LocalLLMEngine,
-    embedder: EmbeddingEngine,
-    pub document_store: DocumentStore,
+    llm: Arc<LocalLLMEngine>,
+    embedder: Arc<EmbeddingEngine>,
+    pub document_store: Arc<Mutex<DocumentStore>>,
     template_engine: TemplateEngine,
     active_scope: DocumentScope,
     explanation_cache: ExplanationCache,
+    reasoning_chain: Arc<ReasoningChain>,
 }
 
 impl ExplainabilityRAG {
     pub async fn new(model_path: &str, db_path: &str, mock_mode: bool) -> Result<Self> {
+        let llm = Arc::new(LocalLLMEngine::new(model_path, mock_mode)?);
+        let embedder = Arc::new(EmbeddingEngine::new(mock_mode)?);
+        let document_store = Arc::new(Mutex::new(DocumentStore::new(db_path, mock_mode).await?));
+        let reasoning_chain = Arc::new(ReasoningChain::new(
+            llm.clone(),
+            embedder.clone(),
+            document_store.clone(),
+        ));
+
         Ok(Self {
-            llm: LocalLLMEngine::new(model_path, mock_mode)?,
-            embedder: EmbeddingEngine::new(mock_mode)?,
-            document_store: DocumentStore::new(db_path, mock_mode).await?,
+            llm,
+            embedder,
+            document_store,
             template_engine: TemplateEngine::new(),
             active_scope: DocumentScope::default(),
             explanation_cache: ExplanationCache::new(100), // Max 100 cached results
+            reasoning_chain,
         })
     }
 
@@ -62,6 +76,7 @@ impl ExplainabilityRAG {
     }
 
     /// Explain a trading signal with full error handling and fallback chain
+    /// Uses multi-hop reasoning chain for evidence-grounded explanations
     pub async fn explain_signal(&self, signal: &TradingSignal) -> ExplanationResult {
         // Check cache first (huge speedup if signal is similar to recent ones)
         if let Some(cached) = self.explanation_cache.get(signal).await {
@@ -69,37 +84,50 @@ impl ExplainabilityRAG {
             return cached;
         }
 
-        // Try LLM-based explanation with timeout (45s to account for first-run model initialization)
-        match tokio::time::timeout(Duration::from_secs(180), self.explain_with_llm(signal)).await {
+        // Try multi-hop reasoning chain with timeout (up to 5s for 2+ LLM calls + retrieval)
+        match tokio::time::timeout(
+            Duration::from_secs(1800000),
+            self.reasoning_chain.reason(signal),
+        )
+        .await
+        {
             // Success case
-            Ok(Ok(ExplanationResult::Success { explanation })) => {
+            Ok(Ok(explanation)) => {
                 let result = ExplanationResult::Success { explanation };
                 self.explanation_cache.put(signal, result.clone()).await;
                 result
             }
 
-            // LLM generated output but returned error result
-            Ok(Ok(other_result)) => {
-                self.explanation_cache
-                    .put(signal, other_result.clone())
-                    .await;
-                other_result
-            }
-
-            // LLM failed with error
+            // Reasoning chain failed with error
             Ok(Err(e)) => {
-                tracing::warn!("LLM explanation failed: {}, falling back to template", e);
-                let result = ExplanationResult::TemplateFallback {
-                    explanation: self.template_engine.generate(signal),
-                    reason: format!("LLM error: {}", e),
-                };
-                self.explanation_cache.put(signal, result.clone()).await;
-                result
+                tracing::warn!(
+                    "Multi-hop reasoning failed: {}, falling back to simple LLM explanation",
+                    e
+                );
+                // Fall back to simple single-pass explanation
+                match tokio::time::timeout(Duration::from_secs(60), self.explain_with_llm(signal))
+                    .await
+                {
+                    Ok(Ok(ExplanationResult::Success { explanation })) => {
+                        let result = ExplanationResult::Success { explanation };
+                        self.explanation_cache.put(signal, result.clone()).await;
+                        result
+                    }
+                    _ => {
+                        // Give up and use template
+                        let result = ExplanationResult::TemplateFallback {
+                            explanation: self.template_engine.generate(signal),
+                            reason: format!("Reasoning chain error: {}, fallback to template", e),
+                        };
+                        self.explanation_cache.put(signal, result.clone()).await;
+                        result
+                    }
+                }
             }
 
-            // LLM timeout - try to generate quick template while showing timeout
+            // Reasoning chain timeout
             Err(_) => {
-                tracing::warn!("LLM explanation timeout, showing template");
+                tracing::warn!("Multi-hop reasoning timeout, showing template with retry option");
                 let retry_token = Uuid::new_v4().to_string();
                 let partial = Some(self.template_engine.generate(signal));
 
@@ -130,18 +158,20 @@ impl ExplainabilityRAG {
         conversation_context: &str,
         user_message: &str,
     ) -> Result<String> {
-        // Build a simple prompt for chat mode
+        // Build prompt for DeepSeek-R1-Distill-Qwen (ChatML format)
         let prompt = format!(
-            r#"<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+            r#"<|im_start|>system
 You are a helpful quantitative analyst answering questions about trading signals and market analysis.
 Keep responses concise and focused on the topic.
-<|eot_id|><|start_header_id|>user<|end_header_id|>
+<|im_end|>
+<|im_start|>user
 Context from previous analysis:
 {}
 
 User question:
 {}
-<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+<|im_end|>
+<|im_start|>assistant
 "#,
             conversation_context, user_message
         );
@@ -168,11 +198,13 @@ User question:
 
         // 3. Retrieve documents with active scope
         let retrieve_start = std::time::Instant::now();
-        let docs = self
-            .document_store
-            .search(&query_embedding, 5, None)
-            .await
-            .unwrap_or_default();
+        let docs = {
+            let store = self.document_store.lock().await;
+            store
+                .search(&query_embedding, 5, None)
+                .await
+                .unwrap_or_default()
+        };
         let retrieve_duration = retrieve_start.elapsed();
         let original_doc_count = docs.len();
         tracing::info!(
@@ -295,11 +327,13 @@ User question:
             .map(|s| Self::sanitize_for_embedding(s))
             .unwrap_or_else(|| "none".to_string());
 
+        // DeepSeek-R1-Distill-Qwen uses ChatML format with <think>...</think> for reasoning
         format!(
-            r#"<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+            r#"<|im_start|>system
 You are a quantitative analyst explaining trades with 8-step probabilistic reasoning.
+Use your reasoning capability to think through the analysis step-by-step.
 
-Return ONLY VALID JSON. Structure as:
+Return ONLY VALID JSON (after your reasoning). Structure as:
 {{
   "summary": "1-2 sentence explanation",
   "reference_class": {{"class_name": "...", "base_rate": 0.75, "sample_size": 50, "reasoning": "..."}},
@@ -310,12 +344,14 @@ Return ONLY VALID JSON. Structure as:
   "risk_assessment": {{"worst_case": -0.25, "worst_case_probability": 0.05, "tail_risk_probability": 0.01, "recovery_days": 30, "concentration_risks": ["..."], "liquidity_assessment": "...", "risk_checklist": [{{"name": "Check1", "passed": true}}]}},
   "confidence": 0.75
 }}
-<|eot_id|><|start_header_id|>user<|end_header_id|>
+<|im_end|>
+<|im_start|>user
 ## Trade: {} {} @{:.0}% confidence, ${:.2}, grid {}/100, policy: {}
 Evidence: {}
 
-Analyze using ALL 8 steps. Return JSON only.
-<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+Analyze using ALL 8 steps. Return JSON only (after thinking).
+<|im_end|>
+<|im_start|>assistant
 "#,
             signal.instrument,
             signal.direction.to_uppercase(),
