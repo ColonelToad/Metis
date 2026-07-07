@@ -472,14 +472,14 @@ impl ExplanationParser {
         }
 
         // Check: reasonable length (not truncated)
-        if explanation.raw_text.len() < 100 {
+        // Note: Lowered to 50 since our JSON is now much more concise
+        if explanation.raw_text.len() < 50 {
             return Err("Explanation too short (may be truncated)".to_string());
         }
 
-        // Check: has at least some structured content
+        // Check: has at least some structured content from our simple schema
         let has_analysis = explanation.market_analysis.is_some();
         let has_drivers = explanation.signal_drivers.is_some();
-        let _has_citations = !explanation.citations.is_empty();
 
         if !has_analysis && !has_drivers {
             return Err("No structured analysis found".to_string());

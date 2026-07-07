@@ -184,7 +184,7 @@ impl ReasoningChain {
                     i + 1,
                     doc.title,
                     doc.source,
-                    &doc.content[..std::cmp::min(200, doc.content.len())]
+                    &doc.content[..std::cmp::min(15000, doc.content.len())]
                 )
             })
             .collect::<Vec<_>>()
@@ -203,7 +203,21 @@ Documents:
             evidence
         );
 
-        let summary = self.llm.generate(&prompt, 150).await?;
+        // INCREASE tokens from 150 to 500 so it can finish thinking
+        let raw_summary = self.llm.generate(&prompt, 500).await?;
+
+        // BULLETPROOF THINK STRIPPER
+        let summary = if let Some(end_idx) = raw_summary.rfind("</think>") {
+            // It finished thinking, take everything after the end tag
+            raw_summary[end_idx + "</think>".len()..].trim().to_string()
+        } else if let Some(start_idx) = raw_summary.find("<think>") {
+            // It started thinking but got cut off! The whole thing is useless thought.
+            "(Summary generation was truncated due to context limits)".to_string()
+        } else {
+            // No think tags at all, just return the text
+            raw_summary.trim().to_string()
+        };
+
         tracing::debug!("Document summary: {}", summary);
         Ok(summary)
     }
@@ -223,7 +237,7 @@ Documents:
                 .iter()
                 .enumerate()
                 .map(|(i, doc)| {
-                    let excerpt = &doc.content[..std::cmp::min(150, doc.content.len())];
+                    let excerpt = &doc.content[..std::cmp::min(20000, doc.content.len())];
                     format!("[{}] {} ({}) - {}", i + 1, doc.title, doc.source, excerpt)
                 })
                 .collect::<Vec<_>>()
@@ -240,46 +254,16 @@ Documents:
 
         let prompt = format!(
             r#"<|im_start|>system
-You are a quantitative analyst. Return ONLY VALID JSON using the exact schema below.
+You are a quantitative trading analyst. Your output must be a single, valid JSON object. 
+Analyze the provided context and populate the fields below with your actual reasoning. DO NOT output placeholder text.
+
+TEMPLATE:
 {{
-  "reference_class": {{
-    "class_name": "string",
-    "base_rate": 0.0,
-    "sample_size": 0,
-    "reasoning": "string"
-  }},
-  "ensemble": {{
-    "components": [{{ "source": "string", "signal": 0.0, "confidence": 0.0, "weight": 0.0 }}],
-    "final_signal": 0.0,
-    "agreement": 0.0
-  }},
-  "bayesian_update": {{
-    "prior": 0.0,
-    "likelihood_ratio": 0.0,
-    "posterior": 0.0,
-    "evidence_summary": "string"
-  }},
-  "scenarios": [
-    {{"name": "string", "probability": 0.0, "payoff": 0.0, "payoff_min": 0.0, "payoff_max": 0.0, "description": "string"}}
-  ],
-  "expected_value": {{
-    "expected_return": 0.0,
-    "volatility": 0.0,
-    "sharpe_ratio": 0.0,
-    "kelly_position_size": 0.0,
-    "interpretation": "string"
-  }},
-  "risk_assessment": {{
-    "worst_case": 0.0,
-    "worst_case_probability": 0.0,
-    "recovery_days": 0,
-    "tail_risk_probability": 0.0,
-    "concentration_risks": ["string"],
-    "liquidity_assessment": "string",
-    "risk_checklist": [["string", true]]
-  }},
-  "confidence_score": 0.0,
-  "raw_text": "string"
+  "market_analysis": "Write a 2-3 sentence summary of the physical market conditions based on the context.",
+  "signal_drivers": "Explain the structural or policy factors driving this signal.",
+  "risks": "Identify the primary risks based on the documents.",
+  "expected_outcome": "What is the expected outcome of this trade?",
+  "confidence_score": 0.85
 }}
 <|im_end|>
 <|im_start|>user
@@ -291,7 +275,7 @@ You are a quantitative analyst. Return ONLY VALID JSON using the exact schema be
 ### Structural Constraints & Policy (Layer 2):
 {}
 
-Synthesize into a comprehensive 8-step probabilistic analysis. Return JSON only.
+Synthesize the context into the JSON template provided. Return JSON only.
 <|im_end|>
 <|im_start|>assistant
 "#,
@@ -302,15 +286,34 @@ Synthesize into a comprehensive 8-step probabilistic analysis. Return JSON only.
             layer1_summary,
             evidence
         );
+
+        println!("\n================ PROMPT DEBUG ================");
+        println!("{}", prompt);
+        println!("==============================================\n");
+
         let raw_response = self.llm.generate(&prompt, 800).await?;
 
-        // Extract ONLY the JSON object by finding the first '{' and last '}'
+        // 1. BULLETPROOF JSON EXTRACTION
+        let mut json_str = raw_response.as_str();
+
+        // Slice away the <think> block entirely if it exists
+        if let Some(idx) = json_str.rfind("</think>") {
+            json_str = &json_str[idx + "</think>".len()..];
+        }
+
+        // Find the absolute first '{' and absolute last '}' in whatever is left
         let cleaned_json =
-            if let (Some(start), Some(end)) = (raw_response.find('{'), raw_response.rfind('}')) {
-                &raw_response[start..=end]
+            if let (Some(start), Some(end)) = (json_str.find('{'), json_str.rfind('}')) {
+                &json_str[start..=end]
             } else {
-                &raw_response
+                json_str
             };
+
+        // 2. FORCE PRINT TO CONSOLE (Bypass tracing log levels)
+        println!("\n========================================================");
+        println!("RAW LLM RESPONSE EXTRACTED FOR PARSING:");
+        println!("{}", cleaned_json);
+        println!("========================================================\n");
 
         // Parse the cleaned JSON response
         let explanation = ExplanationParser::parse(cleaned_json, signal.id.clone(), layer2_docs);

@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Paths to model and database (relative to rag/ manifest dir)
     let model_path = "llm/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf";
-    let db_path = "C:\\Users\\legot\\Metis\\research\\data\\dev\\lance";
+    let db_path = "C:\\Users\\legot\\Metis\\data\\lance";
 
     // Check if model file exists
     if !Path::new(model_path).exists() {

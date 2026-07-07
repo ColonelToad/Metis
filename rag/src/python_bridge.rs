@@ -159,6 +159,12 @@ impl PythonRAGBridge {
 
         let code = format!(
             r#"
+import os
+import warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+warnings.filterwarnings('ignore')
+
 try:
     import sys
     if not hasattr(sys, '_cached_sentence_model'):
@@ -174,7 +180,6 @@ except Exception as e:
 "#,
             escaped
         );
-
         py.run_bound(&code, None, None)
             .map_err(|e| anyhow!("Embed failed: {}", e))?;
         py.eval_bound("__embedding_result__", None, None)
