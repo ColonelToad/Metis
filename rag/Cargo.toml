@@ -18,3 +18,16 @@ regex = "1.10"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 lancedb = "0.31.0"
 futures = "0.3.32"
+
+# Path dependency into the (separate) execution/ workspace, for
+# engine::reasoning's deterministic "Gambling Meteorologist" math. One-way
+# only — engine has zero rag/pyo3/lancedb dependencies, so this doesn't pull
+# any of RAG's heavy dependency graph into the trading engine's binary.
+engine = { path = "../execution/engine" }
+
+# Native local embedding (ONNX via ort), replacing the PyO3-bridge path in
+# embedding.rs. all-MiniLM-L6-v2 ships a pre-exported ONNX build and is a
+# default supported model here, unlike full LLM generation which still
+# needs llm.rs's Python delegation. First run downloads to .fastembed_cache/
+# (needs network once); offline after that.
+fastembed = "5"

@@ -1,7 +1,9 @@
 /// Token counting utilities for LLM context management
-/// Provides accurate token counts using llama-cpp-2 tokenizer
-
-// Token counting utilities for LLM context management
+///
+/// This is a heuristic estimate (~4 characters per token), not a real tokenizer.
+/// It's intentionally lightweight for use in non-time-critical paths (budget checks,
+/// truncation decisions). If a call site needs an exact count, it should tokenize
+/// with the model's actual tokenizer rather than trust this estimate.
 
 /// Estimate token count for text
 /// Uses a heuristic: ~1 token per 4 characters (rough approximation)

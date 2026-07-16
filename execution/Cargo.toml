@@ -1,13 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-    "metis-core",
-    "orderbook",
-    "execution_algos",
-    "fix_client",
-    "signal_interface",
-    "ais_vessel_tracking",
+    "engine",
 ]
+
+# metis-core, orderbook, execution_algos, fix_client, signal_interface, and
+# ais_vessel_tracking are no longer workspace members as of the Phase A
+# consolidation — all their live content moved into `engine`. The old crate
+# directories are still on disk, unbuilt, safe to `git rm` once `engine` is
+# confirmed working.
 
 [workspace.package]
 version = "0.1.0"
@@ -67,10 +68,10 @@ codegen-units = 1
 strip = true
 panic = "abort"
 
-# Keep debug symbols for the PyO3 extension so Python tracebacks are readable
-[profile.release.package.metis-core]
-strip = false
-debug = 1
+# The [profile.release.package.metis-core] override that lived here is gone:
+# it existed to keep debug symbols for metis-core's PyO3 extension-module
+# build (cdylib), and that PyO3 usage was in bridge.rs, which didn't survive
+# the move — nothing in `engine` builds as a PyO3 extension module.
 
 [profile.bench]
 inherits = "release"

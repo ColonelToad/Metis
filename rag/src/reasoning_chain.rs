@@ -206,17 +206,9 @@ Documents:
         // INCREASE tokens from 150 to 500 so it can finish thinking
         let raw_summary = self.llm.generate(&prompt, 500).await?;
 
-        // BULLETPROOF THINK STRIPPER
-        let summary = if let Some(end_idx) = raw_summary.rfind("</think>") {
-            // It finished thinking, take everything after the end tag
-            raw_summary[end_idx + "</think>".len()..].trim().to_string()
-        } else if let Some(start_idx) = raw_summary.find("<think>") {
-            // It started thinking but got cut off! The whole thing is useless thought.
+        let summary = crate::think_strip::strip_think_block(&raw_summary).unwrap_or_else(|| {
             "(Summary generation was truncated due to context limits)".to_string()
-        } else {
-            // No think tags at all, just return the text
-            raw_summary.trim().to_string()
-        };
+        });
 
         tracing::debug!("Document summary: {}", summary);
         Ok(summary)
@@ -244,25 +236,27 @@ Documents:
                 .join(" | ")
         };
 
-        // Build synthesis prompt that incorporates both layers
-        let _policy_event = signal
-            .context
-            .recent_policy_events
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "none".to_string());
+        // Compute the deterministic reasoning pass BEFORE prompting the LLM.
+        // These numbers become the authoritative source for
+        // scenarios/expected_value/risk_assessment (set below, after
+        // parsing) — the LLM is only asked for narrative fields, and is
+        // handed the computed numbers as grounding context so it explains
+        // real numbers instead of inventing its own. See
+        // deterministic_reasoning.rs for what this maps and why.
+        let deterministic = crate::deterministic_reasoning::compute(signal);
 
         let prompt = format!(
             r#"<|im_start|>system
 You are a quantitative trading analyst. Your output must be a single, valid JSON object. 
 Analyze the provided context and populate the fields below with your actual reasoning. DO NOT output placeholder text.
+The scenario/expected-value/risk numbers in the context are already computed — do not restate or recompute them, just explain what's driving them.
 
 TEMPLATE:
 {{
   "market_analysis": "Write a 2-3 sentence summary of the physical market conditions based on the context.",
   "signal_drivers": "Explain the structural or policy factors driving this signal.",
-  "risks": "Identify the primary risks based on the documents.",
-  "expected_outcome": "What is the expected outcome of this trade?",
+  "risks": "Identify the primary risks based on the documents and the computed risk numbers.",
+  "expected_outcome": "What is the expected outcome of this trade, given the computed expected value below?",
   "confidence_score": 0.85
 }}
 <|im_end|>
@@ -275,6 +269,9 @@ TEMPLATE:
 ### Structural Constraints & Policy (Layer 2):
 {}
 
+### Computed Reasoning (deterministic, already calculated — explain, don't recompute):
+{}
+
 Synthesize the context into the JSON template provided. Return JSON only.
 <|im_end|>
 <|im_start|>assistant
@@ -284,7 +281,8 @@ Synthesize the context into the JSON template provided. Return JSON only.
             signal.confidence * 100.0,
             signal.context.current_price,
             layer1_summary,
-            evidence
+            evidence,
+            deterministic.grounding_context
         );
 
         println!("\n================ PROMPT DEBUG ================");
@@ -315,8 +313,16 @@ Synthesize the context into the JSON template provided. Return JSON only.
         println!("{}", cleaned_json);
         println!("========================================================\n");
 
-        // Parse the cleaned JSON response
-        let explanation = ExplanationParser::parse(cleaned_json, signal.id.clone(), layer2_docs);
+        // Parse the cleaned JSON response for the narrative fields
+        let mut explanation = ExplanationParser::parse(cleaned_json, signal.id.clone(), layer2_docs);
+
+        // Overwrite the structured fields with the deterministic computation
+        // regardless of what (if anything) the LLM said about them — the
+        // prompt no longer asks for these, but if an older-style response
+        // ever included them anyway, the computed numbers still win.
+        explanation.scenarios = Some(deterministic.scenarios);
+        explanation.expected_value = Some(deterministic.expected_value);
+        explanation.risk_assessment = Some(deterministic.risk_assessment);
 
         Ok(explanation)
     }

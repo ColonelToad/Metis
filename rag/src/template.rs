@@ -9,6 +9,14 @@ impl TemplateEngine {
     }
 
     pub fn generate(&self, signal: &TradingSignal) -> Explanation {
+        // This fallback used to leave scenarios/expected_value/risk_assessment
+        // as None and the narrative as a fixed Mad-Libs paragraph — no real
+        // computation happened here even though the deterministic reasoning
+        // engine (engine::reasoning) existed and could compute real numbers
+        // with no LLM required. It's used now, so the "no LLM available"
+        // path is a real degraded mode, not a fake one.
+        let deterministic = crate::deterministic_reasoning::compute(signal);
+
         let text = format!(
             r#"Trading Signal Analysis (Template-Based)
 
@@ -32,10 +40,13 @@ This {} signal was generated based on quantitative models analyzing grid stress,
 - Potential data lag in external feeds
 - Model assumptions may not capture all market dynamics
 
-## Expected Outcome
-Position expected to align with supply/demand fundamentals given current market conditions.
+## Computed Reasoning (deterministic, no LLM required)
+{}
 
-Note: This is a template-based explanation. Full chain-of-thought analysis unavailable.
+Note: This is a template-based explanation — narrative text is fixed, but the
+scenarios/expected-value/risk numbers above are real, computed by
+engine::reasoning, not placeholders. Full chain-of-thought analysis
+(LLM-generated narrative grounded in retrieved documents) is unavailable.
 "#,
             signal.instrument,
             signal.direction,
@@ -52,6 +63,7 @@ Note: This is a template-based explanation. Full chain-of-thought analysis unava
             signal.context.recent_policy_events.join(", "),
             signal.direction.to_lowercase(),
             signal.confidence * 100.0,
+            deterministic.grounding_context,
         );
 
         Explanation {
@@ -59,9 +71,9 @@ Note: This is a template-based explanation. Full chain-of-thought analysis unava
             reference_class: None,
             ensemble: None,
             bayesian_update: None,
-            scenarios: None,
-            expected_value: None,
-            risk_assessment: None,
+            scenarios: Some(deterministic.scenarios),
+            expected_value: Some(deterministic.expected_value),
+            risk_assessment: Some(deterministic.risk_assessment),
             market_analysis: Some("Template-based analysis".to_string()),
             signal_drivers: None,
             risks: None,

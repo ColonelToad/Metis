@@ -1,0 +1,80 @@
+[package]
+name = "engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Consolidates what used to be five crates (orderbook, execution_algos,
+# signal_interface, fix_client, ais_vessel_tracking) plus the surviving
+# pieces of metis-core (fusion, simd, reasoning). See src/lib.rs for why.
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+rmp-serde = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+crossbeam = { workspace = true }
+parking_lot = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures = "0.3"
+
+# Order book specific (not workspace deps, matching original orderbook/Cargo.toml)
+rustc-hash = "1.1"
+smallvec = "1.13"
+ordered-float = "4.2"
+csv = "1.3"
+clap = { version = "4.4", features = ["derive"] }
+
+# Used by metis_server for tokio worker-thread pinning, and by the simd
+# benches/examples for the same reason. Was dev-dependencies-only before
+# metis_server needed it too — dev-dependencies aren't linked into regular
+# [[bin]] targets, only tests/benches/examples.
+core_affinity = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+tokio-test = "0.4"
+
+[[bin]]
+name = "lob_parser"
+path = "src/bin/lob_parser.rs"
+
+[[bin]]
+name = "metis_server"
+path = "src/bin/metis_server.rs"
+
+[[bin]]
+name = "load_test"
+path = "src/bin/load_test.rs"
+
+[[example]]
+name = "check_simd_execution"
+path = "examples/check_simd_execution.rs"
+
+[[example]]
+name = "core_test"
+path = "examples/core_test.rs"
+
+[[bench]]
+name = "lob_performance"
+harness = false
+
+[[bench]]
+name = "lockfree_fusion"
+harness = false
+
+[[bench]]
+name = "simd_vectorization"
+harness = false
+
+[[bench]]
+name = "realistic_simd"
+harness = false

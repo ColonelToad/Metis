@@ -93,21 +93,7 @@ impl DocumentIndexer {
         use pyo3::prelude::*;
 
         Python::with_gil(|py| {
-            // ==========================================================
-            // FIX: Inject local directories into Python's sys.path
-            // ==========================================================
-            if let Ok(sys) = py.import_bound("sys") {
-                if let Ok(path) = sys.getattr("path") {
-                    // Hardcoded path
-                    let _ = path.call_method1("append", ("C:\\Users\\legot\\Metis",));
-
-                    // Dynamic path
-                    if let Ok(cwd) = std::env::current_dir() {
-                        let _ = path.call_method1("append", (cwd.to_string_lossy().as_ref(),));
-                    }
-                }
-            }
-            // ==========================================================
+            crate::python_env::setup_sys_path(py);
             // Get current working directory and construct RAG path
             // When running from Tauri (metis/src-tauri), need to go up two levels to reach rag/
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));

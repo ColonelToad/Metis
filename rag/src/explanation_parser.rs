@@ -11,9 +11,15 @@ impl ExplanationParser {
     /// Parse raw LLM output into structured Explanation
     /// Tries JSON first (after stripping DeepSeek-R1 <think> blocks), then falls back to heuristic text parsing
     pub fn parse(raw_text: &str, signal_id: String, available_docs: &[Document]) -> Explanation {
-        // DeepSeek-R1 outputs <think>...</think> reasoning blocks before the JSON
-        // Strip them for cleaner parsing
-        let cleaned_text = Self::strip_think_block(raw_text);
+        // DeepSeek-R1 outputs <think>...</think> reasoning blocks before the JSON.
+        // If the think block was truncated (opened but never closed), there's no
+        // reliable answer to parse out of it — go straight to the free-form
+        // fallback rather than attempt JSON parsing against raw, unclosed
+        // reasoning text.
+        let cleaned_text = match crate::think_strip::strip_think_block(raw_text) {
+            Some(text) => text,
+            None => return Self::parse_text(raw_text, signal_id, available_docs),
+        };
 
         // First, try to parse as JSON
         if let Ok(parsed) = Self::parse_json(&cleaned_text, signal_id.clone(), available_docs) {
@@ -22,17 +28,6 @@ impl ExplanationParser {
 
         // Fallback: parse as free-form text with regex
         Self::parse_text(&cleaned_text, signal_id, available_docs)
-    }
-
-    /// Strip <think>...</think> reasoning blocks from DeepSeek-R1 output
-    /// These blocks are useful for understanding the model's reasoning but shouldn't break JSON parsing
-    fn strip_think_block(text: &str) -> String {
-        // Remove <think>...</think> blocks if present
-        if let Ok(re) = Regex::new(r"<think>.*?</think>") {
-            re.replace_all(text, "").to_string()
-        } else {
-            text.to_string()
-        }
     }
 
     /// Try to parse JSON output from LLM with 8-step structured format
@@ -535,7 +530,7 @@ mod tests {
             create_test_doc("doc2", "Supporting Data"),
         ];
 
-        let citations = ExplanationParser::extract_citations(text, &docs);
+        let citations = ExplanationParser::extract_citations_from_text(text, &docs);
         assert_eq!(citations.len(), 2);
         assert_eq!(citations[0].title, "Market Trends");
         assert_eq!(citations[1].title, "Supporting Data");
@@ -546,7 +541,7 @@ mod tests {
         let text = "Reference [Doc 999] doesn't exist.";
         let docs = vec![create_test_doc("doc1", "Only Doc")];
 
-        let citations = ExplanationParser::extract_citations(text, &docs);
+        let citations = ExplanationParser::extract_citations_from_text(text, &docs);
         assert_eq!(citations.len(), 0);
     }
 

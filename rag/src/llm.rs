@@ -34,21 +34,7 @@ impl LocalLLMEngine {
         // Run inference in a blocking task via Python
         tokio::task::spawn_blocking(move || {
             Python::with_gil(|py| {
-                // ==========================================================
-                // FIX: Inject local directories into Python's sys.path
-                // ==========================================================
-                if let Ok(sys) = py.import_bound("sys") {
-                    if let Ok(path) = sys.getattr("path") {
-                        // 1. Add your explicit Metis path
-                        let _ = path.call_method1("append", ("C:\\Users\\legot\\Metis",));
-
-                        // 2. Dynamically add the current working directory
-                        if let Ok(cwd) = std::env::current_dir() {
-                            let _ = path.call_method1("append", (cwd.to_string_lossy().as_ref(),));
-                        }
-                    }
-                }
-                // ==========================================================
+                crate::python_env::setup_sys_path(py);
 
                 // Escape quotes and newlines for Python string literal
                 let escaped_prompt = prompt
@@ -71,39 +57,16 @@ os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 warnings.filterwarnings('ignore')
 
 try:
-    import sys
-    from pathlib import Path
-
-    # PRIMARY: Try llama-cpp-python natively
-    try:
-        from llama_cpp import Llama
-        llm = Llama(model_path="{}", n_ctx=2048, n_gpu_layers=-1, verbose=False)
-        output = llm("{}", max_tokens={}, temperature=0.7)
-        __llm_output__ = output["choices"][0]["text"]
-    except Exception as e1:
-        print(f"\n--- LLAMA-CPP ERROR: {{str(e1)}} ---")
-        
-        # FALLBACK: Try Ollama
-        try:
-            import ollama
-            client = ollama.Client()
-            response = client.generate(
-                model="deepseek-r1:7b-qwen",
-                prompt="{}",
-                stream=False,
-                options={{"num_predict": {}}}
-            )
-            __llm_output__ = response.get("response", "")
-        except Exception as e2:
-            print(f"--- OLLAMA ERROR: {{str(e2)}} ---\n")
-            __llm_output__ = "LLM inference unavailable"
-
+    from llama_cpp import Llama
+    llm = Llama(model_path="{}", n_ctx=2048, n_gpu_layers=-1, verbose=False)
+    output = llm("{}", max_tokens={}, temperature=0.7)
+    __llm_output__ = output["choices"][0]["text"]
 except Exception as e:
     import traceback
     traceback.print_exc()
-    raise Exception(f"LLM generation failed: {{str(e)}}")
+    raise Exception(f"LLM generation failed (llama-cpp-python): {{str(e)}}")
 "#,
-                    model_path_escaped, escaped_prompt, max_tokens, escaped_prompt, max_tokens
+                    model_path_escaped, escaped_prompt, max_tokens
                 );
 
                 // Execute the inference code
