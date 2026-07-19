@@ -43,6 +43,17 @@ def fetch_ng_storage():
     df = pd.DataFrame(data['response']['data'])
     df['timestamp'] = pd.to_datetime(df['period'])
     df = df.rename(columns={'value': 'storage_bcf'})
+    print(f"[EIA storage] distinct duoarea values in response: {sorted(df['duoarea'].unique()) if 'duoarea' in df.columns else 'duoarea column not present'}")
+    if 'duoarea' in df.columns:
+        df = df[df['duoarea'] == 'R48']  # R48 = Lower 48 States total (storage endpoint's own
+        # region scheme -- R31-R35 are the five sub-national regions, distinct from the 'NUS'
+        # code used by the production endpoint. Confirmed via live response: distinct duoarea
+        # values were ['R31','R32','R33','R34','R35','R48'] -- no 'NUS' code exists here at all.
+        print(f"[EIA storage] Filtered to USA aggregate (duoarea=='R48'): {len(df)} records")
+    else:
+        print("[EIA storage] WARNING: no duoarea column in response -- cannot filter to national "
+            "aggregate. Falling back to unfiltered data; do not trust row count/labels downstream "
+            "until this is investigated.")
     
     return df[['timestamp', 'storage_bcf', 'area-name']]
 
@@ -70,6 +81,16 @@ def fetch_ng_production():
     
     # Filter to USA aggregate only (many regional series have sparse/missing data)
     # This removes ~80% of rows that are mostly NULL
+    print(f"[EIA production] response columns: {list(df.columns)}")
+    if 'duoarea' in df.columns and 'process' in df.columns and 'process-name' in df.columns:
+        nus_rows = df[df['duoarea'] == 'NUS']
+        #pairs = nus_rows[['process', 'process-name', 'production_mmcf']].drop_duplicates(subset=['process','process-name']).sort_values('period') if 'period' in nus_rows.columns else nus_rows[['process','process-name','production_mmcf']].drop_duplicates(subset=['process','process-name'])
+        pairs = (nus_rows.sort_values('period')[['process', 'process-name', 'production_mmcf']]
+         .drop_duplicates(subset=['process','process-name'])) if 'period' in nus_rows.columns else (nus_rows[['process','process-name','production_mmcf']]
+         .drop_duplicates(subset=['process','process-name']))
+        print(f"[EIA production] NUS-level (process, process-name, sample value) pairs:")
+        for _, r in pairs.iterrows():
+            print(f"    {r['process']:6s} -> {r['process-name']:35s} sample_value={r['production_mmcf']}")
     if 'duoarea' in df.columns:
         df = df[df['duoarea'] == 'NUS']  # 'NUS' = National US aggregate, not 'USA'
     
