@@ -224,14 +224,23 @@ class FeatureEngineer:
             )
         
         if not ppi.empty:
-            ppi['date'] = pd.to_datetime(ppi['date'])
+            # NOTE: bls_ppi.date carries ingestion-time timestamps (sub-second precision),
+            # not normalized calendar dates. An exact-date merge against ng_futures_daily
+            # (midnight-normalized) previously matched zero rows for every PPI series,
+            # silently producing 100%-NaN columns. Normalize first, then use merge_asof
+            # (nearest prior date) rather than exact match, since PPI is monthly data and
+            # an exact join still fails whenever the 1st of the month isn't a trading day.
+            ppi['date'] = pd.to_datetime(ppi['date']).dt.normalize()
+            ppi = ppi.sort_values('date')
+            df = df.sort_values('date')
             
             # Pivot to get each series as a column
             # For each series: take the PPI index and YoY change
             for series_id in ppi['series_id'].unique():
-                series_data = ppi[ppi['series_id'] == series_id][['date', 'ppi_index', 'ppi_yoy_change']]
+                series_data = ppi[ppi['series_id'] == series_id][['date', 'ppi_index', 'ppi_yoy_change']].copy()
                 series_data.columns = ['date', f'ppi_index_{series_id}', f'ppi_yoy_{series_id}']
-                df = df.merge(series_data, on='date', how='left')
+                series_data = series_data.sort_values('date')
+                df = pd.merge_asof(df, series_data, on='date', direction='backward')
             
             # Simple aggregate: average PPI across energy series
             ppi_cols = [c for c in df.columns if c.startswith('ppi_index_')]
@@ -243,7 +252,9 @@ class FeatureEngineer:
                 if ppi_yoy_cols:
                     df['ppi_yoy_avg'] = df[ppi_yoy_cols].mean(axis=1)
             
-            print(f"[FEATURES] Loaded BLS PPI data ({len(ppi['series_id'].unique())} series)")
+            n_populated = df[ppi_cols[0]].notna().sum() if ppi_cols else 0
+            print(f"[FEATURES] Loaded BLS PPI data ({len(ppi['series_id'].unique())} series, "
+                  f"{n_populated}/{len(df)} rows populated post-merge_asof)")
         else:
             print("[FEATURES] Warning: No BLS PPI data found")
         
@@ -345,7 +356,18 @@ class FeatureEngineer:
             )
         
         if not cme.empty:
-            cme['date'] = pd.to_datetime(cme['date'])
+            cme['date'] = pd.to_datetime(cme['date'], format="ISO8601").dt.normalize()
+            
+            # NOTE: cme_futures_daily carries duplicate rows per (date, contract_type) --
+            # confirmed identical values under two different timestamp serializations,
+            # same class of bug as the bls_ppi fix above, but hitting all 5 tracked
+            # contracts rather than one series. Left unguarded, a plain merge fans out
+            # 2x per contract, compounding to 2^5=32x across the 5 sequential merges below.
+            n_before = len(cme)
+            cme = cme.drop_duplicates(subset=['date', 'contract_type'], keep='first')
+            n_after = len(cme)
+            if n_after < n_before:
+                print(f"[FEATURES] Deduped cme_futures_daily: {n_before} -> {n_after} rows")
             
             # Pivot contracts to get separate columns
             for contract in cme['contract_type'].unique():
@@ -397,7 +419,17 @@ class FeatureEngineer:
             )
         
         if not lmp.empty:
-            lmp['date'] = pd.to_datetime(lmp['date'])
+            lmp['date'] = pd.to_datetime(lmp['date']).dt.normalize()
+            
+            # Same class of duplicate-row risk as cme_futures_daily -- guard even though
+            # the GROUP BY in the query above already aggregates within a calendar day;
+            # this only protects against a second, differently-timestamped write of the
+            # same (date, iso) slipping through as a distinct group.
+            n_before = len(lmp)
+            lmp = lmp.drop_duplicates(subset=['date', 'iso'], keep='first')
+            n_after = len(lmp)
+            if n_after < n_before:
+                print(f"[FEATURES] Deduped grid_lmp_multi_iso: {n_before} -> {n_after} rows")
             
             # Pivot ISOs to separate columns
             for iso in lmp['iso'].unique():
