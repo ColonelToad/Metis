@@ -25,6 +25,7 @@ claude/
 *.ipynb
 *.llamafile
 llm/
+hf_models/
 
 # Data files
 *.csv

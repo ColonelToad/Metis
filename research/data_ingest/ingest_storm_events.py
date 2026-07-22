@@ -1,17 +1,27 @@
 """
 NOAA NCEI Storm Events Ingestion
-Fetches detailed storm event data from NCEI database
-No API key required - bulk CSV downloads
+Fetches detailed storm event data from NCEI's static bulk CSV file directory
+(SWDI bulk download: https://www.ncei.noaa.gov/pub/data/swdi/stormevents/csvfiles/),
+NOT the Access Data Service query API -- that endpoint doesn't serve this
+dataset and returns 400 for any dataset name. No API key required.
+
+Each year has a 'details' file named like:
+    StormEvents_details-ftp_v1.0_d{YEAR}_c{CREATION_DATE}.csv.gz
+The creation-date suffix changes whenever NCEI revises that year's data
+(confirmed: several recent years were revised as late as mid-2026), so the
+current filename per year must be discovered from the live directory listing,
+not constructed from a guessed date.
 """
 import os
+import re
+import gzip
+from io import BytesIO
 from pathlib import Path
+from datetime import datetime
 import pandas as pd
-from datetime import datetime, timedelta
+import requests
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
-import time
-from io import StringIO
-import requests
 
 load_dotenv()
 DB_URL = os.getenv("DB_URL", "sqlite:///data/metis.db")
@@ -19,91 +29,140 @@ METIS_MODE = os.getenv("METIS_MODE", "DEV")
 
 
 def require_real_mode(source: str) -> bool:
-    if METIS_MODE != "REAL":
+    if METIS_MODE not in ("REAL", "PROD"):
         print(f"[DEV MODE] Skipping {source}")
         return False
     return True
 
-NCEI_ADS_URL = "https://www.ncei.noaa.gov/access/services/data/v1"
+
+SWDI_BASE_URL = "https://www.ncei.noaa.gov/pub/data/swdi/stormevents/csvfiles/"
 CACHE_DIR = Path("data/cache/storm_events")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Matches e.g. StormEvents_details-ftp_v1.0_d2024_c20260421.csv.gz -> ('2024', '20260421')
+_FILENAME_RE = re.compile(r'StormEvents_details-ftp_v1\.0_d(\d{4})_c(\d{8})\.csv\.gz')
 
-def download_year(year: int, use_cache: bool = True) -> pd.DataFrame:
+
+def get_current_filenames() -> dict:
     """
-    Download full year of storm events via NCEI Access Data Service (CSV).
+    Fetch the SWDI directory listing once and return {year: (filename, creation_date)}
+    for the current 'details' file per year. A year can appear multiple times in
+    listing history if revised -- keep the entry with the latest creation date.
+    """
+    resp = requests.get(SWDI_BASE_URL, timeout=60)
+    resp.raise_for_status()
+    matches = _FILENAME_RE.findall(resp.text)
+
+    latest = {}
+    for year_str, cdate in matches:
+        year = int(year_str)
+        if year not in latest or cdate > latest[year]:
+            latest[year] = cdate
+
+    return {
+        year: (f"StormEvents_details-ftp_v1.0_d{year}_c{cdate}.csv.gz", cdate)
+        for year, cdate in latest.items()
+    }
+
+
+def download_year(year: int, filename_map: dict = None) -> pd.DataFrame:
+    """
+    Download one year of storm event details. Cache key embeds the creation
+    date from the live listing, so a revised file (new creation date) is
+    automatically treated as new data rather than silently served from a
+    stale cache -- this matters since recent years get revised months later.
     """
     if not require_real_mode("NOAA Storm Events"):
         return pd.DataFrame()
 
-    cache_file = CACHE_DIR / f"storm_events_{year}.parquet"
+    if filename_map is None:
+        filename_map = get_current_filenames()
 
-    if use_cache and cache_file.exists():
-        print(f"Loading storm events from cache: {year}")
+    if year not in filename_map:
+        print(f"No details file found for {year} in NCEI directory listing")
+        return pd.DataFrame()
+
+    filename, cdate = filename_map[year]
+    cache_file = CACHE_DIR / f"storm_events_{year}_{cdate}.parquet"
+
+    if cache_file.exists():
+        print(f"Loading storm events from cache: {year} (creation date {cdate})")
         return pd.read_parquet(cache_file)
 
-    dataset_candidates = [
-        "stormevents",  # primary ADS dataset name
-        "stormevents-details",
-        "stormevents_details",
-    ]
+    url = SWDI_BASE_URL + filename
+    print(f"Downloading {year} storm events: {filename}")
 
-    last_err = None
-    for ds in dataset_candidates:
-        params = {
-            "dataset": ds,
-            "startDate": f"{year}-01-01",
-            "endDate": f"{year}-12-31",
-            "format": "csv",
-        }
+    try:
+        resp = requests.get(url, timeout=120)
+        resp.raise_for_status()
+        with gzip.GzipFile(fileobj=BytesIO(resp.content)) as gz:
+            df = pd.read_csv(gz, low_memory=False)
 
-        print(f"Downloading {year} storm events via NCEI ADS (dataset={ds})...")
-        try:
-            resp = requests.get(NCEI_ADS_URL, params=params, timeout=120)
-            resp.raise_for_status()
-            df = pd.read_csv(StringIO(resp.text))
+        df.columns = df.columns.str.strip().str.upper()
+        if 'BEGIN_DATE_TIME' in df.columns:
+            df['BEGIN_DATE_TIME'] = pd.to_datetime(df['BEGIN_DATE_TIME'], errors='coerce')
+        if 'END_DATE_TIME' in df.columns:
+            df['END_DATE_TIME'] = pd.to_datetime(df['END_DATE_TIME'], errors='coerce')
 
-            # Clean data
-            if 'BEGIN_DATE_TIME' in df.columns:
-                df['BEGIN_DATE_TIME'] = pd.to_datetime(df['BEGIN_DATE_TIME'], errors='coerce')
-            if 'END_DATE_TIME' in df.columns:
-                df['END_DATE_TIME'] = pd.to_datetime(df['END_DATE_TIME'], errors='coerce')
-
-            df.to_parquet(cache_file)
-            print(f"Cached {len(df)} storm events for {year}")
-            return df
-        except Exception as e:
-            last_err = e
-            print(f"Error downloading {year} storm events with dataset {ds}: {e}")
-            continue
-
-    print(f"All dataset attempts failed for {year}. Last error: {last_err}")
-    return pd.DataFrame()
+        df.to_parquet(cache_file)
+        print(f"Cached {len(df)} storm events for {year}")
+        return df
+    except Exception as e:
+        print(f"Error downloading {year} storm events ({filename}): {e}")
+        return pd.DataFrame()
 
 
 def download_range(start_year: int, end_year: int) -> pd.DataFrame:
-    """Download multiple years of storm events"""
+    """Download multiple years of storm events."""
+    filename_map = get_current_filenames()
+    if filename_map:
+        print(f"NCEI directory has {len(filename_map)} years available "
+              f"({min(filename_map)}-{max(filename_map)})")
+
     all_data = []
-    
     for year in range(start_year, end_year + 1):
-        df = download_year(year)
+        df = download_year(year, filename_map=filename_map)
         if not df.empty:
             all_data.append(df)
-            time.sleep(1)  # Rate limiting
-    
+
     return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
 
 
-def normalize_and_save(df: pd.DataFrame) -> None:
-    """Normalize NCEI storm data and save to SQLite"""
+def parse_damage_value(val):
+    """
+    Parse NCEI damage strings like '10.00K', '2.5M', '1.2B' into raw dollar
+    amounts. Bare pd.to_numeric(errors='coerce') silently turns every one of
+    these into NaN, since the K/M/B suffix makes them non-numeric strings --
+    this was a second, quieter bug sitting underneath the original 400 errors.
+    """
+    if pd.isna(val):
+        return None
+    s = str(val).strip().upper()
+    if s in ('', 'NAN'):
+        return None
+    if s == '0' or s == '0.00':
+        return 0.0
+    multipliers = {'K': 1e3, 'M': 1e6, 'B': 1e9}
+    suffix = s[-1]
+    if suffix in multipliers:
+        try:
+            return float(s[:-1]) * multipliers[suffix]
+        except ValueError:
+            return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def normalize_and_save(df: pd.DataFrame) -> int:
+    """Normalize NCEI storm data and save to SQLite. Returns row count saved."""
     if df.empty:
         print("No storm event data to save")
-        return
-    
-    # Normalize column names
+        return 0
+
     df.columns = df.columns.str.strip().str.upper()
-    
-    # Create normalized dataframe with key columns
+
     df_normalized = pd.DataFrame({
         'event_id': df['EPISODE_ID'].astype(str) + '_' + df['EVENT_ID'].astype(str),
         'state': df.get('STATE', ''),
@@ -111,19 +170,17 @@ def normalize_and_save(df: pd.DataFrame) -> None:
         'event_type': df.get('EVENT_TYPE', ''),
         'begin_date': df.get('BEGIN_DATE_TIME'),
         'end_date': df.get('END_DATE_TIME'),
-        'property_damage': pd.to_numeric(df.get('DAMAGE_PROPERTY', 0), errors='coerce'),
-        'crop_damage': pd.to_numeric(df.get('DAMAGE_CROPS', 0), errors='coerce'),
+        'property_damage': df.get('DAMAGE_PROPERTY', pd.Series(dtype=object)).apply(parse_damage_value),
+        'crop_damage': df.get('DAMAGE_CROPS', pd.Series(dtype=object)).apply(parse_damage_value),
         'injuries_direct': pd.to_numeric(df.get('INJURIES_DIRECT', 0), errors='coerce'),
         'deaths_direct': pd.to_numeric(df.get('DEATHS_DIRECT', 0), errors='coerce'),
         'magnitude': pd.to_numeric(df.get('MAGNITUDE', None), errors='coerce'),
         'magnitude_type': df.get('MAGNITUDE_TYPE', ''),
         'timestamp': datetime.now()
     })
-    
-    # Drop duplicates based on event_id
+
     df_normalized = df_normalized.drop_duplicates(subset=['event_id'])
-    
-    # Normalize datetimes to naive Python values for SQLite binding
+
     for col in ['begin_date', 'end_date', 'timestamp']:
         if col in df_normalized.columns:
             df_normalized[col] = pd.to_datetime(df_normalized[col], errors='coerce').dt.tz_localize(None)
@@ -134,7 +191,7 @@ def normalize_and_save(df: pd.DataFrame) -> None:
         if isinstance(val, pd.Timestamp):
             return val.to_pydatetime()
         return val
-    
+
     try:
         engine = create_engine(DB_URL)
         backend = engine.url.get_backend_name()
@@ -183,20 +240,27 @@ def normalize_and_save(df: pd.DataFrame) -> None:
                 )
 
         print(f"Saved {len(df_normalized)} storm event records to database")
+        return len(df_normalized)
     except Exception as e:
         print(f"Error saving storm events to database: {e}")
+        return 0
 
 
-if __name__ == "__main__":
+def main():
     print(f"[{METIS_MODE}] NOAA Storm Events")
+    start_year = int(os.getenv("STORM_EVENTS_START_YEAR", "2015"))
+    end_year = datetime.now().year
+    print(f"Fetching NOAA storm events ({start_year}-{end_year})...")
 
-    # Backfill 5 years of data
-    print("Fetching NOAA storm events (2021-2025)...")
-
-    df = download_range(2021, 2025)
+    df = download_range(start_year, end_year)
 
     if not df.empty:
         print(f"Fetched {len(df)} storm events total")
-        normalize_and_save(df)
+        return normalize_and_save(df)
     else:
         print("No storm event data fetched")
+        return 0
+
+
+if __name__ == "__main__":
+    main()

@@ -5,7 +5,7 @@ Supports daily, weekly, and monthly scheduled execution.
 Frequencies:
   - daily: EIA, LMP, FRED Macro, Weather, Maritime AIS (run every day)
   - weekly: CME Futures, Drought Monitor, EIA Jet Fuel (run Mondays only)
-  - monthly: BLS PPI, FRED Building Permits, Congress Bills (run once per month)
+  - monthly: BLS PPI, FRED Building Permits, Congress Bills, NOAA Storm Events (run once per month)
   - all: run all above regardless of schedule
 
 Environment:
@@ -38,6 +38,7 @@ from data_ingest import ingest_congress_bills_expanded
 from data_ingest import ingest_bls_ppi
 from data_ingest import ingest_fred_building_permits
 from data_ingest import ingest_eia_jet_fuel
+from data_ingest import ingest_storm_events
 
 # Import log rotation
 from log_rotation import rotate_logs
@@ -130,6 +131,7 @@ MONTHLY_INGESTERS = [
     ("BLS Producer Price Index", ingest_bls_ppi),
     ("FRED Building Permits", ingest_fred_building_permits),
     ("Congress Bills", ingest_congress_bills_expanded),
+    ("NOAA Storm Events", ingest_storm_events),
 ]
 
 def get_ingesters_for_frequency(frequency: str) -> list:
@@ -164,7 +166,7 @@ def get_frequency_description(frequency: str) -> str:
         "daily": f"Daily run (EIA, LMP, Multi-ISO LMP, FRED, Weather, AIS)" + 
                  (f" + Weekly CME Futures (Monday)" if is_mon else ""),
         "weekly": "Weekly run (CME Futures, Drought Monitor, EIA Jet Fuel) - Runs Mondays",
-        "monthly": "Monthly run (BLS PPI, FRED Building Permits, Congress Bills)",
+        "monthly": "Monthly run (BLS PPI, FRED Building Permits, Congress Bills, NOAA Storm Events)",
         "all": "All ingesters (daily + weekly + monthly)"
     }
     return descriptions.get(frequency, frequency)

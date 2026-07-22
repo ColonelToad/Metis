@@ -66,6 +66,8 @@ def fetch_ng_production():
         "api_key": EIA_API_KEY,
         "frequency": "monthly",
         "data[0]": "value",
+        "facets[duoarea][]": "NUS",
+        "facets[process][]": "FPD",
         "sort[0][column]": "period",
         "sort[0][direction]": "desc",
         "length": 1000
@@ -81,17 +83,18 @@ def fetch_ng_production():
     
     # Filter to USA aggregate only (many regional series have sparse/missing data)
     # This removes ~80% of rows that are mostly NULL
-    print(f"[EIA production] response columns: {list(df.columns)}")
-    if 'duoarea' in df.columns and 'process' in df.columns and 'process-name' in df.columns:
-        nus_rows = df[df['duoarea'] == 'NUS']
-        #pairs = nus_rows[['process', 'process-name', 'production_mmcf']].drop_duplicates(subset=['process','process-name']).sort_values('period') if 'period' in nus_rows.columns else nus_rows[['process','process-name','production_mmcf']].drop_duplicates(subset=['process','process-name'])
-        pairs = (nus_rows.sort_values('period')[['process', 'process-name', 'production_mmcf']]
-         .drop_duplicates(subset=['process','process-name'])) if 'period' in nus_rows.columns else (nus_rows[['process','process-name','production_mmcf']]
-         .drop_duplicates(subset=['process','process-name']))
-        print(f"[EIA production] NUS-level (process, process-name, sample value) pairs:")
-        for _, r in pairs.iterrows():
-            print(f"    {r['process']:6s} -> {r['process-name']:35s} sample_value={r['production_mmcf']}")
-    if 'duoarea' in df.columns:
+    #
+    # NOTE: duoarea=='NUS' alone is not sufficient -- this endpoint reports several distinct
+    # process stages under the same national aggregate (Gross Withdrawals, Marketed Production,
+    # Extraction Loss, Dry Production), plus Gross Withdrawals itself appears twice under two
+    # different unit conventions (MMcf/day vs MMcf/month). Confirmed via live response for
+    # period=2026-04: FPD (Dry Production) = 3,327,661, which matches the constant
+    # production_mmcf=3,326,237 found baked into the original 2015-2024 training scaler to
+    # within 0.04% -- strong evidence FPD is the metric the model was actually trained on.
+    if 'duoarea' in df.columns and 'process' in df.columns:
+        df = df[(df['duoarea'] == 'NUS') & (df['process'] == 'FPD')]
+        print(f"[EIA production] Filtered to USA Dry Production (duoarea=='NUS', process=='FPD'): {len(df)} records")
+    elif 'duoarea' in df.columns:
         df = df[df['duoarea'] == 'NUS']  # 'NUS' = National US aggregate, not 'USA'
     
     # Drop rows with NULL production values
