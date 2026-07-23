@@ -14,6 +14,7 @@ import pandas as pd
 import requests
 import pdfplumber
 import ocrmypdf
+from parse_vision_latex import parse_latex_transaction_table
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 import torch
@@ -28,7 +29,6 @@ os.makedirs(LOCAL_MODEL_DIR, exist_ok=True)
 print(f"Loading GOT-OCR 2.0 from/to local cache at: {LOCAL_MODEL_DIR} ...")
 DEVICE = "cpu"
 
-# The cache_dir parameter ensures it downloads here once, and loads from here forever after
 PROCESSOR = AutoProcessor.from_pretrained(
     "stepfun-ai/GOT-OCR-2.0-hf", 
     cache_dir=LOCAL_MODEL_DIR
@@ -78,7 +78,6 @@ def extract_via_ocr(pdf_bytes: bytes) -> str:
         in_f.flush()
         
         try:
-            # clean=True engages 'unpaper' to clean borders and noise
             ocrmypdf.ocr(
                 in_f.name, 
                 out_f.name, 
@@ -99,10 +98,8 @@ def extract_via_vision(pdf_bytes: bytes) -> str:
     try:
         with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
             for page in pdf.pages:
-                # Convert PDF page to an image
-                img = page.to_image(resolution=400).original
+                img = page.to_image(resolution=200).original
                 
-                # Format=True asks the model to output structured Markdown/tables
                 inputs = PROCESSOR(img, return_tensors="pt", format=True).to(DEVICE)
                 
                 generate_ids = MODEL.generate(
@@ -157,74 +154,6 @@ def parse_transactions(raw_text: str, filing_id: str) -> list:
 
     return results
 
-def parse_vision_latex(raw_text: str, filing_id: str) -> list:
-    """Dedicated parser for GOT-OCR's LaTeX format output."""
-    results = []
-    lines = raw_text.split('\n')
-    
-    for line in lines:
-        # Skip lines that aren't table rows or are table headers
-        if '&' not in line or 'ID & Owner' in line or 'Transaction Date' in line:
-            continue
-            
-        # Clean the row and split by the LaTeX column delimiter
-        clean_line = line.replace('\\\\', '').strip()
-        cols = [c.strip() for c in clean_line.split('&')]
-        
-        # We need at least the 5 base columns (Owner, Asset, Type, Txn Date, Notif Date)
-        if len(cols) >= 5:
-            owner_raw = cols[0]
-            asset_raw = cols[1]
-            type_raw = cols[2].replace('\\', '').strip() # Clean stray slashes
-            txn_date_raw = cols[3]
-            notif_date_raw = cols[4]
-            
-            # Skip rows where it hallucinated metadata into the transaction type column
-            if type_raw not in ['P', 'S', 'E'] and type_raw != '':
-                continue
-                
-            # 1. Clean Owner (Extract SP, DC, JT from \multirow[t]{2}{*}{ SP })
-            owner_match = re.search(r'(SP|DC|JT)', owner_raw)
-            owner = owner_match.group(1) if owner_match else None
-            
-            # 2. Clean Dates (Strip spaces, slashes, and LaTeX math parentheses)
-            # Turns "\(05 / 5 / 2015\)" into "05/5/2015"
-            txn_date = re.sub(r'[\\\(\)\s]', '', txn_date_raw)
-            notif_date = re.sub(r'[\\\(\)\s]', '', notif_date_raw)
-            
-            # 3. Clean Asset & Ticker
-            ticker_match = re.search(r'\(([A-Z0-9.]+)\)', asset_raw)
-            ticker = ticker_match.group(1) if ticker_match else None
-            asset = re.sub(r'\([A-Z0-9.]+\)', '', asset_raw).strip()
-
-            # 4. Handle Amounts (Check if the resolution bump actually found a 6th column)
-            amount_low = 0.0
-            amount_high = 0.0
-            if len(cols) >= 6:
-                amt_raw = cols[5]
-                amt_match = re.search(r'\$?([\d,]+)\s*-\s*\$?([\d,]+)', amt_raw)
-                if amt_match:
-                    amount_low = float(amt_match.group(1).replace(',', ''))
-                    amount_high = float(amt_match.group(2).replace(',', ''))
-
-            # Only append if we successfully parsed a transaction type
-            if type_raw in ['P', 'S', 'E']:
-                results.append({
-                    'filing_id': filing_id,
-                    'owner': owner,
-                    'asset_description': asset,
-                    'ticker': ticker,
-                    'transaction_type': type_raw,
-                    'transaction_date': txn_date,
-                    'notification_date': notif_date,
-                    'amount_low': amount_low,
-                    'amount_high': amount_high,
-                    'filing_status': None, # Deferred: Meta parsing requires multi-row lookahead
-                    'subholding_of': None,
-                    'description': None,
-                })
-                
-    return results
 
 def process_filing(row) -> tuple:
     """Fetch, extract, and parse one filing using a 3-tier cascade."""
@@ -250,25 +179,38 @@ def process_filing(row) -> tuple:
         if txns:
             return txns, 'ocr_classic', len(ocr_text)
             
-    # TIER 3: Vision Model Fallback 
+    # TIER 3: Vision Model Fallback (Only triggers if Tesseract yields 0 transactions)
     print(f"  {row['DocID']}: Classic OCR failed to find tables. Trying Vision Model...")
     vision_text = extract_via_vision(pdf_bytes)
-    
     if len(vision_text.strip()) > 20:
-        # Use the dedicated LaTeX parser, NOT the native text regex
-        txns = parse_vision_latex(vision_text, row['DocID'])
-        
-        # Always dump the vision output for now so you can check if the 400 DPI found the amounts
-        debug_dir = "ocr_debug_dumps"
-        os.makedirs(debug_dir, exist_ok=True)
-        dump_path = os.path.join(debug_dir, f"{row['DocID']}_vision_dump.txt")
-        with open(dump_path, "w", encoding="utf-8") as f:
+        # Always cache raw vision output, success or failure -- confirmed
+        # non-deterministic across runs (same doc, same greedy decoding
+        # settings, different output shape), so every raw generation is
+        # worth keeping to test parser changes against without re-running
+        # the model. Previously this only dumped on parse failure, which
+        # meant fixing the parser would silently stop building the corpus
+        # needed to test the next fix.
+        raw_dir = "ocr_vision_raw_cache"
+        os.makedirs(raw_dir, exist_ok=True)
+        raw_path = os.path.join(raw_dir, f"{row['DocID']}_vision_raw.txt")
+        with open(raw_path, "w", encoding="utf-8") as f:
             f.write(vision_text)
-            
-        if txns:
-            return txns, 'ocr_vision', len(vision_text)
 
-        print(f"    --> Dumped vision Markdown to {dump_path}")
+        # LaTeX table output (format=True) -- parse_transactions() (built for
+        # flat native/OCR text) cannot match this structure at all. This was
+        # the actual bug behind every vision-tier doc returning zero: the
+        # right parser existed, it just wasn't being called here.
+        txns = parse_latex_transaction_table(vision_text, row['DocID'])
+
+        if not txns:
+            debug_dir = "ocr_debug_dumps"
+            os.makedirs(debug_dir, exist_ok=True)
+            dump_path = os.path.join(debug_dir, f"{row['DocID']}_vision_dump.txt")
+            with open(dump_path, "w", encoding="utf-8") as f:
+                f.write(vision_text)
+            print(f"    --> Still 0 transactions after LaTeX parse. Dumped to {dump_path}")
+
+        return txns, 'ocr_vision', len(vision_text)
 
     print(f"  {row['DocID']}: empty/failed after all 3 attempts")
     return [], 'empty_all', 0
