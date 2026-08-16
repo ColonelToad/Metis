@@ -34,6 +34,7 @@ hf_models/
 *.hdf5
 *.pickle
 *.pkl
+debug_filings/
 data/raw/
 data/processed/
 data/tick_data/
@@ -41,6 +42,7 @@ data/historical/
 research/data/processed/
 research/data/raw/
 research/data/tick_data/
+stooq_hist_data/
 # ML Models
 *.pt
 *.pth

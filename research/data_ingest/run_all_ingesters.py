@@ -3,9 +3,9 @@ Run data ingesters in sequence with frequency support.
 Supports daily, weekly, and monthly scheduled execution.
 
 Frequencies:
-  - daily: EIA, LMP, FRED Macro, Weather, Maritime AIS (run every day)
+  - daily: EIA, LMP, FRED Macro, Weather, Maritime AIS, Stock Prices (run every day)
   - weekly: CME Futures, Drought Monitor, EIA Jet Fuel (run Mondays only)
-  - monthly: BLS PPI, FRED Building Permits, Congress Bills, NOAA Storm Events (run once per month)
+  - monthly: BLS PPI, FRED Building Permits, Congress Bills, NOAA Storm Events, LDA Lobbying Disclosures, Lobbying Bill Reference Extraction (run once per month)
   - all: run all above regardless of schedule
 
 Environment:
@@ -39,6 +39,9 @@ from data_ingest import ingest_bls_ppi
 from data_ingest import ingest_fred_building_permits
 from data_ingest import ingest_eia_jet_fuel
 from data_ingest import ingest_storm_events
+from data_ingest import ingest_stooq
+from data_ingest import ingest_lobbying_disclosures
+from features import extract_lobbying_bill_references
 
 # Import log rotation
 from log_rotation import rotate_logs
@@ -119,6 +122,7 @@ DAILY_INGESTERS = [
     ("FRED Macro", ingest_fred),
     ("Weather", ingest_weather),
     ("Maritime AIS", ingest_ais_maritime),
+    ("Stock Prices", ingest_stooq),
 ]
 
 WEEKLY_INGESTERS = [
@@ -132,6 +136,12 @@ MONTHLY_INGESTERS = [
     ("FRED Building Permits", ingest_fred_building_permits),
     ("Congress Bills", ingest_congress_bills_expanded),
     ("NOAA Storm Events", ingest_storm_events),
+    ("LDA Lobbying Disclosures", ingest_lobbying_disclosures),
+    # Must run after LDA Lobbying Disclosures immediately above -- reads the
+    # lobbying_activities/lobbying_filings tables that ingester just wrote.
+    # Ordering in this list is the only thing enforcing that dependency
+    # (run_all() executes sequentially), so don't reorder these two.
+    ("Lobbying Bill Reference Extraction", extract_lobbying_bill_references),
 ]
 
 def get_ingesters_for_frequency(frequency: str) -> list:
@@ -163,10 +173,10 @@ def get_frequency_description(frequency: str) -> str:
     """Return human-readable description of frequency."""
     is_mon = is_monday()
     descriptions = {
-        "daily": f"Daily run (EIA, LMP, Multi-ISO LMP, FRED, Weather, AIS)" + 
+        "daily": f"Daily run (EIA, LMP, Multi-ISO LMP, FRED, Weather, AIS, Stock Prices)" + 
                  (f" + Weekly CME Futures (Monday)" if is_mon else ""),
         "weekly": "Weekly run (CME Futures, Drought Monitor, EIA Jet Fuel) - Runs Mondays",
-        "monthly": "Monthly run (BLS PPI, FRED Building Permits, Congress Bills, NOAA Storm Events)",
+        "monthly": "Monthly run (BLS PPI, FRED Building Permits, Congress Bills, NOAA Storm Events, LDA Lobbying Disclosures, Lobbying Bill Reference Extraction)",
         "all": "All ingesters (daily + weekly + monthly)"
     }
     return descriptions.get(frequency, frequency)

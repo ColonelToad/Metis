@@ -537,6 +537,33 @@ class FeatureEngineer:
         ppi_cols = [col for col in df.columns if 'ppi' in col.lower()]
         low_freq_cols.extend(ppi_cols)
         
+        # Include CME cross-asset and LMP power-price features -- both loaders run in
+        # engineer_features() and populate self.df correctly, but neither's columns were
+        # ever added to any frequency group, so they were silently dropped at this exact
+        # step despite being real, correctly-computed signals (confirmed during the data
+        # audit). Deliberately excluding the raw natural_gas_close/volatility_20d/ma_20
+        # triplet from CME: that's NG's own price from a second vendor (direct CME pull),
+        # redundant with close/open already in the daily branch via ng_futures_daily --
+        # including it would just duplicate near-identical price information across two
+        # branches, not add cross-asset signal. The derived spreads/ratios that use it as
+        # an input (ng_wti_ratio, ng_power_basis) are kept, since a spread carries
+        # different information than either raw price alone.
+        cross_asset_cols = [
+            'crude_oil_wti_close', 'crude_oil_wti_volatility_20d', 'crude_oil_wti_ma_20',
+            'crude_oil_brent_close', 'crude_oil_brent_volatility_20d', 'crude_oil_brent_ma_20',
+            'heating_oil_close', 'heating_oil_volatility_20d', 'heating_oil_ma_20',
+            'rbob_gasoline_close', 'rbob_gasoline_volatility_20d', 'rbob_gasoline_ma_20',
+            'wti_brent_spread', 'wti_brent_spread_pct',
+            'ho_wti_crack', 'ho_wti_spread_pct',
+            'ng_wti_ratio',
+        ]
+        low_freq_cols.extend([c for c in cross_asset_cols if c in df.columns and c not in low_freq_cols])
+
+        lmp_related_cols = [col for col in df.columns if col.startswith('lmp_')] + [
+            'ng_power_basis', 'ng_power_basis_pct'
+        ]
+        low_freq_cols.extend([c for c in lmp_related_cols if c in df.columns and c not in low_freq_cols])
+        
         low_freq_features = df[[col for col in low_freq_cols if col in df.columns]].copy()
         
         # Sparse features: event-driven signals with sparse occurrence

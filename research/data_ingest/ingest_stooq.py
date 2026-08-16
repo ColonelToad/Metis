@@ -1,45 +1,73 @@
 """
 Stock Market Data Ingestion using Stooq
-Fetches historical stock data for energy companies and related equities
+
+Rewritten from the original if_exists='replace' + rolling-730-day-window
+version, which meant the table could never accumulate real history -- every
+run discarded anything older than 730 days before that run's execution time,
+regardless of how long the project had been collecting data.
+
+This version:
+  - Fetches full history (since 2015, matching the rest of Metis's data range)
+    rather than a rolling window, so there's no artificial truncation.
+  - Upserts on (timestamp, ticker) instead of replacing the whole table, so
+    reruns are safe and idempotent rather than destructive.
+  - Logs each ticker's success/failure explicitly rather than silently
+    swallowing failures in a bare except -- this is how CHK's failure went
+    unnoticed in the original version.
+
+On conflict resolution: a same-(timestamp, ticker) conflict is expected to
+occur legitimately, not just from a bug -- stock splits, dividends, and
+vendor corrections all cause a historical bar's reported values to change
+after the fact, even though the calendar date it's attached to doesn't move.
+Last-write-wins (DO UPDATE) is the correct policy here: a newer fetch
+reflects a more complete, more current view of that date, not a competing
+claim about what "really" happened.
 """
 import os
 import sys
 from pathlib import Path
 import pandas as pd
 import pandas_datareader.data as web
-from datetime import datetime, timedelta
-from sqlalchemy import create_engine
+from datetime import datetime
+from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
+import yfinance as yf
 
-# Add project root for imports
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 from research.common import runtime_config as rc
 
 load_dotenv()
 DB_URL = rc.get_db_url()
 
+START_DATE = os.getenv("STOCK_PRICES_START_DATE", "2015-01-01")
+
 # Energy-related stocks (natural gas, LNG, pipelines, utilities)
+# NOTE: CHK was silently failing in the original version. Chesapeake went
+# through a 2020 bankruptcy and a 2024 merger with Southwestern Energy,
+# rebranding as Expand Energy (ticker EXE) -- worth confirming which ticker
+# is actually correct now before assuming CHK itself is just fetchable again.
 ENERGY_TICKERS = {
     # Natural Gas & LNG
-    'CHK': 'Chesapeake Energy',
+    'CHK': 'Chesapeake Energy',  # unconfirmed post-merger ticker -- see note above
+    'EXE': 'Expand Energy',
     'EQT': 'EQT Corporation',
     'AR': 'Antero Resources',
     'CNX': 'CNX Resources',
     'RRC': 'Range Resources',
-    
+
     # Pipelines & Midstream
     'KMI': 'Kinder Morgan',
     'WMB': 'Williams Companies',
     'EPD': 'Enterprise Products',
     'ET': 'Energy Transfer',
     'OKE': 'ONEOK',
-    
+
     # Utilities with Gas Exposure
     'NEE': 'NextEra Energy',
     'D': 'Dominion Energy',
     'SO': 'Southern Company',
     'DUK': 'Duke Energy',
-    
+
     # ETFs
     'XLE': 'Energy Select Sector',
     'UNG': 'US Natural Gas Fund',
@@ -47,65 +75,104 @@ ENERGY_TICKERS = {
     'XOP': 'SPDR S&P Oil & Gas',
 }
 
+
 def fetch_stock_data(ticker, start_date, end_date):
-    """Fetch historical stock data from Stooq"""
-    if not rc.require_real_mode(f"Stooq {ticker}"):
-        return pd.DataFrame()
-    
-    try:
-        df = web.DataReader(ticker, 'stooq', start_date, end_date)
-        
-        # Stooq returns descending order; reverse it
-        df = df.sort_index()
-        
-        # Add ticker column
-        df['ticker'] = ticker
-        df['timestamp'] = df.index
-        
-        # Standardize column names
-        df = df.rename(columns={
-            'Open': 'open',
-            'High': 'high',
-            'Low': 'low',
-            'Close': 'close',
-            'Volume': 'volume'
-        })
-        
-        return df[['timestamp', 'ticker', 'open', 'high', 'low', 'close', 'volume']]
-    
-    except Exception as e:
-        print(f"Failed to fetch {ticker}: {e}")
+    """Fetch historical stock data from Yahoo Finance"""
+    if not rc.require_real_mode(f"Yahoo {ticker}"):
         return pd.DataFrame()
 
-if __name__ == "__main__":
+    try:
+        # yfinance expects standard tickers (no .US suffix needed)
+        df = yf.download(ticker, start=start_date, end=end_date, progress=False)
+        
+        if df.empty:
+            return pd.DataFrame()
+
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        df = df.sort_index()
+        df['ticker'] = ticker
+        #df['timestamp'] = df.index
+        df['timestamp'] = df.index.to_pydatetime().astype('datetime64[ns]').tolist()
+        df = df.rename(columns={
+            'Open': 'open', 'High': 'high', 'Low': 'low',
+            'Close': 'close', 'Volume': 'volume'
+        })
+        
+        # yfinance includes an 'Adj Close' column, so we just select the ones we need
+        return df[['timestamp', 'ticker', 'open', 'high', 'low', 'close', 'volume']]
+    except Exception as e:
+        print(f"  FAILED: {ticker} -- {e}")
+        return pd.DataFrame()
+
+
+def ensure_unique_index(engine):
+    """ON CONFLICT requires an actual unique constraint to target -- the
+    original if_exists='replace' table never had one, since replace-based
+    ingestion doesn't need it."""
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_prices_ts_ticker "
+            "ON stock_prices(timestamp, ticker)"
+        ))
+
+
+def upsert_stock_data(df: pd.DataFrame, engine):
+    if df.empty:
+        return 0
+
+    cols = ['timestamp', 'ticker', 'open', 'high', 'low', 'close', 'volume', 'company_name']
+    for c in cols:
+        if c not in df.columns:
+            df[c] = None
+
+    records = df[cols].to_dict('records')
+    placeholders = ", ".join([f":{c}" for c in cols])
+    update_clause = ", ".join([f"{c}=excluded.{c}" for c in cols if c not in ('timestamp', 'ticker')])
+
+    stmt = text(f"""
+        INSERT INTO stock_prices ({', '.join(cols)})
+        VALUES ({placeholders})
+        ON CONFLICT(timestamp, ticker) DO UPDATE SET {update_clause}
+    """)
+
+    with engine.begin() as conn:
+        conn.execute(stmt, records)
+
+    return len(records)
+
+
+def main():
     rc.log_mode("Stooq Stock Data")
-    
-    # Fetch 2 years of historical data
+
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=730)
-    
-    print(f"Fetching stock data from Stooq ({start_date.date()} to {end_date.date()})...")
-    
-    all_data = []
-    
+    print(f"Fetching stock data from Stooq ({START_DATE} to {end_date.date()})...")
+
+    engine = create_engine(DB_URL)
+    ensure_unique_index(engine)
+
+    total_upserted = 0
+    succeeded, failed = [], []
+
     for ticker, company in ENERGY_TICKERS.items():
-        df = fetch_stock_data(ticker, start_date, end_date)
+        df = fetch_stock_data(ticker, START_DATE, end_date)
         if not df.empty:
             df['company_name'] = company
-            all_data.append(df)
-            print(f"Fetched {len(df)} records for {ticker} ({company})")
-    
-    if all_data:
-        combined_df = pd.concat(all_data, ignore_index=True)
-        
-        # Save to database
-        engine = create_engine(DB_URL)
-        combined_df.to_sql('stock_prices', engine, if_exists='replace', index=False)
-        
-        print(f"Saved {len(combined_df)} total stock records to database")
-        
-        # Summary stats
-        print(f"\nData range: {combined_df['timestamp'].min()} to {combined_df['timestamp'].max()}")
-        print(f"Tickers collected: {combined_df['ticker'].nunique()}")
-    else:
-        print("No stock data fetched")
+            n = upsert_stock_data(df, engine)
+            total_upserted += n
+            succeeded.append(ticker)
+            print(f"  {ticker} ({company}): {n} rows upserted")
+        else:
+            failed.append(ticker)
+
+    print(f"\nSucceeded: {succeeded}")
+    if failed:
+        print(f"Failed (visible now, not silently dropped): {failed}")
+    print(f"Total rows upserted this run: {total_upserted}")
+
+    return total_upserted
+
+
+if __name__ == "__main__":
+    main()
