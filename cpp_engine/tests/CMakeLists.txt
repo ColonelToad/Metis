@@ -5,6 +5,8 @@ add_executable(metis-tests
     orderbook_test.cpp
     fusion_test.cpp
     execution_algos_test.cpp
+    dpdk_ingest_test.cpp
+    sbe_parser_test.cpp
 )
 
 target_link_libraries(metis-tests PRIVATE
