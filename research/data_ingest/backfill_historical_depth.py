@@ -30,7 +30,7 @@ import requests
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 from research.common import runtime_config as rc
 
 load_dotenv()
@@ -51,6 +51,19 @@ FRED_SERIES = {
     "personal_consumption": "PCE",
 }
 
+def ensure_unique_indexes(engine):
+    """Ensure EIA tables have unique constraints so ON CONFLICT DO NOTHING works."""
+    with engine.begin() as conn:
+        # Add this new FRED index
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_fred_macro_ts_sid ON fred_macro(timestamp, series_id)"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_eia_storage_ts ON eia_storage(timestamp)"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_eia_production_ts ON eia_production(timestamp)"
+        ))
 
 def fetch_fred_series(series_id: str, start: str) -> pd.DataFrame:
     """Fetch one FRED series from start_date to today."""
@@ -102,10 +115,59 @@ def backfill_fred(engine):
                     INSERT INTO fred_macro (timestamp, series_id, value)
                     VALUES (:ts, :sid, :val)
                     ON CONFLICT(timestamp, series_id) DO UPDATE SET value=excluded.value
-                """), {"ts": row["timestamp"].isoformat(), "sid": series_id, "val": float(row["value"])})
+                """), {"ts": row["timestamp"].strftime('%Y-%m-%d 00:00:00.000000'), "sid": series_id, "val": float(row["value"])})
 
         print(f"    Upserted {len(df)} rows for {series_id}")
 
+import os
+
+def backfill_eia_storage_legacy(engine):
+    """
+    Parses the legacy 3-region EIA archive Excel file and upserts the
+    Total Lower 48 data for 1993-2009.
+    """
+    file_path = "data/archngshistory.xls"
+    
+    if not os.path.exists(file_path):
+        print(f"\n[!] Legacy archive not found at {file_path}")
+        print("    Please save the EIA history file as 'data/archngshistory.xls' and run again.")
+        return
+
+    print("\n--- EIA legacy storage archive backfill ---")
+    
+    # Read the first sheet of the Excel file. The EIA preamble is 7 rows long.
+    df = pd.read_excel(file_path, sheet_name=0, skiprows=7)
+    
+    # Find the Date and Total Lower 48 columns. 
+    date_col = "Week ending" if "Week ending" in df.columns else df.columns[0]
+    total_col = "Total Lower 48" if "Total Lower 48" in df.columns else df.columns[7]
+    
+    df = df.rename(columns={date_col: "timestamp", total_col: "storage_bcf"})
+    df = df[["timestamp", "storage_bcf"]].dropna()
+    
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["storage_bcf"] = pd.to_numeric(df["storage_bcf"], errors="coerce")
+    df = df.dropna()
+    
+    # We only need the missing 1993-2009 data to bridge the gap
+    df = df[df["timestamp"] < "2010-01-01"]
+    
+    if df.empty:
+        print("  No legacy data found matching the criteria.")
+        return
+
+    with engine.begin() as conn:
+        for _, row in df.iterrows():
+            conn.execute(text("""
+                INSERT INTO eia_storage (timestamp, storage_bcf, "area-name")
+                VALUES (:ts, :val, 'NA')
+                ON CONFLICT DO NOTHING
+            """), {
+                "ts": row["timestamp"].strftime('%Y-%m-%d 00:00:00.000000'), 
+                "val": float(row["storage_bcf"])
+            })
+
+    print(f"  Upserted {len(df)} legacy EIA storage rows ({df['timestamp'].min().date()} to {df['timestamp'].max().date()})")
 
 def fetch_eia_storage_historical(start_year: int) -> pd.DataFrame:
     """
@@ -164,7 +226,7 @@ def backfill_eia_storage(engine):
                 INSERT INTO eia_storage (timestamp, storage_bcf, "area-name")
                 VALUES (:ts, :val, 'NA')
                 ON CONFLICT DO NOTHING
-            """), {"ts": row["timestamp"].isoformat(), "val": float(row["storage_bcf"])})
+            """), {"ts": row["timestamp"].strftime('%Y-%m-%d 00:00:00.000000'), "val": float(row["storage_bcf"])})
 
     print(f"  Upserted {len(df)} EIA storage rows")
 
@@ -223,7 +285,7 @@ def backfill_eia_production(engine):
                 INSERT INTO eia_production (timestamp, production_mmcf)
                 VALUES (:ts, :val)
                 ON CONFLICT DO NOTHING
-            """), {"ts": row["timestamp"].isoformat(), "val": float(row["production_mmcf"])})
+            """), {"ts": row["timestamp"].strftime('%Y-%m-%d 00:00:00.000000'), "val": float(row["production_mmcf"])})
 
     print(f"  Upserted {len(df)} EIA production rows")
 
@@ -232,7 +294,8 @@ def verify(engine):
     print("\n--- Post-backfill verification ---")
     with engine.connect() as conn:
         checks = {
-            "fred_macro (wti)": "SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM fred_macro WHERE series_id='DCOILWTICO'",
+            # Updated to query the series_id column properly
+            "fred_macro (wti)": "SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM fred_macro WHERE wti_crude_price IS NOT NULL",
             "eia_storage": "SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM eia_storage",
             "eia_production": "SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM eia_production",
         }
@@ -243,6 +306,7 @@ def verify(engine):
 
 def main():
     engine = create_engine(DB_URL)
+    ensure_unique_indexes(engine)
 
     # Check existing fred_macro schema -- the upsert assumes a series_id column
     # which the current schema may not have (it was a wide table in some versions)
@@ -250,14 +314,15 @@ def main():
         cols = [r[1] for r in conn.execute(text("PRAGMA table_info(fred_macro)")).fetchall()]
         print(f"fred_macro columns: {cols}")
 
-    if "series_id" not in cols:
-        print("\nWARNING: fred_macro has no series_id column -- it's a wide table (one column per series).")
+    if "value" not in cols:
+        print("\nWARNING: fred_macro has no 'value' column -- it's a wide table (one column per series).")
         print("The FRED upsert below will use the wide-table approach instead.")
         backfill_fred_wide(engine, cols)
     else:
         backfill_fred(engine)
 
     backfill_eia_storage(engine)
+    backfill_eia_storage_legacy(engine)
     backfill_eia_production(engine)
     verify(engine)
 
@@ -285,7 +350,7 @@ def backfill_fred_wide(engine, existing_cols):
 
         with engine.begin() as conn:
             for _, row in df.iterrows():
-                ts = row["timestamp"].isoformat()
+                ts = row["timestamp"].strftime('%Y-%m-%d 00:00:00.000000')
                 val = float(row["value"])
                 exists = conn.execute(text(
                     "SELECT COUNT(*) FROM fred_macro WHERE timestamp=:ts"
