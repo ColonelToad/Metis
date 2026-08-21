@@ -1,7 +1,7 @@
 import lancedb
 
 # Use the exact absolute path that Rust is resolving to
-uri = r"C:\Users\legot\Metis\research\data\dev\lance"
+uri = r"C:\Users\legot\Metis\data\lance"
 
 try:
     db = lancedb.connect(uri)

@@ -83,7 +83,7 @@ class RAGPipeline:
                 # Default to LanceDB; pick mode-specific path
                 mode = os.getenv("METIS_MODE", "DEV").upper()
                 base_dir = _Path(__file__).resolve().parents[1]
-                db_dir = base_dir / ("data/lance" if mode == "REAL" else "data/dev/lance")
+                db_dir = base_dir / ("data/lance" if mode in ("REAL", "PROD") else "data/dev/lance")
                 self.lance = LanceVectorStore(db_dir, self.collection_name, self.embedding_dim)
                 logger.info(f"Connected to LanceDB at {db_dir}")
     
