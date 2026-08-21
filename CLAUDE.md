@@ -91,6 +91,10 @@ npm run test:service     # orchestrator integration tests
 
 `metis/src-tauri/` is a separate standalone crate (Tauri's build tooling requires it).
 
+## C++ Engine (lives in WSL)
+
+The C++ HFT engine (`metis-cpp`) is maintained exclusively in WSL at `/home/tolugenius/Projects/metis-cpp` (Windows path: `\\wsl.localhost\Debian\home\tolugenius\Projects\metis-cpp`). It is its own git repo and builds natively in WSL with CMake + Ninja. There is deliberately **no copy of it inside this Windows checkout** — do not recreate one; edit/build it from WSL.
+
 ## Release Profile (Rust)
 
 All Rust crates use aggressive release settings: `opt-level=3`, `lto="fat"`, `codegen-units=1`, `panic="abort"`, `strip=true`. Benchmark with `cargo bench` against criterion suite, not debug builds.

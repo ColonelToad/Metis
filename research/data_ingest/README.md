@@ -18,11 +18,6 @@ This directory contains ingestion scripts for heterogeneous alternative data sou
   - Requires MarineTraffic API key (free tier: 50 calls/day)
   - Alternative: AISHub.net (free but lower coverage)
 
-### Labor Market (Partial)
-- **Job Postings:** Energy sector hiring (`ingest_job_postings.py`)
-  - Uses Adzuna API (free tier: 3000 calls/month)
-  - Get key: https://developer.adzuna.com/
-
 ## Missing Data Categories (Free Alternatives)
 
 ### Traffic/Mobility
@@ -61,8 +56,6 @@ export METIS_MODE=REAL
 ### Set Environment Variables
 Add missing API keys to `.env`:
 ```bash
-ADZUNA_APP_ID=your_id_here
-ADZUNA_API_KEY=your_key_here
 MARINETRAFFIC_API_KEY=your_key_here
 DB_URL=postgresql://postgres:postgres@localhost:5432/metis
 ```
@@ -74,7 +67,6 @@ python data_ingest/ingest_eia.py
 python data_ingest/ingest_lmp.py
 python data_ingest/ingest_fred.py
 python data_ingest/ingest_congress_bills_expanded.py
-python data_ingest/ingest_job_postings.py  # Requires Adzuna key
 python data_ingest/ingest_ais_maritime.py  # Requires MarineTraffic key
 ```
 
