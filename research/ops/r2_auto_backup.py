@@ -12,6 +12,8 @@ USAGE:
 
 import os
 import sys
+import shutil
+import tempfile
 from pathlib import Path
 from datetime import datetime
 import logging
@@ -47,14 +49,39 @@ R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "metis")
 R2_REGION = os.getenv("R2_REGION", "auto")
 
-# Local data paths (relative to project root)
-PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
-PROCESSED_DIR = DATA_DIR / "processed"
+# Local data paths
+# Ingesters resolve DB_URL (and features/cache dirs) relative to the repo root,
+# so all paths here are anchored to the repo root, not to this file's location.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = REPO_ROOT / "data"
+RESEARCH_DATA_DIR = REPO_ROOT / "research" / "data"
+PROCESSED_DIR = RESEARCH_DATA_DIR / "processed"
 CACHE_DIR = DATA_DIR / "cache"
 FEATURES_DIR = DATA_DIR / "features"
 LANCE_DIR = DATA_DIR / "lance"
 RAG_DIR = DATA_DIR / "rag_context"
+
+MAX_DB_AGE_HOURS = 48
+
+
+def resolve_db_path() -> Optional[Path]:
+    """Resolve the SQLite DB path from DB_URL, falling back to <repo>/data/metis.db."""
+    db_url = os.getenv("DB_URL", "").strip()
+    if not db_url.lower().startswith("sqlite"):
+        return None
+    if ":memory:" in db_url or "mode=memory" in db_url:
+        return None
+    prefix = "sqlite:///" if db_url.startswith("sqlite:///") else "sqlite://"
+    raw = db_url[len(prefix):].split("?", 1)[0]
+    if not raw:
+        return None
+    path = Path(raw)
+    if path.is_absolute():
+        return path.resolve()
+    return (REPO_ROOT / path).resolve()
+
+
+DB_PATH = resolve_db_path() or (DATA_DIR / "metis.db")
 
 
 class R2AutoBackup:
@@ -146,6 +173,55 @@ class R2AutoBackup:
         
         return files_uploaded
     
+    def snapshot_database(self, src: Path, dest: Path) -> bool:
+        """Create a consistent copy of the SQLite DB via the backup API."""
+        try:
+            import sqlite3
+            src_conn = sqlite3.connect(f"{src.as_uri()}?mode=ro", uri=True)
+            dest_conn = sqlite3.connect(dest)
+            try:
+                src_conn.backup(dest_conn)
+            finally:
+                src_conn.close()
+                dest_conn.close()
+            return True
+        except Exception as e:
+            logger.warning(f"  SQLite backup API failed ({e}); falling back to raw copy")
+            try:
+                shutil.copy2(src, dest)
+                return True
+            except Exception as copy_err:
+                logger.error(f"  ✗ Snapshot failed: {copy_err}")
+                return False
+    
+    def backup_database(self, timestamp: str) -> bool:
+        """Snapshot and upload the database, refusing stale sources."""
+        logger.info(f"  Source: {DB_PATH}")
+        
+        if not DB_PATH.exists():
+            logger.error(f"  ✗ Database not found: {DB_PATH}")
+            self.stats["skipped"] += 1
+            return False
+        
+        age_hours = (datetime.now() - datetime.fromtimestamp(DB_PATH.stat().st_mtime)).total_seconds() / 3600
+        if age_hours > MAX_DB_AGE_HOURS:
+            logger.error(
+                f"  ✗ Database is stale (last modified {age_hours:.1f}h ago, "
+                f"threshold {MAX_DB_AGE_HOURS}h) - refusing to upload"
+            )
+            self.stats["skipped"] += 1
+            return False
+        
+        temp_snapshot = Path(tempfile.gettempdir()) / f"metis_backup_{os.getpid()}_{timestamp}.db"
+        try:
+            if self.snapshot_database(DB_PATH, temp_snapshot):
+                return self.upload_file(temp_snapshot, f"database/metis_{timestamp}.db")
+            self.stats["skipped"] += 1
+            return False
+        finally:
+            if temp_snapshot.exists():
+                temp_snapshot.unlink()
+    
     def backup_all(self) -> bool:
         """Run complete backup routine."""
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -157,11 +233,12 @@ class R2AutoBackup:
         if self.dry_run:
             print("[DRY RUN MODE] No files will be uploaded\n")
         
+        logger.info(f"Repo root: {REPO_ROOT}")
+        logger.info(f"Database:  {DB_PATH}")
+        
         # 1. Database
         logger.info("Backing up database...")
-        db_path = DATA_DIR / "metis.db"
-        if db_path.exists():
-            self.upload_file(db_path, f"database/metis_{timestamp}.db")
+        self.backup_database(timestamp)
         
         # 2. Processed data
         logger.info("Backing up processed data...")

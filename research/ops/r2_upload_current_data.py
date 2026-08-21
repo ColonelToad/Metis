@@ -81,9 +81,31 @@ if not all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY]):
 R2_ENDPOINT = f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
 # Local data paths
-DATA_DIR = Path(__file__).parent.parent / "data"
-PROCESSED_DIR = DATA_DIR / "processed"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RESEARCH_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+DATA_DIR = REPO_ROOT / "data"
+PROCESSED_DIR = RESEARCH_DATA_DIR / "processed"
 CACHE_DIR = DATA_DIR / "cache"
+
+
+def resolve_db_path() -> Optional[str]:
+    """Resolve the SQLite DB path from DB_URL, falling back to <repo>/data/metis.db."""
+    db_url = os.getenv("DB_URL", "").strip()
+    if not db_url.lower().startswith("sqlite"):
+        return None
+    if ":memory:" in db_url or "mode=memory" in db_url:
+        return None
+    prefix = "sqlite:///" if db_url.startswith("sqlite:///") else "sqlite://"
+    raw = db_url[len(prefix):].split("?", 1)[0]
+    if not raw:
+        return None
+    path = Path(raw)
+    if path.is_absolute():
+        return path.resolve()
+    return (REPO_ROOT / path).resolve()
+
+
+DB_PATH = resolve_db_path() or (DATA_DIR / "metis.db")
 
 
 class R2Uploader:
@@ -220,7 +242,7 @@ class R2Uploader:
     
     def backup_database(self, dry_run: bool = False) -> Dict:
         """Backup SQLite database to R2."""
-        db_path = DATA_DIR / "metis.db"
+        db_path = DB_PATH
         
         if not db_path.exists():
             logger.info("  ⊘ Database not found")
