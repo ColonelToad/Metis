@@ -26,7 +26,12 @@ import pickle
 import tensorflow as tf
 from sklearn.preprocessing import StandardScaler
 
-from signal_client import SignalClient, create_signal
+try:
+    from signal_client import SignalClient, create_signal
+except ImportError:
+    # Package-style import (research.models.inference_pipeline) — the
+    # top-level name isn't on sys.path in that context.
+    from research.signal_client import SignalClient, create_signal
 from loguru import logger
 
 
@@ -46,10 +51,11 @@ class DualLSTMInference:
         signal_host: str = "localhost",
         signal_port: int = 8080,
         threshold: float = 0.40,
+        features_dir: str = "data/features",
     ):
         """
         Initialize inference pipeline.
-        
+
         Args:
             model_path: Path to trained TensorFlow model (h5 format)
             scalers_path: Path to pickled scalers (daily, low_freq, sparse)
@@ -57,32 +63,144 @@ class DualLSTMInference:
             signal_host: Rust execution engine host
             signal_port: Rust execution engine port
             threshold: Classification threshold for buy signals (default: 0.40)
+            features_dir: Directory holding train/test track parquets, used
+                to refit scalers when the pickled artifact is missing or a
+                legacy stub
         """
         self.model_path = model_path
         self.scalers_path = scalers_path
         self.config_path = config_path
+        self.features_dir = features_dir
         self.threshold = threshold
-        
+
         # Load model
         logger.info(f"Loading model from {model_path}")
         self.model = tf.keras.models.load_model(model_path)
-        
-        # Load scalers
-        logger.info(f"Loading scalers from {scalers_path}")
-        with open(scalers_path, "rb") as f:
-            self.scaler_daily, self.scaler_low_freq, self.scaler_sparse = pickle.load(f)
-        
-        # Load config
+
+        # Load config (needed before scalers: refit maps tracks to the
+        # config's feature column lists)
         logger.info(f"Loading config from {config_path}")
         with open(config_path) as f:
             import yaml
             self.config = yaml.safe_load(f)
+
+        # The yaml's feature lists may have drifted since training (e.g. a
+        # column added later). lstm_metadata.json records the columns the
+        # model was actually trained on — prefer it so scaler fit, sequence
+        # assembly, and model inputs all stay consistent.
+        self._reconcile_feature_lists(model_path)
+
+        # Load scalers (refits from the train split if the artifact is a
+        # legacy stub or unreadable — see _load_or_fit_scalers)
+        (
+            self.scaler_daily,
+            self.scaler_low_freq,
+            self.scaler_sparse,
+        ) = self._load_or_fit_scalers(scalers_path)
         
         # Initialize signal client (lazy connection on first send)
         self.signal_client = SignalClient(host=signal_host, port=signal_port)
         self.connected = False
         
         logger.info(f"DualLSTM pipeline initialized (threshold={threshold})")
+
+    def _reconcile_feature_lists(self, model_path: str) -> None:
+        """Prefer the training-time feature lists from lstm_metadata.json
+        when the config yaml has drifted from them."""
+        try:
+            meta_path = Path(model_path).with_name("lstm_metadata.json")
+            with open(meta_path) as f:
+                meta = json.load(f)
+        except Exception as e:
+            logger.warning(f"No model metadata for feature reconciliation: {e}")
+            return
+
+        for key in ("daily_features", "low_freq_features", "sparse_features"):
+            trained = meta.get(key)
+            if not trained or trained == self.config.get(key):
+                continue
+            logger.warning(
+                f"{key} drifted from training schema "
+                f"(config={len(self.config.get(key, []))} cols, "
+                f"trained={len(trained)}); using trained columns"
+            )
+            self.config[key] = list(trained)
+
+    def _load_or_fit_scalers(self, scalers_path: str) -> Tuple[Any, Any, Any]:
+        """
+        Load pickled (daily, low_freq, sparse) scalers.
+
+        The historical models/scalers_v1.0.pkl is a legacy single-track stub
+        ({"features_scaler": None, ...}), which tuple-unpacking would silently
+        accept as three strings. If the artifact can't be read or doesn't hold
+        three fitted transformers, refit one StandardScaler per track from the
+        train split and persist the result for subsequent runs.
+        """
+        try:
+            with open(scalers_path, "rb") as f:
+                loaded = pickle.load(f)
+        except Exception as e:
+            logger.warning(f"Could not read scalers from {scalers_path}: {e}")
+            loaded = None
+
+        expected = (
+            len(self.config["daily_features"]),
+            len(self.config["low_freq_features"]),
+            len(self.config["sparse_features"]),
+        )
+        if (
+            isinstance(loaded, tuple)
+            and len(loaded) == 3
+            and all(hasattr(s, "transform") for s in loaded)
+            and all(
+                getattr(s, "n_features_in_", None) == n
+                for s, n in zip(loaded, expected)
+            )
+        ):
+            logger.info(f"Scalers loaded from {scalers_path}")
+            return loaded
+
+        if isinstance(loaded, tuple) and len(loaded) == 3:
+            logger.warning(
+                "Persisted scalers don't match the current feature schema "
+                f"(expected {expected}); refitting"
+            )
+
+        logger.warning(
+            f"Scaler artifact at {scalers_path} is missing or invalid "
+            f"(got {type(loaded).__name__}); refitting from train split in "
+            f"{self.features_dir}"
+        )
+        scalers = self._fit_scalers_from_train()
+        try:
+            with open(scalers_path, "wb") as f:
+                pickle.dump(scalers, f)
+            logger.info(f"Refitted scalers persisted to {scalers_path}")
+        except Exception as e:
+            logger.warning(f"Could not persist refitted scalers: {e}")
+        return scalers
+
+    def _fit_scalers_from_train(self) -> Tuple[Any, Any, Any]:
+        """Fit one StandardScaler per track on the train parquet split."""
+        base = Path(self.features_dir)
+        fitted = []
+        for split_file, feature_key in (
+            ("train_daily_features.parquet", "daily_features"),
+            ("train_low_freq_features.parquet", "low_freq_features"),
+            ("train_sparse_features.parquet", "sparse_features"),
+        ):
+            cols = self.config[feature_key]
+            df = pd.read_parquet(base / split_file)
+            missing = [c for c in cols if c not in df.columns]
+            if missing:
+                raise ValueError(
+                    f"{split_file} lacks required columns: {missing[:5]}..."
+                )
+            X = df[cols].replace([np.inf, -np.inf], np.nan).dropna()
+            scaler = StandardScaler().fit(X)
+            logger.info(f"Fitted {feature_key} scaler on {len(X)} train rows")
+            fitted.append(scaler)
+        return tuple(fitted)
     
     def preprocess_track(
         self,

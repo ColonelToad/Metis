@@ -38,7 +38,7 @@ impl PythonRunner {
                 path.call_method1("insert", (0, project_root.to_string_lossy().to_string()))?;
 
                 // Import the orchestration module from research folder
-                let orchestrate_module = py.import_bound("research.orchestrate_daily_pipeline")?;
+                let orchestrate_module = py.import_bound("research.ops.orchestrate_daily_pipeline")?;
 
                 // Call main function - it reads METIS_MODE from environment
                 let main_func = orchestrate_module.getattr("main")?;
@@ -171,22 +171,19 @@ impl PythonRunner {
                 // Create instance with PyDict in PyO3 0.22+ way
                 // Build absolute paths for model, scalers, and config
                 let model_path = project_root.join("models").join("lstm_ng_predictor.keras");
-                let scalers_path = project_root
-                    .join("research")
-                    .join("models")
-                    .join("config")
-                    .join("scalers_v1.0.pkl");
+                let scalers_path = project_root.join("models").join("scalers_v1.0.pkl");
                 let config_path = project_root
                     .join("research")
                     .join("models")
                     .join("config")
                     .join("model_config.yaml");
+                let features_dir = project_root.join("data").join("features");
 
                 let kwargs = pyo3::types::PyDict::new_bound(py);
                 kwargs.set_item("model_path", model_path.to_string_lossy().to_string())?;
                 kwargs.set_item("scalers_path", scalers_path.to_string_lossy().to_string())?;
                 kwargs.set_item("config_path", config_path.to_string_lossy().to_string())?;
-                kwargs.set_item("signal_host", "localhost")?;
+                kwargs.set_item("features_dir", features_dir.to_string_lossy().to_string())?;                kwargs.set_item("signal_host", "localhost")?;
                 kwargs.set_item("signal_port", 8080)?;
                 kwargs.set_item("threshold", 0.40)?;
 

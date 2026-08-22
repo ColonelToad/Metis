@@ -141,8 +141,12 @@ impl SignalServer {
                 },
             };
 
-            // Send response
-            let response_bytes = rmp_serde::to_vec(&response)?;
+            // Send response. to_vec_named encodes struct fields as a
+            // msgpack map keyed by name — to_vec would emit a positional
+            // array, which the Python client unpacks into a list instead
+            // of a dict. Deserialization accepts both shapes, so existing
+            // clients are unaffected.
+            let response_bytes = rmp_serde::to_vec_named(&response)?;
             let response_len = (response_bytes.len() as u32).to_be_bytes();
             stream.write_all(&response_len).await?;
             stream.write_all(&response_bytes).await?;

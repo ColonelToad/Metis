@@ -8,6 +8,8 @@ use axum::{
 };
 use job_queue::JobQueue;
 use orchestrator::Orchestrator;
+use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,6 +24,9 @@ pub struct AppState {
     orchestrator: Arc<Orchestrator>,
     job_queue: Arc<JobQueue>,
     start_time: Instant,
+    /// Mode each submitted job was requested with, so a queued job can be
+    /// started when its turn comes (JobQueue only tracks ids).
+    job_modes: Arc<RwLock<HashMap<String, ExecutionMode>>>,
 }
 
 /// Start the orchestrator HTTP server
@@ -44,6 +49,7 @@ pub async fn start_http_server(project_root: PathBuf, port: u16) {
         orchestrator,
         job_queue,
         start_time: Instant::now(),
+        job_modes: Arc::new(RwLock::new(HashMap::new())),
     };
 
     let state = Arc::new(state);
@@ -89,56 +95,30 @@ async fn run_pipeline_handler(
 
     // Try to submit to queue
     match state.job_queue.submit(JobId(job_id.clone())) {
-        Ok(true) => {
-            // Job is running, spawn it as background task
-            let orchestrator = state.orchestrator.clone();
-            let job_id_clone = job_id.clone();
-            let mode = payload.mode.clone();
+        Ok(started) => {
+            state
+                .job_modes
+                .write()
+                .insert(job_id.clone(), payload.mode.clone());
 
-            info!(
-                "[{}] Submitting pipeline execution (mode: {:?})",
-                job_id_clone, mode
-            );
-
-            tokio::spawn(async move {
-                match orchestrator
-                    .run_pipeline(job_id_clone.clone(), mode.clone())
-                    .await
-                {
-                    Ok(result) => {
-                        info!("[{}] Pipeline completed successfully", job_id_clone);
-                        info!(
-                            "[{}] Generated {} signals",
-                            job_id_clone,
-                            result.signals.len()
-                        );
-                    }
-                    Err(e) => {
-                        error!("[{}] Pipeline failed: {}", job_id_clone, e);
-                    }
-                }
-            });
+            if started {
+                spawn_pipeline(state.clone(), job_id.clone());
+            } else {
+                warn!(
+                    "[{}] Pipeline queued (another execution in progress)",
+                    job_id
+                );
+            }
 
             Ok((
                 StatusCode::ACCEPTED,
                 Json(RunPipelineResponse {
                     job_id: job_id.clone(),
-                    status: JobStatus::Running,
-                    phase: PipelinePhase::Ingestion,
-                }),
-            ))
-        }
-        Ok(false) => {
-            // Job is queued
-            warn!(
-                "[{}] Pipeline queued (another execution in progress)",
-                job_id
-            );
-            Ok((
-                StatusCode::ACCEPTED,
-                Json(RunPipelineResponse {
-                    job_id: job_id.clone(),
-                    status: JobStatus::Queued,
+                    status: if started {
+                        JobStatus::Running
+                    } else {
+                        JobStatus::Queued
+                    },
                     phase: PipelinePhase::Ingestion,
                 }),
             ))
@@ -148,6 +128,47 @@ async fn run_pipeline_handler(
             Err(error::OrchestrationError::JobAlreadyRunning)
         }
     }
+}
+
+/// Spawn a pipeline run and free its queue slot (promoting any queued job)
+/// when it finishes.
+fn spawn_pipeline(state: Arc<AppState>, job_id: String) {
+    let orchestrator = Arc::clone(&state.orchestrator);
+    let mode = state
+        .job_modes
+        .read()
+        .get(&job_id)
+        .cloned()
+        .unwrap_or(ExecutionMode::Dev);
+
+    info!(
+        "[{}] Submitting pipeline execution (mode: {:?})",
+        job_id, mode
+    );
+
+    tokio::spawn(async move {
+        match orchestrator.run_pipeline(job_id.clone(), mode).await {
+            Ok(result) => {
+                info!("[{}] Pipeline completed successfully", job_id);
+                info!(
+                    "[{}] Generated {} signals",
+                    job_id,
+                    result.signals.len()
+                );
+            }
+            Err(e) => {
+                error!("[{}] Pipeline failed: {}", job_id, e);
+            }
+        }
+
+        // Free the slot; start the promoted job if one was waiting.
+        let promoted = state.job_queue.complete_current();
+        state.job_modes.write().remove(&job_id);
+        if let Some(next_id) = promoted {
+            info!("[{}] Starting previously queued job {}", job_id, next_id.0);
+            spawn_pipeline(Arc::clone(&state), next_id.0);
+        }
+    });
 }
 
 async fn pipeline_status_handler(

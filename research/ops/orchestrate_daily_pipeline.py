@@ -132,24 +132,58 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
                 }
             }]
         else:
-            logger.info("[INFERENCE] REAL mode: calling actual inference")
-            from research.models.inference_pipeline import DualLSTMInference
+            logger.info("[INFERENCE] REAL mode: running dual-LSTM inference")
+            from research.models.inference_pipeline import (
+                DualLSTMInference,
+                load_daily_data,
+            )
             import io
             from contextlib import redirect_stdout, redirect_stderr
-            
-            # Suppress output
+
+            root = Path(__file__).resolve().parents[2]
+
+            # Suppress TensorFlow/keras progress noise
             f_out = io.StringIO()
             f_err = io.StringIO()
             with redirect_stdout(f_out), redirect_stderr(f_err):
-                # Initialize pipeline
                 pipeline = DualLSTMInference(
-                    model_path="models/lstm_ng_predictor.keras",
+                    model_path=str(root / "models" / "lstm_ng_predictor.keras"),
+                    scalers_path=str(root / "models" / "scalers_v1.0.pkl"),
+                    config_path=str(
+                        root / "research" / "models" / "config" / "model_config.yaml"
+                    ),
+                    features_dir=str(root / "data" / "features"),
                     signal_host="localhost",
                     signal_port=8080,
-                    threshold=0.40
+                    threshold=0.40,
                 )
-                # In REAL mode, would call pipeline.predict_and_trade()
-                signals = []
+                daily_df, low_freq_df, sparse_df = load_daily_data(
+                    str(root / "data" / "features")
+                )
+                result = pipeline.predict_and_trade(
+                    daily_df,
+                    low_freq_df,
+                    sparse_df,
+                    symbol="NG:CME",
+                    target_quantity=10.0,
+                    dry_run=False,
+                )
+
+            signal = result.get("signal")
+            if signal:
+                exec_resp = result.get("execution_response")
+                if exec_resp:
+                    logger.info(
+                        f"[INFERENCE] Engine response: {exec_resp.get('status')}"
+                    )
+                else:
+                    logger.warning(
+                        "[INFERENCE] Execution engine unreachable - "
+                        "signal recorded without execution confirmation"
+                    )
+                signals = [signal]
+            else:
+                logger.warning("[INFERENCE] Model produced no signal")
         
         elapsed = time.time() - start
         logger.info(f"[INFERENCE] Phase completed in {elapsed:.2f}s, generated {len(signals)} signals")

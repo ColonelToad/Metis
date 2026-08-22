@@ -47,12 +47,16 @@ impl LatencyRecorder {
     }
 }
 
+/// Nearest-rank percentile: smallest value with at least p% of samples
+/// at or below it (ceil(p/100 * n)-th element, 1-indexed). For latency
+/// reporting this is preferable to interpolating between samples — a
+/// reported p99 is an actually-observed sample.
 fn percentile(sorted: &[u64], p: f64) -> u64 {
     if sorted.is_empty() {
         return 0;
     }
-    let rank = (p / 100.0) * (sorted.len() as f64 - 1.0);
-    let idx = rank.round() as usize;
+    let rank = ((p / 100.0) * sorted.len() as f64).ceil();
+    let idx = (rank.max(1.0) as usize).saturating_sub(1);
     sorted[idx.min(sorted.len() - 1)]
 }
 

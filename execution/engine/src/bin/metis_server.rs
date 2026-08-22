@@ -175,7 +175,9 @@ async fn run_server() -> Result<()> {
         });
     }
 
-    let addr: SocketAddr = "127.0.0.1:7878".parse()?;
+    // Port must match the Python side: research/config.py
+    // EXECUTION_ENGINE_PORT and signal_client.py default to 8080.
+    let addr: SocketAddr = "127.0.0.1:8080".parse()?;
     info!("Metis engine server starting on {}", addr);
     let server = SignalServer::new(addr);
 
