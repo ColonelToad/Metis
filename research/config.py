@@ -34,9 +34,12 @@ FRED_API_KEY = os.getenv("FRED_API_KEY")
 CME_API_KEY = os.getenv("CME_API_KEY")
 DATABENTO_API_KEY = os.getenv("DATABENTO_API_KEY")
 
-# Rust execution engine connection
+# Execution engines: C++ (metis-cpp, WSL) is primary, Rust is fallback.
+# Ports must stay in sync with research/ops/orchestrate_daily_pipeline.py,
+# metis_server.rs (secondary), and the C++ bin defaults.
 EXECUTION_ENGINE_HOST = os.getenv("EXECUTION_ENGINE_HOST", "localhost")
-EXECUTION_ENGINE_PORT = int(os.getenv("EXECUTION_ENGINE_PORT", 8080))
+EXECUTION_ENGINE_PORT = int(os.getenv("EXECUTION_ENGINE_PORT", 8080))  # C++ primary
+EXECUTION_ENGINE_FALLBACK_PORT = int(os.getenv("EXECUTION_ENGINE_FALLBACK_PORT", 8081))  # Rust
 
 # Model configuration
 MODEL_VERSION = "v1.0"

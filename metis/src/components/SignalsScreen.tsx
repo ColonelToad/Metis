@@ -1,5 +1,6 @@
 import { Card, Statistic, Row, Col, Table, Tag, Button, Spin, Alert, Progress } from 'antd';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { usePipeline } from '../hooks/usePipeline';
 import { useSignal } from '../contexts/SignalContext';
 import { transformSignalForRag } from '../utils/signalTransform';
@@ -8,27 +9,73 @@ interface SignalsScreenProps {
   onNavigate?: (key: string) => void;
 }
 
+interface RecentSignalRow {
+  signal_id: string;
+  job_id: string;
+  symbol: string;
+  direction: string;
+  confidence: number;
+  target_quantity: number;
+  horizon_minutes: number;
+  exec_status: string | null;
+  exec_latency_ms: number | null;
+  explanation_id: string | null;
+  timestamp: string;
+}
+
 export default function SignalsScreen({ onNavigate }: SignalsScreenProps) {
   const [mode, setMode] = useState<'dev' | 'real'>('dev');
   const { isRunning, status, results, error, startPipeline, currentJobId } = usePipeline();
   const [performanceHistory, setPerformanceHistory] = useState<any[]>([]);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const { setActiveSignal } = useSignal();
+
+  const loadRecentSignals = useCallback(async () => {
+    try {
+      const response = await invoke<{ signals: RecentSignalRow[]; count: number }>(
+        'fetch_recent_signals',
+        { limit: 100 }
+      );
+      setHistoryError(null);
+      setPerformanceHistory(
+        (response.signals || []).map((s, idx) => ({
+          key: s.signal_id || idx,
+          time: new Date(s.timestamp).toLocaleString(),
+          instrument: s.symbol,
+          dir: (s.direction || '').toUpperCase(),
+          conf: s.confidence,
+          status: s.exec_status || 'PERSISTED',
+          latencyMs: s.exec_latency_ms,
+          reason: s.exec_latency_ms != null ? `Engine round-trip ${s.exec_latency_ms}ms` : 'No engine response',
+        }))
+      );
+    } catch (err: any) {
+      setHistoryError(err?.message || String(err));
+    }
+  }, []);
+
+  // Load persisted history on mount and refresh whenever a run completes
+  useEffect(() => {
+    loadRecentSignals();
+  }, [loadRecentSignals, results]);
 
   useEffect(() => {
     if (results?.signals) {
-      // Update performance history when signals arrive
-      setPerformanceHistory(
-        results.signals.map((signal, idx) => ({
-          key: idx,
-          time: new Date(signal.timestamp).toLocaleTimeString(),
-          instrument: signal.symbol,
-          dir: signal.direction,
-          conf: signal.confidence,
-          status: 'GENERATED',
-          pnl: 'N/A',
-          reason: 'Orchestrator Signal',
-        }))
-      );
+      // Keep the current job's signals at the top of the table view
+      const currentRun = results.signals.map((signal, idx) => ({
+        key: signal.signal_id || `current-${idx}`,
+        time: new Date(signal.timestamp).toLocaleTimeString(),
+        instrument: signal.symbol,
+        dir: signal.direction,
+        conf: signal.confidence,
+        status: signal.metadata?.exec_status || 'GENERATED',
+        latencyMs: signal.metadata?.exec_latency_ms,
+        reason: signal.metadata?.exec_error || 'Current pipeline run',
+      }));
+      setPerformanceHistory((prev) => {
+        const seen = new Set(currentRun.map((r) => r.key));
+        return [...currentRun, ...prev.filter((r) => !seen.has(r.key))];
+      });
     }
   }, [results]);
 
@@ -237,7 +284,18 @@ export default function SignalsScreen({ onNavigate }: SignalsScreenProps) {
 
       <Row gutter={16} style={{ marginTop: 16 }}>
         <Col span={24}>
-          <Card title="Signal History" bordered={false}>
+          <Card title="Signal History" bordered={false} extra={
+            <Button size="small" type="text" onClick={loadRecentSignals}>Refresh</Button>
+          }>
+            {historyError && (
+              <Alert
+                message="History unavailable"
+                description={historyError}
+                type="warning"
+                showIcon
+                style={{ marginBottom: 12 }}
+              />
+            )}
             {performanceHistory.length > 0 ? (
               <Table
                 size="small"
@@ -245,25 +303,25 @@ export default function SignalsScreen({ onNavigate }: SignalsScreenProps) {
                 rowKey="key"
                 pagination={{ pageSize: 10 }}
                 columns={[
-                  { title: 'Time', dataIndex: 'time', width: 120 },
+                  { title: 'Time', dataIndex: 'time', width: 140 },
                   { title: 'Instrument', dataIndex: 'instrument', width: 100 },
                   {
                     title: 'Dir',
                     dataIndex: 'dir',
-                    width: 60,
+                    width: 80,
                     render: (v) => (
-                      <Tag color={v === 'LONG' ? 'green' : 'red'}>{v}</Tag>
+                      <Tag color={v === 'LONG' ? 'green' : v === 'SHORT' ? 'red' : 'default'}>{v}</Tag>
                     ),
                   },
-                  { title: 'Confidence', dataIndex: 'conf', width: 80, render: (v) => (v * 100).toFixed(0) + '%' },
-                  { title: 'Status', dataIndex: 'status', width: 80 },
-                  { title: 'P&L', dataIndex: 'pnl', width: 80 },
+                  { title: 'Confidence', dataIndex: 'conf', width: 90, render: (v) => (v * 100).toFixed(0) + '%' },
+                  { title: 'Status', dataIndex: 'status', width: 120 },
+                  { title: 'Latency', dataIndex: 'latencyMs', width: 80, render: (v) => (v != null ? `${v}ms` : '—') },
                   { title: 'Reason', dataIndex: 'reason' },
                 ]}
               />
             ) : (
               <div style={{ color: '#999', textAlign: 'center', padding: '20px' }}>
-                No signal history yet
+                No signal history yet — run the pipeline to generate signals
               </div>
             )}
           </Card>

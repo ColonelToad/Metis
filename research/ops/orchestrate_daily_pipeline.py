@@ -154,7 +154,9 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
                     ),
                     features_dir=str(root / "data" / "features"),
                     signal_host="localhost",
-                    signal_port=8080,
+                    signal_port=8080,  # primary: C++ engine
+                    fallback_host="localhost",
+                    fallback_port=8081,  # secondary: Rust engine
                     threshold=0.40,
                 )
                 daily_df, low_freq_df, sparse_df = load_daily_data(
@@ -183,6 +185,9 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
                     )
                     signal["metadata"]["exec_latency_ms"] = str(
                         exec_resp.get("latency_ms", "")
+                    )
+                    signal["metadata"]["exec_engine"] = str(
+                        exec_resp.get("exec_engine", "unknown")
                     )
                     fill = exec_resp.get("avg_fill_price")
                     if fill is not None:

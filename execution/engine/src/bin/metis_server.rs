@@ -175,10 +175,17 @@ async fn run_server() -> Result<()> {
         });
     }
 
-    // Port must match the Python side: research/config.py
-    // EXECUTION_ENGINE_PORT and signal_client.py default to 8080.
-    let addr: SocketAddr = "127.0.0.1:8080".parse()?;
-    info!("Metis engine server starting on {}", addr);
+    // The C++ engine (metis-cpp, WSL) is the PRIMARY live engine and owns
+    // 127.0.0.1:8080, which is also what research/signal_client.py defaults
+    // to. This Rust server runs as the SECONDARY/fallback engine on 8081;
+    // research/models/inference_pipeline.py fails over here when the
+    // primary is down.
+    let port: u16 = std::env::var("METIS_ENGINE_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8081);
+    let addr: SocketAddr = SocketAddr::from(([127, 0, 0, 1], port));
+    info!("Metis Rust engine server starting on {} (secondary)", addr);
     let server = SignalServer::new(addr);
 
     server

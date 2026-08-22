@@ -52,6 +52,8 @@ class DualLSTMInference:
         signal_port: int = 8080,
         threshold: float = 0.40,
         features_dir: str = "data/features",
+        fallback_host: Optional[str] = "localhost",
+        fallback_port: int = 8081,
     ):
         """
         Initialize inference pipeline.
@@ -60,12 +62,15 @@ class DualLSTMInference:
             model_path: Path to trained TensorFlow model (h5 format)
             scalers_path: Path to pickled scalers (daily, low_freq, sparse)
             config_path: Path to model configuration YAML
-            signal_host: Rust execution engine host
-            signal_port: Rust execution engine port
+            signal_host: Primary execution engine host (C++ engine)
+            signal_port: Primary execution engine port
             threshold: Classification threshold for buy signals (default: 0.40)
             features_dir: Directory holding train/test track parquets, used
                 to refit scalers when the pickled artifact is missing or a
                 legacy stub
+            fallback_host: Secondary engine host (Rust engine), or None to
+                disable failover
+            fallback_port: Secondary execution engine port
         """
         self.model_path = model_path
         self.scalers_path = scalers_path
@@ -98,8 +103,16 @@ class DualLSTMInference:
             self.scaler_sparse,
         ) = self._load_or_fit_scalers(scalers_path)
         
-        # Initialize signal client (lazy connection on first send)
+        # Initialize signal client (lazy connection on first send).
+        # Primary is the C++ engine; a second client is kept for the Rust
+        # fallback engine so an engine crash degrades to the secondary
+        # instead of dropping the signal entirely.
         self.signal_client = SignalClient(host=signal_host, port=signal_port)
+        self.fallback_client = (
+            SignalClient(host=fallback_host, port=fallback_port)
+            if fallback_host and fallback_port
+            else None
+        )
         self.connected = False
         
         logger.info(f"DualLSTM pipeline initialized (threshold={threshold})")
@@ -336,6 +349,27 @@ class DualLSTMInference:
         logger.info(f"Signal created: {signal['signal_id']}")
         return signal
     
+    def _try_engine(
+        self,
+        client: SignalClient,
+        signal: Dict[str, Any],
+        engine_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Connect, send, and disconnect to one engine. Returns the response
+        with an `exec_engine` tag added, or None if that engine is down."""
+        if not client.connect():
+            logger.warning(f"{engine_name} execution engine unreachable")
+            return None
+        try:
+            response = client.send_signal(signal)
+        finally:
+            client.disconnect()
+        if response is None:
+            logger.warning(f"{engine_name} execution engine failed to respond")
+            return None
+        response["exec_engine"] = engine_name
+        return response
+
     def send_to_execution(
         self,
         signal: Dict[str, Any],
@@ -343,34 +377,35 @@ class DualLSTMInference:
         disconnect_after: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
-        Send signal to Rust execution engine.
-        
+        Send signal to the primary execution engine (C++), falling back to
+        the secondary (Rust) if the primary is unreachable.
+
         Args:
             signal: Output from prediction_to_signal()
-            connect: Auto-connect if not already connected
-            disconnect_after: Close connection after send
-        
+            connect: Unused (kept for signature compatibility); each send
+                opens its own connection
+            disconnect_after: Unused (kept for signature compatibility)
+
         Returns:
-            Execution response or None on error
+            Execution response dict with `exec_engine` set to "cpp" or
+            "rust", or None if every configured engine is unreachable.
         """
-        # Connect if needed
-        if not self.connected and connect:
-            if not self.signal_client.connect():
-                logger.error("Failed to connect to execution engine")
-                return None
-            self.connected = True
-        
-        # Send
-        response = self.signal_client.send_signal(signal)
-        
-        # Disconnect if requested
-        if disconnect_after:
-            self.signal_client.disconnect()
-            self.connected = False
-        
+        response = self._try_engine(self.signal_client, signal, "cpp")
+
+        if response is None and self.fallback_client is not None:
+            logger.info(
+                "Failing over to Rust execution engine on :%d",
+                self.fallback_client.port,
+            )
+            response = self._try_engine(self.fallback_client, signal, "rust")
+
         if response:
-            logger.info(f"Execution response: {response['status']}")
-        
+            logger.info(
+                f"Execution response: {response['status']} "
+                f"(engine={response.get('exec_engine')})"
+            )
+        else:
+            logger.error("No execution engine reachable; signal not confirmed")
         return response
     
     def predict_and_trade(

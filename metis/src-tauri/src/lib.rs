@@ -9,7 +9,9 @@ use metrics_bridge::{
     check_metrics_available, get_dashboard_summary, get_failures, get_ingester_health,
     get_recent_runs,
 };
-use pipeline_bridge::{get_pipeline_results, get_pipeline_status, health_check, run_pipeline};
+use pipeline_bridge::{
+    get_pipeline_results, get_pipeline_status, get_recent_signals, health_check, run_pipeline,
+};
 use pyo3::prepare_freethreaded_python;
 use rag_engine::{
     format_explanation_response, get_rag_engine, get_rag_status, get_session_stats,
@@ -46,6 +48,12 @@ async fn poll_pipeline_status(job_id: String) -> Result<serde_json::Value, Strin
 #[tauri::command]
 async fn fetch_pipeline_results(job_id: String) -> Result<serde_json::Value, String> {
     get_pipeline_results(job_id).await
+}
+
+/// Get recent persisted signals from orchestrator history
+#[tauri::command]
+async fn fetch_recent_signals(limit: Option<u32>) -> Result<serde_json::Value, String> {
+    get_recent_signals(limit.unwrap_or(50).min(500)).await
 }
 
 /// Check if orchestrator service is running
@@ -466,6 +474,7 @@ pub fn run_tauri() {
             invoke_pipeline,
             poll_pipeline_status,
             fetch_pipeline_results,
+            fetch_recent_signals,
             check_orchestrator_health,
             check_rag_status,
             get_session_status,

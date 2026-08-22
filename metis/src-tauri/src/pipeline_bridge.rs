@@ -80,9 +80,22 @@ pub async fn get_pipeline_results(job_id: String) -> Result<serde_json::Value, S
     }
 }
 
-/// Health check
-pub async fn health_check() -> Result<serde_json::Value, String> {
+/// Recent persisted signals (from orchestrator SQLite history)
+pub async fn get_recent_signals(limit: u32) -> Result<serde_json::Value, String> {
     let client = Client::new();
+    let url = format!("{}/api/signals/recent?limit={}", ORCHESTRATOR_URL, limit);
+
+    match client.get(&url).send().await {
+        Ok(response) => match response.json::<serde_json::Value>().await {
+            Ok(data) => Ok(data),
+            Err(e) => Err(format!("Failed to parse response: {}", e)),
+        },
+        Err(e) => Err(format!("Failed to reach orchestrator: {}", e)),
+    }
+}
+
+/// Health check
+pub async fn health_check() -> Result<serde_json::Value, String> {    let client = Client::new();
     let url = format!("{}/api/health", ORCHESTRATOR_URL);
 
     match client.get(&url).send().await {

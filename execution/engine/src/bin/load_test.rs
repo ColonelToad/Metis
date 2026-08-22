@@ -24,7 +24,7 @@ use std::time::Instant;
 
 #[derive(Parser)]
 struct Args {
-    #[arg(short, long, default_value = "127.0.0.1:8080")]
+    #[arg(short, long, default_value = "127.0.0.1:8081")]
     addr: String,
 
     #[arg(short, long, default_value_t = 1000)]
