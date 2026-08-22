@@ -19,9 +19,9 @@
 
 use anyhow::Result;
 use chrono::Utc;
-use engine::execution_algos::{ExecutionAlgo, ParentOrder, TwapExecutor};
+use engine::execution_algos::{ExecutionAlgo, Fill, ParentOrder, TwapExecutor};
 use engine::latency::LatencyRecorder;
-use engine::orderbook::{EventType, MarketEvent, OrderBook};
+use engine::orderbook::{EventType, MarketEvent, OrderBook, Side};
 use engine::signal_interface::{ExecutionResponse, ExecutionStatus, SignalServer, TradingSignal};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -57,6 +57,7 @@ fn process_signal(
                 avg_fill_price: None,
                 filled_quantity: 0.0,
                 latency_ms: elapsed.as_millis() as u64,
+                slippage_bps: None,
                 error_message: Some("Neutral signal: no side to trade".to_string()),
             });
         }
@@ -76,6 +77,7 @@ fn process_signal(
             avg_fill_price: None,
             filled_quantity: 0.0,
             latency_ms: elapsed.as_millis() as u64,
+            slippage_bps: None,
             error_message: Some("No liquidity in book (no quotes received yet)".to_string()),
         });
     };
@@ -97,19 +99,76 @@ fn process_signal(
     let executor = TwapExecutor::new(slice_duration_secs);
     let response = match executor.generate_child_orders(&parent) {
         Ok(children) => {
+            // Two "side" conventions coexist deliberately:
+            //  - ParentOrder/metrics use Bid=buy / Ask=sell (see
+            //    TwapExecutor::calculate_metrics' slippage sign).
+            //  - simulate_fill takes the BOOK side to cross: a buy lifts
+            //    the ask stack, a sell hits the bid stack.
+            let is_buy = side == Side::Bid;
+            let book_side = if is_buy { Side::Ask } else { Side::Bid };
+
+            // Simulate filling the full parent order against current resting
+            // depth on the crossed side of the book (partial fills allowed).
+            // Still not a live order — no exchange connection — but the
+            // response now reflects real book impact instead of a
+            // planning-only handshake.
+            let (filled_qty, fill_avg) =
+                book.lock().unwrap().simulate_fill(book_side, signal.target_quantity);
+
+            if filled_qty <= 0.0 {
+                warn!(
+                    "Signal {} rejected: insufficient liquidity for {} contracts",
+                    signal.signal_id, signal.target_quantity
+                );
+                let elapsed = start.elapsed();
+                recorder.record(elapsed);
+                return Ok(ExecutionResponse {
+                    signal_id: signal.signal_id,
+                    status: ExecutionStatus::Rejected,
+                    avg_fill_price: None,
+                    filled_quantity: 0.0,
+                    latency_ms: elapsed.as_millis() as u64,
+                    slippage_bps: None,
+                    error_message: Some(format!(
+                        "Insufficient liquidity for {} contracts",
+                        signal.target_quantity
+                    )),
+                });
+            }
+
+            // Execution quality vs arrival mid (positive = beat benchmark).
+            let synthetic_fills = vec![Fill {
+                child_id: format!("{}-sim", signal.signal_id),
+                price: fill_avg.unwrap(),
+                quantity: filled_qty,
+                timestamp: Utc::now(),
+            }];
+            let metrics = executor.calculate_metrics(&parent, &synthetic_fills, reference_price);
+
+            let complete = filled_qty >= signal.target_quantity;
             info!(
-                "Signal {} accepted: {} TWAP slices over {}min, reference price {:.4}",
+                "Signal {} {}: {} TWAP slices over {}min, filled {}/{} @ {:.4} (mid {:.4}, signed slippage {:.2}bps)",
                 signal.signal_id,
+                if complete { "completed" } else { "partially completed" },
                 children.len(),
                 signal.horizon_minutes,
-                reference_price
+                filled_qty,
+                signal.target_quantity,
+                fill_avg.unwrap(),
+                reference_price,
+                metrics.signed_slippage_bps
             );
             ExecutionResponse {
                 signal_id: signal.signal_id,
-                status: ExecutionStatus::Accepted,
-                avg_fill_price: Some(reference_price),
-                filled_quantity: 0.0,
+                status: if complete {
+                    ExecutionStatus::Completed
+                } else {
+                    ExecutionStatus::PartiallyCompleted
+                },
+                avg_fill_price: fill_avg,
+                filled_quantity: filled_qty,
                 latency_ms: 0, // filled in below, after we measure elapsed
+                slippage_bps: Some(metrics.slippage_bps),
                 error_message: None,
             }
         }
@@ -121,6 +180,7 @@ fn process_signal(
                 avg_fill_price: None,
                 filled_quantity: 0.0,
                 latency_ms: 0,
+                slippage_bps: None,
                 error_message: Some(e.to_string()),
             }
         }

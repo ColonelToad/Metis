@@ -19,6 +19,8 @@ interface RecentSignalRow {
   horizon_minutes: number;
   exec_status: string | null;
   exec_latency_ms: number | null;
+  exec_filled_qty: number | null;
+  exec_slippage_bps: number | null;
   explanation_id: string | null;
   timestamp: string;
 }
@@ -45,6 +47,10 @@ export default function SignalsScreen({ onNavigate }: SignalsScreenProps) {
           dir: (s.direction || '').toUpperCase(),
           conf: s.confidence,
           status: s.exec_status || 'PERSISTED',
+          filled: s.exec_filled_qty != null && s.target_quantity != null
+            ? `${s.exec_filled_qty}/${s.target_quantity}`
+            : '—',
+          slippageBps: s.exec_slippage_bps,
           latencyMs: s.exec_latency_ms,
           reason: s.exec_latency_ms != null ? `Engine round-trip ${s.exec_latency_ms}ms` : 'No engine response',
         }))
@@ -69,6 +75,12 @@ export default function SignalsScreen({ onNavigate }: SignalsScreenProps) {
         dir: signal.direction,
         conf: signal.confidence,
         status: signal.metadata?.exec_status || 'GENERATED',
+        filled: signal.metadata?.exec_filled_qty != null
+          ? `${parseFloat(signal.metadata.exec_filled_qty)}/${signal.target_quantity}`
+          : '—',
+        slippageBps: signal.metadata?.exec_slippage_bps != null
+          ? parseFloat(signal.metadata.exec_slippage_bps)
+          : null,
         latencyMs: signal.metadata?.exec_latency_ms,
         reason: signal.metadata?.exec_error || 'Current pipeline run',
       }));
@@ -314,7 +326,14 @@ export default function SignalsScreen({ onNavigate }: SignalsScreenProps) {
                     ),
                   },
                   { title: 'Confidence', dataIndex: 'conf', width: 90, render: (v) => (v * 100).toFixed(0) + '%' },
-                  { title: 'Status', dataIndex: 'status', width: 120 },
+                  { title: 'Status', dataIndex: 'status', width: 130 },
+                  { title: 'Filled', dataIndex: 'filled', width: 90 },
+                  {
+                    title: 'Slippage',
+                    dataIndex: 'slippageBps',
+                    width: 90,
+                    render: (v) => (v != null ? `${v.toFixed(1)}bps` : '—'),
+                  },
                   { title: 'Latency', dataIndex: 'latencyMs', width: 80, render: (v) => (v != null ? `${v}ms` : '—') },
                   { title: 'Reason', dataIndex: 'reason' },
                 ]}

@@ -47,7 +47,10 @@ pub struct SignalMetadata {
     pub uncertainty: f64,
 }
 
-/// Response sent back to Python
+/// Response sent back to Python.
+/// Protocol v1.1: `slippage_bps` added (magnitude vs arrival mid, always
+/// >= 0; None when not computed). `#[serde(default)]` keeps old payloads
+/// decodable; the C++ engine emits the same field in the same position.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionResponse {
     pub signal_id: String,
@@ -55,6 +58,8 @@ pub struct ExecutionResponse {
     pub avg_fill_price: Option<f64>,
     pub filled_quantity: f64,
     pub latency_ms: u64,
+    #[serde(default)]
+    pub slippage_bps: Option<f64>,
     pub error_message: Option<String>,
 }
 
@@ -137,6 +142,7 @@ impl SignalServer {
                     avg_fill_price: None,
                     filled_quantity: 0.0,
                     latency_ms: 0,
+                    slippage_bps: None,
                     error_message: Some(format!("Handler error: {}", e)),
                 },
             };

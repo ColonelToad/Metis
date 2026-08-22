@@ -189,6 +189,12 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
                     signal["metadata"]["exec_engine"] = str(
                         exec_resp.get("exec_engine", "unknown")
                     )
+                    filled = exec_resp.get("filled_quantity")
+                    if filled is not None:
+                        signal["metadata"]["exec_filled_qty"] = repr(filled)
+                    slip = exec_resp.get("slippage_bps")
+                    if slip is not None:
+                        signal["metadata"]["exec_slippage_bps"] = repr(slip)
                     fill = exec_resp.get("avg_fill_price")
                     if fill is not None:
                         signal["metadata"]["exec_fill_price"] = repr(fill)

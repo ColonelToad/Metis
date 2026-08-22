@@ -233,6 +233,50 @@ impl OrderBook {
         }
     }
 
+    /// Simulate filling `quantity` on `side` against current resting depth,
+    /// taking whatever is available level by level (partial fills allowed —
+    /// unlike `vwap`, which is all-or-nothing). Returns (filled, average
+    /// price); avg is None only when nothing fills. Mirrors the C++ engine's
+    /// OrderBook::simulate_fill so both engines report identical fills
+    /// against identical books.
+    pub fn simulate_fill(&self, side: Side, quantity: f64) -> (f64, Option<f64>) {
+        if quantity <= 0.0 {
+            return (0.0, None);
+        }
+
+        let levels = match side {
+            Side::Bid => &self.bids,
+            Side::Ask => &self.asks,
+        };
+
+        let mut remaining = quantity;
+        let mut total_cost = 0.0;
+
+        let iter: Box<dyn Iterator<Item = _>> = match side {
+            // Bids are stored best-first already; rev() on the ascending map
+            // walks from the highest bid down.
+            Side::Bid => Box::new(levels.iter().rev()),
+            Side::Ask => Box::new(levels.iter()),
+        };
+
+        for (price, qty) in iter {
+            let take_qty = remaining.min(*qty);
+            total_cost += price.0 * take_qty;
+            remaining -= take_qty;
+
+            if remaining <= 0.0 {
+                break;
+            }
+        }
+
+        let filled = quantity - remaining.max(0.0);
+        if filled > 0.0 {
+            (filled, Some(total_cost / filled))
+        } else {
+            (0.0, None)
+        }
+    }
+
     /// Get snapshot of top N levels for visualization
     pub fn snapshot(&self, levels: usize) -> BookSnapshot {
         BookSnapshot {
@@ -304,5 +348,47 @@ mod tests {
         // VWAP for 100 contracts: (50*2.505 + 50*2.510) / 100
         let vwap = book.vwap(Side::Ask, 100.0).unwrap();
         assert!((vwap - 2.5075).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_simulate_fill_exact_and_spanning() {
+        let mut book = OrderBook::new("NG:CME".to_string());
+        book.add_order(1, Side::Bid, 2.500, 100.0).unwrap();
+        book.add_order(2, Side::Bid, 2.495, 50.0).unwrap();
+
+        // Single level covers it
+        let (filled, avg) = book.simulate_fill(Side::Bid, 60.0);
+        assert_eq!(filled, 60.0);
+        assert_eq!(avg, Some(2.500));
+
+        // Spans two levels: best price first
+        let (filled, avg) = book.simulate_fill(Side::Bid, 120.0);
+        assert_eq!(filled, 120.0);
+        let expected = (100.0 * 2.500 + 20.0 * 2.495) / 120.0;
+        assert!((avg.unwrap() - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_simulate_fill_partial_when_short() {
+        let mut book = OrderBook::new("NG:CME".to_string());
+        book.add_order(3, Side::Ask, 2.505, 75.0).unwrap();
+
+        let (filled, avg) = book.simulate_fill(Side::Ask, 200.0);
+        assert_eq!(filled, 75.0);
+        assert_eq!(avg, Some(2.505));
+    }
+
+    #[test]
+    fn test_simulate_fill_empty_side_and_zero_qty() {
+        let mut book = OrderBook::new("NG:CME".to_string());
+        book.add_order(4, Side::Bid, 2.500, 10.0).unwrap();
+
+        let (filled, avg) = book.simulate_fill(Side::Ask, 5.0);
+        assert_eq!(filled, 0.0);
+        assert_eq!(avg, None);
+
+        let (filled, avg) = book.simulate_fill(Side::Bid, 0.0);
+        assert_eq!(filled, 0.0);
+        assert_eq!(avg, None);
     }
 }

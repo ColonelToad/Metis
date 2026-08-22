@@ -49,10 +49,13 @@ close the connection.
 
 Field order used by both engines:
 `signal_id, status, avg_fill_price, filled_quantity, latency_ms,
-error_message`.
+slippage_bps, error_message`.
 
 - `status`: `Accepted | InProgress | Completed | PartiallyCompleted |
   Rejected | Error`
+- `slippage_bps` (protocol **v1.1**): magnitude of slippage vs arrival mid,
+  always >= 0, null when not computed. Additive field — older clients
+  ignore unknown keys (`#[serde(default)]` on the Rust struct).
 - Positional arrays break the Python client (`'list' object has no
   attribute 'get'`); Rust must keep `rmp_serde::to_vec_named`.
 - The C++ encoder's output is byte-for-byte identical to Python
@@ -60,12 +63,30 @@ error_message`.
 
 ### Semantics (both engines)
 
-- Seeded book: bid 2.500 / ask 2.505 ×1000 → mid 2.5025.
+- Seeded book: bid 2.500 / ask 2.505 ×1000 each side → mid 2.5025.
 - `Neutral` → `Rejected`, error `"Neutral signal: no side to trade"`.
-- No liquidity → `Rejected`, error mentions liquidity.
-- Accepted signals produce a TWAP plan (~5 slices over horizon, min 60s/slice),
-  `avg_fill_price = mid`, `filled_quantity = 0.0` (planning only — no live
-  orders yet).
+- No liquidity at all → `Rejected`, error mentions liquidity.
+- Accepted signals generate a TWAP plan (~5 slices over horizon, min
+  60s/slice) and then **simulate filling the full parent order against
+  current resting depth on the crossed side of the book** (a buy lifts the
+  ask stack, a sell hits the bid stack; partial fills allowed):
+  - `filled == target` → `Completed`
+  - `0 < filled < target` → `PartiallyCompleted`
+  - `filled == 0` → `Rejected`, error `"Insufficient liquidity for N contracts"`
+- `avg_fill_price` is the depth-weighted average of the simulated fill;
+  `filled_quantity` the filled amount; `slippage_bps` = `|signed|` where
+  signed is vs arrival mid (positive = beat benchmark). Still no exchange
+  connection — fills are simulations against book state, not live orders.
+
+### Side conventions (important)
+
+Two "side" meanings coexist by design:
+- Parent-order / slippage convention: `Bid = buy`, `Ask = sell` (this is
+  what `SignalDirection::to_side()` returns and what
+  `calculate_metrics`' sign comment assumes).
+- Book-crossing convention for fills: a buy walks the ASK stack, a sell
+  walks the BID stack. Do not pass the parent side straight into
+  `simulate_fill`/`vwap`.
 
 ## Ports
 

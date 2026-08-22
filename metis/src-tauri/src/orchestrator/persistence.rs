@@ -63,6 +63,8 @@ impl Persistence {
                 horizon_minutes  INTEGER NOT NULL,
                 exec_status      TEXT,
                 exec_latency_ms  INTEGER,
+                exec_filled_qty  REAL,
+                exec_slippage_bps REAL,
                 explanation_id   TEXT,
                 timestamp        TEXT NOT NULL,
                 FOREIGN KEY(job_id) REFERENCES jobs(job_id)
@@ -70,6 +72,12 @@ impl Persistence {
             CREATE INDEX IF NOT EXISTS idx_signals_timestamp
                 ON signals(timestamp DESC);",
         )?;
+
+        // Migrate pre-v1.1 databases: add the fill-quality columns if the
+        // signals table predates them. "duplicate column name" errors are
+        // the expected no-op case for fresh databases.
+        let _ = conn.execute_batch("ALTER TABLE signals ADD COLUMN exec_filled_qty REAL;");
+        let _ = conn.execute_batch("ALTER TABLE signals ADD COLUMN exec_slippage_bps REAL;");
 
         info!("Persistence ready at {}", db_path.display());
         Ok(Self {
@@ -131,7 +139,8 @@ impl Persistence {
             .prepare(
                 "SELECT signal_id, job_id, symbol, direction, confidence,
                         target_quantity, horizon_minutes, exec_status,
-                        exec_latency_ms, explanation_id, timestamp
+                        exec_latency_ms, exec_filled_qty, exec_slippage_bps,
+                        explanation_id, timestamp
                  FROM signals
                  ORDER BY timestamp DESC
                  LIMIT ?1",
@@ -150,8 +159,10 @@ impl Persistence {
                     "horizon_minutes": row.get::<_, i64>(6)?,
                     "exec_status": row.get::<_, Option<String>>(7)?,
                     "exec_latency_ms": row.get::<_, Option<i64>>(8)?,
-                    "explanation_id": row.get::<_, Option<String>>(9)?,
-                    "timestamp": row.get::<_, String>(10)?,
+                    "exec_filled_qty": row.get::<_, Option<f64>>(9)?,
+                    "exec_slippage_bps": row.get::<_, Option<f64>>(10)?,
+                    "explanation_id": row.get::<_, Option<String>>(11)?,
+                    "timestamp": row.get::<_, String>(12)?,
                 }))
             })
             .map_err(|e| e.to_string())?;
@@ -177,14 +188,23 @@ fn persist_signal(
         .metadata
         .get("exec_latency_ms")
         .and_then(|v| v.parse::<i64>().ok());
+    let exec_filled_qty = signal
+        .metadata
+        .get("exec_filled_qty")
+        .and_then(|v| v.parse::<f64>().ok());
+    let exec_slippage_bps = signal
+        .metadata
+        .get("exec_slippage_bps")
+        .and_then(|v| v.parse::<f64>().ok());
     let explanation_id = signal.metadata.get("explanation_id");
 
     tx.execute(
         "INSERT OR REPLACE INTO signals (
             signal_id, job_id, symbol, direction, confidence,
             target_quantity, horizon_minutes, exec_status,
-            exec_latency_ms, explanation_id, timestamp
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            exec_latency_ms, exec_filled_qty, exec_slippage_bps,
+            explanation_id, timestamp
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         rusqlite::params![
             signal.signal_id,
             job_id,
@@ -195,6 +215,8 @@ fn persist_signal(
             signal.horizon_minutes,
             exec_status,
             exec_latency_ms,
+            exec_filled_qty,
+            exec_slippage_bps,
             explanation_id,
             signal.timestamp.to_rfc3339(),
         ],
@@ -211,8 +233,11 @@ mod tests {
 
     fn sample_result(job_suffix: &str) -> PipelineResult {
         let mut metadata = HashMap::new();
-        metadata.insert("exec_status".to_string(), "Rejected".to_string());
+        metadata.insert("exec_status".to_string(), "Completed".to_string());
         metadata.insert("exec_latency_ms".to_string(), "3".to_string());
+        metadata.insert("exec_filled_qty".to_string(), "10".to_string());
+        metadata
+            .insert("exec_slippage_bps".to_string(), "9.990009990009778".to_string());
 
         PipelineResult {
             job_id: format!("job-{}", job_suffix),
@@ -247,8 +272,12 @@ mod tests {
         let recent = store.recent_signals(10).unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0]["signal_id"], "sig-a");
-        assert_eq!(recent[0]["exec_status"], "Rejected");
+        assert_eq!(recent[0]["exec_status"], "Completed");
         assert_eq!(recent[0]["exec_latency_ms"], 3);
+        assert_eq!(recent[0]["exec_filled_qty"], 10.0);
+        assert!(
+            (recent[0]["exec_slippage_bps"].as_f64().unwrap() - 9.990009990009778).abs() < 1e-12
+        );
 
         // Re-persisting the same job must not duplicate its signals.
         store.persist_result(&sample_result("a")).unwrap();
