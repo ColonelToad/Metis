@@ -10,17 +10,18 @@ The system is organized into three layers that communicate through well-defined 
 Data ingestion from 13+ sources feeds a feature engineering pipeline and LSTM hybrid model that produces directional signals on NG futures. Sources include EIA storage reports, FRED macroeconomic series, CME futures via Databento, NOAA/Open-Meteo weather, grid LMP prices across ISO regions, AIS vessel tracking, Congressional climate legislation, and Census building permits. Data is stored locally in SQLite with daily backups to Cloudflare R2.
 
 **Execution Engine (Rust)**
-A lock-free signal fusion layer aggregates climate, grid, and policy signals using `crossbeam` channels and atomic operations. A limit order book simulator (with CSV and PCAP ingestion) feeds TWAP/VWAP execution algorithms. A FIX protocol client handles market connectivity. `metis-core` exposes a PyO3 bridge so Python signals cross into Rust with minimal latency. SIMD vectorization and NUMA thread pinning are implemented for Windows and Linux targets.
+A single-crate workspace (`execution/engine`) hosting a length-prefixed msgpack TCP signal server, a limit order book, TWAP/VWAP execution algorithms, lock-free multi-modal fusion, SIMD batch kernels, and nearest-rank latency reporting with core pinning. The engine responds to a live model signal in ~3.6ms round-trip (target <100ms). A separate C++ HFT engine (`metis-cpp`, maintained in WSL) is under development.
 
 **Interface & Explanation (Tauri + RAG)**
-A Tauri 2.0 desktop application provides real-time dashboards across markets, grid status, climate data, policy, portfolio, and backtesting views. A RAG pipeline (LanceDB + sentence-transformers) indexes signal documentation and policy texts to support LLM-generated explanations of trading decisions.
+A Tauri 2.0 desktop app drives an Axum orchestrator service (:9000) that runs the Python pipeline over PyO3, queues jobs, persists results to SQLite, and generates LLM signal explanations via a native llama.cpp engine (DeepSeek-R1-Distill-Qwen-7B) grounded by LanceDB vector retrieval — all local CPU, no external API calls.
 
 ```
-Python signals → PyO3 bridge (metis-core)
-              → lock-free fusion (crossbeam)
-              → order book + execution algos
-              → FIX protocol
-              → RAG explanation pipeline → Tauri UI
+Python predict_and_trade()  →  msgpack/TCP :8080
+                            →  order book + TWAP plan
+                            →  ExecutionResponse (~3.6ms)
+                            →  orchestrator (PyO3)
+                            →  SQLite persistence + RAG explanation
+                            →  Tauri UI
 ```
 
 ## Status
@@ -29,13 +30,13 @@ Python signals → PyO3 bridge (metis-core)
 |-----------|--------|
 | Python data ingestion (13+ sources) | Active |
 | Feature engineering & LSTM model | Active |
-| Backtesting with transaction costs | Active |
+| Signal → engine delivery (msgpack/TCP) | Working (3.6ms measured) |
+| Rust order book + TWAP/VWAP algos | Active |
+| SQLite result persistence | Active |
+| RAG indexing + native llama.cpp explanations | Active |
 | Cloudflare R2 backup | Active |
-| Rust order book + execution algos | In progress |
-| PyO3 signal bridge (metis-core) | In progress |
-| FIX protocol client | In progress |
-| RAG indexing pipeline | In progress |
 | Tauri desktop UI | In progress |
+| C++ HFT engine (WSL) | In progress |
 
 ## Performance Targets
 
@@ -49,17 +50,17 @@ Python signals → PyO3 bridge (metis-core)
 ## Repository Structure
 
 ```
-metis/                  # Tauri desktop app (React + Rust backend)
-metis-core/             # Rust PyO3 library — signal fusion, SIMD, NUMA
-execution/              # Rust workspace — order book, execution algos, FIX client
-rag/                    # RAG indexing and retrieval pipeline
+metis/                  # Tauri desktop app (React + Rust backend, Axum orchestrator)
+execution/engine/       # Rust execution engine (signal server, order book, TWAP/VWAP)
+rag/                    # RAG pipeline: LanceDB + fastembed + native llama.cpp
 research/
-├── data_ingest/        # API clients for all data sources
-├── features/           # Feature engineering
-├── models/             # LSTM hybrid model
-├── backtest/           # Transaction cost simulator
-├── ops/                # Ingestion orchestration scripts
-└── tests/              # Test suite
+  data_ingest/          # API clients for all data sources
+  features/             # Feature engineering
+  models/               # Dual-LSTM inference pipeline
+  backtest/             # Transaction cost simulator
+  ops/                  # Ingestion orchestration scripts
+  tests/                # Test suite
+metis-cpp/              # C++ HFT engine — lives in WSL, own repo (not in this checkout)
 docs/                   # Setup guide and documentation
 notes/                  # Research notes and strategy (gitignored)
 ```
@@ -74,17 +75,14 @@ See [docs/setup.md](docs/setup.md) for full environment setup instructions.
 pip install -r research/requirements.txt
 python research/ops/ingest_wrapper.py --frequency daily
 
-# Rust execution engine
-cd execution && cargo build --release
+# Rust execution engine (binds 127.0.0.1:8080)
+cd execution && cargo build --release --bin metis_server --bin load_test
 
-# Rust core library (PyO3)
-cd metis-core && cargo build --release
-
-# Tauri desktop app
+# Tauri desktop app + orchestrator (:9000)
 cd metis && npm install && npm run tauri:dev
 ```
 
-Requires Python 3.11+, Rust 1.75+, Node.js 20+. See [docs/setup.md](docs/setup.md) for platform-specific dependency installation.
+Requires Python 3.11+, Rust 1.75+, Node.js 20+. Windows builds of `rag` additionally need LLVM/Clang for llama.cpp bindgen. See [docs/setup.md](docs/setup.md) for platform-specific dependency installation.
 
 ## License
 
