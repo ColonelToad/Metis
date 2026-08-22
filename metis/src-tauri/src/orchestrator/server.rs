@@ -63,6 +63,7 @@ pub async fn start_http_server(project_root: PathBuf, port: u16) {
             "/api/pipeline/results/:job_id",
             get(pipeline_results_handler),
         )
+        .route("/api/signals/recent", get(recent_signals_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -169,6 +170,24 @@ fn spawn_pipeline(state: Arc<AppState>, job_id: String) {
             spawn_pipeline(Arc::clone(&state), next_id.0);
         }
     });
+}
+
+async fn recent_signals_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(50)
+        .min(500);
+    match state.orchestrator.recent_signals(limit) {
+        Ok(signals) => Json(serde_json::json!({ "signals": signals, "count": signals.len() })),
+        Err(e) => {
+            error!("Recent signals query failed: {}", e);
+            Json(serde_json::json!({ "signals": [], "count": 0, "error": e }))
+        }
+    }
 }
 
 async fn pipeline_status_handler(

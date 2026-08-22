@@ -13,15 +13,30 @@ use tracing::{error, info, warn};
 pub struct Orchestrator {
     python_runner: PythonRunner,
     results: Arc<RwLock<HashMap<String, PipelineResult>>>,
+    /// SQLite sink for completed results (signals, timings, exec status).
+    /// None only if the database couldn't be opened — persistence is
+    /// best-effort and must never block a pipeline run.
+    db: Option<Arc<super::persistence::Persistence>>,
 }
 
 impl Orchestrator {
     pub async fn new(project_root: PathBuf) -> Self {
-        let python_runner = PythonRunner::new(project_root);
+        let python_runner = PythonRunner::new(project_root.clone());
+
+        let db = match super::persistence::Persistence::new(
+            &project_root.join("data").join("orchestrator.sqlite"),
+        ) {
+            Ok(db) => Some(Arc::new(db)),
+            Err(e) => {
+                error!("Persistence disabled (DB open failed): {}", e);
+                None
+            }
+        };
 
         Self {
             python_runner,
             results: Arc::new(RwLock::new(HashMap::new())),
+            db,
         }
     }
 
@@ -58,7 +73,14 @@ impl Orchestrator {
                 // Store result
                 {
                     let mut results = self.results.write();
-                    results.insert(job_id, result.clone());
+                    results.insert(job_id.clone(), result.clone());
+                }
+
+                // Persist the failure too — job history should show it.
+                if let Some(db) = &self.db {
+                    if let Err(e) = db.persist_result(&result) {
+                        error!("[{}] Failed to persist failed job: {}", job_id, e);
+                    }
                 }
 
                 Err(OrchestrationError::InternalError(
@@ -234,6 +256,14 @@ impl Orchestrator {
             results.insert(job_id.to_string(), result.clone());
         }
 
+        // Persist to SQLite so signals survive process restarts and the
+        // UI can query history.
+        if let Some(db) = &self.db {
+            if let Err(e) = db.persist_result(&result) {
+                error!("[{}] Failed to persist result: {}", job_id, e);
+            }
+        }
+
         Ok(result)
     }
 
@@ -351,6 +381,14 @@ impl Orchestrator {
         self.results.read().get(job_id).cloned()
     }
 
+    /// Most recently persisted signals (from SQLite), newest first.
+    pub fn recent_signals(&self, limit: u32) -> Result<Vec<serde_json::Value>, String> {
+        match &self.db {
+            Some(db) => db.recent_signals(limit),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Get pipeline status by job ID
     pub fn get_status(&self, job_id: &str) -> Option<StatusResponse> {
         let results = self.results.read();
@@ -389,8 +427,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_orchestrator_new() {
-        let root = PathBuf::from("/tmp");
+        let root = std::env::temp_dir();
         let orch = Orchestrator::new(root.clone()).await;
-        assert_eq!(orch.project_root, root);
+        // Fresh orchestrator has no in-memory results; persistence may or
+        // may not have opened (temp dir is writable, so it normally does).
+        assert!(orch.get_result("nonexistent").is_none());
+        assert!(orch.recent_signals(10).unwrap().is_empty());
     }
 }

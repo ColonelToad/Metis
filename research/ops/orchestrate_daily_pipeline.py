@@ -176,11 +176,27 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
                     logger.info(
                         f"[INFERENCE] Engine response: {exec_resp.get('status')}"
                     )
+                    # Attach as metadata strings so the Rust orchestrator's
+                    # parser keeps them and persistence can store them.
+                    signal["metadata"]["exec_status"] = str(
+                        exec_resp.get("status", "unknown")
+                    )
+                    signal["metadata"]["exec_latency_ms"] = str(
+                        exec_resp.get("latency_ms", "")
+                    )
+                    fill = exec_resp.get("avg_fill_price")
+                    if fill is not None:
+                        signal["metadata"]["exec_fill_price"] = repr(fill)
+                    if exec_resp.get("error_message"):
+                        signal["metadata"]["exec_error"] = str(
+                            exec_resp["error_message"]
+                        )
                 else:
                     logger.warning(
                         "[INFERENCE] Execution engine unreachable - "
                         "signal recorded without execution confirmation"
                     )
+                    signal["metadata"]["exec_status"] = "engine_unreachable"
                 signals = [signal]
             else:
                 logger.warning("[INFERENCE] Model produced no signal")

@@ -1,7 +1,7 @@
 pub mod diagnostics;
 pub mod error;
 pub mod job_queue;
-pub mod metrics;
+pub mod persistence;
 pub mod orchestrator;
 pub mod python_runner;
 pub mod server;
