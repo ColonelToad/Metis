@@ -430,7 +430,7 @@ pub fn run_tauri() {
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| PathBuf::from("."));
 
-            let model_path = project_root.join("rag/llm/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf");
+            let model_path = project_root.join("rag/llm/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf");
             let db_path = project_root.join("data/lance");
 
             let model_path_str = model_path.to_string_lossy().to_string();

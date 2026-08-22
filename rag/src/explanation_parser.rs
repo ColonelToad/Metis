@@ -1,7 +1,6 @@
 use crate::types::{Citation, Document, Explanation};
 use chrono::Utc;
 use regex::Regex;
-use std::collections::HashMap;
 
 /// Heuristic parser for LLM-generated explanations
 /// Supports both JSON and free-form text with graceful fallback
@@ -367,9 +366,12 @@ impl ExplanationParser {
     fn extract_section(text: &str, headers: &[&str]) -> Option<String> {
         // Try each header variant
         for header in headers {
-            // Pattern: find header (case-insensitive), capture until next ## or end
+            // Pattern: find header (case-insensitive), capture until next ## or
+            // end of text. The `regex` crate does not support lookarounds, so a
+            // trailing `(?:\n##|\z)` delimiter group is consumed instead and
+            // only capture group 1 is used.
             let pattern = format!(
-                r"(?i)^[#\s]*{}[:\s]*\n(.*?)(?=\n##|$)",
+                r"(?ims)^[#\s]*{}[:\s]*\n(.*?)(?:\n##|\z)",
                 regex::escape(header)
             );
 
@@ -391,19 +393,20 @@ impl ExplanationParser {
     fn extract_citations_from_text(raw_text: &str, available_docs: &[Document]) -> Vec<Citation> {
         let mut citations = Vec::new();
 
-        // Pattern: [Doc N] or [N] where N is 1-indexed
+        // Pattern: [Doc N] or [N] where N is 1-indexed. BTreeSet keeps the
+        // citations in document order (and deduplicated) regardless of how
+        // many times each reference appears in the text.
         if let Ok(re) = Regex::new(r"\[Doc? ?(\d+)\]") {
-            let doc_indices: HashMap<usize, bool> = re
+            let doc_indices: std::collections::BTreeSet<usize> = re
                 .captures_iter(raw_text)
                 .filter_map(|cap| {
                     cap.get(1)
                         .and_then(|m| m.as_str().parse::<usize>().ok())
-                        .map(|idx| (idx, true))
                 })
                 .collect();
 
             // Convert to 0-indexed and fetch documents
-            for (idx, _) in doc_indices {
+            for idx in doc_indices {
                 if idx > 0 && idx <= available_docs.len() {
                     let doc = &available_docs[idx - 1];
                     let excerpt = &doc.content[..doc.content.len().min(200)];
@@ -548,7 +551,7 @@ mod tests {
     #[test]
     fn test_confidence_scoring() {
         let short = "Brief.";
-        let long = "This is a very detailed explanation with lots of content and multiple paragraphs explaining the reasoning process.";
+        let long = "This is a very detailed explanation with lots of content and multiple paragraphs explaining the reasoning process. The expected outcome depends on weather patterns, grid stress, and storage levels. Historical scenario analysis suggests elevated volatility through the delivery window.";
         let with_probability =
             "There is a 70% probability that the market will move upward given these conditions.";
 

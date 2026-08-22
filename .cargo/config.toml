@@ -1,0 +1,6 @@
+# libclang required by bindgen when llama-cpp-sys-2 generates its bindings.
+# Points at the scoop-managed LLVM install. force=true because this machine
+# has a stale Machine-level LIBCLANG_PATH (C:\Program Files\LLVM) that would
+# otherwise win over the [env] default. Applies to all crates in the repo.
+[env]
+LIBCLANG_PATH = { value = 'C:\Users\legot\scoop\apps\llvm\current\bin', force = true }

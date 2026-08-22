@@ -3,7 +3,6 @@ use super::python_runner::{PythonPipelineResult, PythonRunner};
 use super::types::*;
 use chrono::DateTime;
 use parking_lot::RwLock;
-use rag::ExplainabilityRAG;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,48 +13,15 @@ use tracing::{error, info, warn};
 pub struct Orchestrator {
     python_runner: PythonRunner,
     results: Arc<RwLock<HashMap<String, PipelineResult>>>,
-    project_root: PathBuf,
-    rag_pipeline: Option<Arc<ExplainabilityRAG>>,
 }
 
 impl Orchestrator {
     pub async fn new(project_root: PathBuf) -> Self {
-        let python_runner = PythonRunner::new(project_root.clone());
-
-        // Initialize RAG pipeline (optional - log failures but don't fail the whole orchestrator)
-        let rag_pipeline = Self::init_rag_pipeline(&project_root).await;
-        if rag_pipeline.is_none() {
-            warn!("RAG pipeline initialization failed - explanations will not be generated");
-        }
+        let python_runner = PythonRunner::new(project_root);
 
         Self {
             python_runner,
             results: Arc::new(RwLock::new(HashMap::new())),
-            project_root,
-            rag_pipeline,
-        }
-    }
-
-    /// Initialize the RAG pipeline
-    async fn init_rag_pipeline(project_root: &PathBuf) -> Option<Arc<ExplainabilityRAG>> {
-        let model_path = project_root.join("rag/llm/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf");
-        let db_path = project_root.join("rag/lancedb");
-
-        match ExplainabilityRAG::new(
-            model_path.to_string_lossy().as_ref(),
-            db_path.to_string_lossy().as_ref(),
-            false, // not mock mode in production
-        )
-        .await
-        {
-            Ok(rag) => {
-                info!("RAG pipeline initialized successfully");
-                Some(Arc::new(rag))
-            }
-            Err(e) => {
-                warn!("Failed to initialize RAG pipeline: {}", e);
-                None
-            }
         }
     }
 
@@ -150,38 +116,48 @@ impl Orchestrator {
                     job_id, signal.symbol, signal.direction, signal.confidence
                 );
 
-                // Generate explanation if RAG pipeline is available
-                if let Some(rag) = &self.rag_pipeline {
-                    let rag_signal = Self::signal_to_rag(&signal);
-                    let explain_start = Instant::now();
+                // Generate explanation via the shared global RAG engine
+                // (single 4.7GB model per process; initialized by the Tauri
+                // app or the standalone orchestrator binary)
+                match crate::rag_engine::get_rag_engine() {
+                    Ok(rag) => {
+                        let rag_signal = Self::signal_to_rag(&signal);
+                        let explain_start = Instant::now();
 
-                    match rag.explain_signal(&rag_signal).await {
-                        rag::pipeline::ExplanationResult::Success { explanation } => {
-                            let explain_duration = explain_start.elapsed();
-                            info!(
-                                "[{}] Generated explanation for signal {} in {:.2}s",
-                                job_id,
-                                signal.signal_id,
-                                explain_duration.as_secs_f64()
-                            );
-                            // Store explanation in metadata for later retrieval
-                            let mut signal_with_explanation = signal.clone();
-                            signal_with_explanation.metadata.insert(
-                                "explanation_id".to_string(),
-                                explanation.signal_id.clone(),
-                            );
-                            signals.push(signal_with_explanation);
-                        }
-                        _ => {
-                            warn!(
-                                "[{}] Failed to generate explanation for signal {}",
-                                job_id, signal.signal_id
-                            );
-                            signals.push(signal);
+                        let rag = rag.lock().await;
+                        match rag.explain_signal(&rag_signal).await {
+                            rag::pipeline::ExplanationResult::Success { explanation } => {
+                                let explain_duration = explain_start.elapsed();
+                                info!(
+                                    "[{}] Generated explanation for signal {} in {:.2}s",
+                                    job_id,
+                                    signal.signal_id,
+                                    explain_duration.as_secs_f64()
+                                );
+                                // Store explanation in metadata for later retrieval
+                                let mut signal_with_explanation = signal.clone();
+                                signal_with_explanation.metadata.insert(
+                                    "explanation_id".to_string(),
+                                    explanation.signal_id.clone(),
+                                );
+                                signals.push(signal_with_explanation);
+                            }
+                            _ => {
+                                warn!(
+                                    "[{}] Failed to generate explanation for signal {}",
+                                    job_id, signal.signal_id
+                                );
+                                signals.push(signal);
+                            }
                         }
                     }
-                } else {
-                    signals.push(signal);
+                    Err(_) => {
+                        warn!(
+                            "[{}] RAG engine not initialized - skipping explanation for signal {}",
+                            job_id, signal.signal_id
+                        );
+                        signals.push(signal);
+                    }
                 }
             } else {
                 warn!("[{}] Failed to parse signal: {:?}", job_id, signal_json);

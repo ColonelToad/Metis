@@ -149,10 +149,12 @@ impl ReasoningChain {
     }
 
     /// Retrieve documents matching a query and scope
+    // NOTE: scope filtering is currently disabled (see commented retain below);
+    // re-enabling is tracked as follow-up work.
     async fn retrieve_documents(
         &self,
         query: &str,
-        scope: &DocumentScope,
+        _scope: &DocumentScope,
         top_k: usize,
     ) -> Result<Vec<Document>> {
         // Embed the query

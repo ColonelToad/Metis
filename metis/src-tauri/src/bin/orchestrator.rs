@@ -73,6 +73,23 @@ async fn main() {
     println!("═══════════════════════════════════════════════════");
     println!();
 
+    // Initialize the shared global RAG engine (same singleton the Tauri app
+    // uses) so pipeline runs can attach explanations. Non-fatal on failure.
+    {
+        let model_path = project_root.join("rag/llm/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf");
+        let db_path = project_root.join("data/lance");
+        println!("Initializing RAG engine (model: {}, db: {})...", model_path.display(), db_path.display());
+        match metis_lib::rag_engine::init_rag_engine(
+            &model_path.to_string_lossy(),
+            &db_path.to_string_lossy(),
+        )
+        .await
+        {
+            Ok(()) => println!("RAG engine ready"),
+            Err(e) => eprintln!("RAG engine init failed (explanations disabled): {e}"),
+        }
+    }
+
     // Run the HTTP server
     metis_lib::orchestrator::server::start_http_server(project_root, port).await;
 }

@@ -3,6 +3,11 @@ name = "rag"
 version = "0.1.0"
 edition = "2021"
 
+# Full debuginfo bloats link times badly with lancedb/ort/llama.cpp in the
+# graph; line tables are enough for backtraces during development.
+[profile.dev]
+debug = "line-tables-only"
+
 [dependencies]
 anyhow = "1.0"
 tokio = { version = "1", features = ["full"] }
@@ -31,3 +36,9 @@ engine = { path = "../execution/engine" }
 # needs llm.rs's Python delegation. First run downloads to .fastembed_cache/
 # (needs network once); offline after that.
 fastembed = "5"
+
+# Native llama.cpp bindings replacing the PyO3 → llama-cpp-python detour in
+# llm.rs. CPU-only build (no cuda/vulkan features); first compile builds
+# llama.cpp from source via the cmake crate (needs CMake + MSVC).
+llama-cpp-2 = "=0.1.154"
+encoding_rs = "0.8"

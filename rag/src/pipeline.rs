@@ -84,9 +84,11 @@ impl ExplainabilityRAG {
             return cached;
         }
 
-        // Try multi-hop reasoning chain with timeout (up to 5s for 2+ LLM calls + retrieval)
+        // Try multi-hop reasoning chain with a hard 5-minute budget covering
+        // the multi-hop LLM calls + retrieval (CPU inference is slow; the
+        // template fallback covers overruns)
         match tokio::time::timeout(
-            Duration::from_secs(1800000),
+            Duration::from_secs(300),
             self.reasoning_chain.reason(signal),
         )
         .await
