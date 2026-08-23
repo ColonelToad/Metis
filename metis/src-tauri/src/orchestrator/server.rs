@@ -18,12 +18,14 @@ use tower_http::cors::CorsLayer;
 use tracing::{error, info, warn};
 use types::*;
 
-use crate::orchestrator::{error, job_queue, orchestrator, types};
+use crate::orchestrator::{engines, error, job_queue, orchestrator, types};
 
 pub struct AppState {
     orchestrator: Arc<Orchestrator>,
     job_queue: Arc<JobQueue>,
     start_time: Instant,
+    /// Repo root, used to locate the Rust engine binary for /api/engines/start.
+    project_root: PathBuf,
     /// Mode each submitted job was requested with, so a queued job can be
     /// started when its turn comes (JobQueue only tracks ids).
     job_modes: Arc<RwLock<HashMap<String, ExecutionMode>>>,
@@ -42,13 +44,14 @@ pub async fn start_http_server(project_root: PathBuf, port: u16) {
 
     info!("Project root: {}", project_root.display());
 
-    let orchestrator = Arc::new(Orchestrator::new(project_root).await);
+    let orchestrator = Arc::new(Orchestrator::new(project_root.clone()).await);
     let job_queue = Arc::new(JobQueue::new());
 
     let state = AppState {
         orchestrator,
         job_queue,
         start_time: Instant::now(),
+        project_root: project_root.clone(),
         job_modes: Arc::new(RwLock::new(HashMap::new())),
     };
 
@@ -64,6 +67,8 @@ pub async fn start_http_server(project_root: PathBuf, port: u16) {
             get(pipeline_results_handler),
         )
         .route("/api/signals/recent", get(recent_signals_handler))
+        .route("/api/engines/status", get(engines_status_handler))
+        .route("/api/engines/start", post(start_engine_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -170,6 +175,37 @@ fn spawn_pipeline(state: Arc<AppState>, job_id: String) {
             spawn_pipeline(Arc::clone(&state), next_id.0);
         }
     });
+}
+
+async fn engines_status_handler() -> Json<engines::EnginesStatusResponse> {
+    Json(engines::engines_status().await)
+}
+
+#[derive(serde::Deserialize)]
+struct StartEngineRequest {
+    engine: String,
+}
+
+async fn start_engine_handler(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<StartEngineRequest>,
+) -> Result<Json<engines::StartEngineResponse>, (StatusCode, Json<serde_json::Value>)> {
+    info!("Engine start request: {}", payload.engine);
+    match engines::start_engine(&payload.engine, &state.project_root).await {
+        Ok(resp) => {
+            if resp.spawn_attempted {
+                info!("Engine {} start result: {}", resp.engine, resp.detail);
+            }
+            Ok(Json(resp))
+        }
+        Err(e) => {
+            error!("Engine {} failed to start: {}", payload.engine, e);
+            Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e })),
+            ))
+        }
+    }
 }
 
 async fn recent_signals_handler(

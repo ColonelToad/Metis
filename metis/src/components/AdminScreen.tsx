@@ -32,18 +32,34 @@ export interface MetricsDashboard {
   pipeline_trend: Array<any>;
 }
 
+export interface EngineStatus {
+  name: string;
+  port: number;
+  alive: boolean;
+  latency_ms: number | null;
+  role: string;
+}
+
+export interface EnginesStatus {
+  engines: EngineStatus[];
+  primary_alive: boolean;
+}
+
 export function AdminScreen() {
   const [testSuites, setTestSuites] = useState<TestSuite[]>([]);
   const [dashboard, setDashboard] = useState<MetricsDashboard | null>(null);
   const [activeRun, setActiveRun] = useState<TestRun | null>(null);
+  const [enginesStatus, setEnginesStatus] = useState<EnginesStatus | null>(null);
+  const [engineBusy, setEngineBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<'tests' | 'metrics'>('metrics');
+  const [tab, setTab] = useState<'tests' | 'metrics' | 'engines'>('metrics');
 
   // Load initial data
   useEffect(() => {
     loadTestSuites();
     loadMetricsDashboard();
+    loadEnginesStatus();
   }, []);
 
   // Poll test status if test is running
@@ -57,6 +73,13 @@ export function AdminScreen() {
 
     return () => clearInterval(interval);
   }, [activeRun]);
+
+  // Poll engine health while the engines tab is open
+  useEffect(() => {
+    if (tab !== 'engines') return;
+    const interval = setInterval(loadEnginesStatus, 10000);
+    return () => clearInterval(interval);
+  }, [tab]);
 
   async function loadTestSuites() {
     try {
@@ -105,6 +128,37 @@ export function AdminScreen() {
       setError(`Failed to start test: ${message}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadEnginesStatus() {
+    try {
+      const result = await invoke<EnginesStatus>('fetch_engines_status');
+      setEnginesStatus(result);
+      setError(null);
+    } catch (err) {
+      const message = typeof err === 'string' ? err : JSON.stringify(err);
+      setError(`Failed to load engine status: ${message}`);
+    }
+  }
+
+  async function startEngine(name: string) {
+    setEngineBusy(name);
+    setError(null);
+    try {
+      const result = await invoke<{ engine: string; detail: string }>(
+        'start_execution_engine',
+        { engine: name }
+      );
+      // Give the probe inside start a moment to settle, then refresh
+      setTimeout(loadEnginesStatus, 1500);
+      setError(null);
+      console.log(result.detail);
+    } catch (err) {
+      const message = typeof err === 'string' ? err : JSON.stringify(err);
+      setError(`Failed to start ${name} engine: ${message}`);
+    } finally {
+      setEngineBusy(null);
     }
   }
 
@@ -159,6 +213,15 @@ export function AdminScreen() {
             onClick={() => setTab('tests')}
           >
             🧪 Tests
+          </button>
+          <button
+            className={`tab-btn ${tab === 'engines' ? 'active' : ''}`}
+            onClick={() => {
+              setTab('engines');
+              loadEnginesStatus();
+            }}
+          >
+            ⚙️ Engines
           </button>
         </div>
       </div>
@@ -229,6 +292,66 @@ export function AdminScreen() {
             </div>
           ) : (
             <div className="loading">Loading metrics...</div>
+          )}
+        </div>
+      )}
+
+      {tab === 'engines' && (
+        <div className="engines-panel">
+          <div className="panel-header">
+            <h2>Execution Engines</h2>
+            <button onClick={loadEnginesStatus}>
+              🔄 Refresh
+            </button>
+          </div>
+
+          {enginesStatus ? (
+            <>
+              {!enginesStatus.primary_alive && (
+                <div className="error-banner">
+                  ⚠️ Primary (C++) engine is down — signals will fail over to the Rust
+                  secondary automatically.
+                </div>
+              )}
+              <div className="summary-cards">
+                {enginesStatus.engines.map((e) => (
+                  <div className="card" key={e.name}>
+                    <div className="card-label">
+                      {e.name.toUpperCase()} · :{e.port} · {e.role}
+                    </div>
+                    <div className="card-value">
+                      <span
+                        className={`status-badge ${e.alive ? 'success' : 'failed'}`}
+                        style={{ fontSize: '0.9em', marginRight: 8 }}
+                      >
+                        {e.alive ? 'LIVE' : 'DOWN'}
+                      </span>
+                      {e.alive && e.latency_ms != null
+                        ? `${e.latency_ms.toFixed(2)}ms`
+                        : '—'}
+                    </div>
+                    <button
+                      style={{ marginTop: 8 }}
+                      disabled={engineBusy != null || e.alive}
+                      onClick={() => startEngine(e.name)}
+                    >
+                      {engineBusy === e.name
+                        ? 'Starting…'
+                        : e.alive
+                          ? 'Running'
+                          : `Start ${e.name}`}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <p className="empty-state" style={{ marginTop: 16 }}>
+                Health = TCP connect probe to the engine's msgpack port. Starting the
+                C++ engine launches it inside WSL; starting the Rust engine spawns the
+                local release binary. Auto-refreshes every 10s while this tab is open.
+              </p>
+            </>
+          ) : (
+            <div className="loading">Loading engine status...</div>
           )}
         </div>
       )}

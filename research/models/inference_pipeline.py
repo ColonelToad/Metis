@@ -31,7 +31,7 @@ try:
 except ImportError:
     # Package-style import (research.models.inference_pipeline) — the
     # top-level name isn't on sys.path in that context.
-    from research.signal_client import SignalClient, create_signal
+    from research.signal_client import SignalClient, create_signal, EngineRouter
 from loguru import logger
 
 
@@ -103,15 +103,13 @@ class DualLSTMInference:
             self.scaler_sparse,
         ) = self._load_or_fit_scalers(scalers_path)
         
-        # Initialize signal client (lazy connection on first send).
-        # Primary is the C++ engine; a second client is kept for the Rust
-        # fallback engine so an engine crash degrades to the secondary
-        # instead of dropping the signal entirely.
-        self.signal_client = SignalClient(host=signal_host, port=signal_port)
-        self.fallback_client = (
-            SignalClient(host=fallback_host, port=fallback_port)
-            if fallback_host and fallback_port
-            else None
+        # Signal routing: primary C++ engine with automatic failover to the
+        # Rust secondary (see EngineRouter).
+        self.engine_router = EngineRouter(
+            host=signal_host,
+            port=signal_port,
+            fallback_host=fallback_host,
+            fallback_port=fallback_port,
         )
         self.connected = False
         
@@ -348,27 +346,6 @@ class DualLSTMInference:
         
         logger.info(f"Signal created: {signal['signal_id']}")
         return signal
-    
-    def _try_engine(
-        self,
-        client: SignalClient,
-        signal: Dict[str, Any],
-        engine_name: str,
-    ) -> Optional[Dict[str, Any]]:
-        """Connect, send, and disconnect to one engine. Returns the response
-        with an `exec_engine` tag added, or None if that engine is down."""
-        if not client.connect():
-            logger.warning(f"{engine_name} execution engine unreachable")
-            return None
-        try:
-            response = client.send_signal(signal)
-        finally:
-            client.disconnect()
-        if response is None:
-            logger.warning(f"{engine_name} execution engine failed to respond")
-            return None
-        response["exec_engine"] = engine_name
-        return response
 
     def send_to_execution(
         self,
@@ -382,32 +359,15 @@ class DualLSTMInference:
 
         Args:
             signal: Output from prediction_to_signal()
-            connect: Unused (kept for signature compatibility); each send
-                opens its own connection
+            connect: Unused (kept for signature compatibility)
             disconnect_after: Unused (kept for signature compatibility)
 
         Returns:
             Execution response dict with `exec_engine` set to "cpp" or
             "rust", or None if every configured engine is unreachable.
         """
-        response = self._try_engine(self.signal_client, signal, "cpp")
+        return self.engine_router.send(signal)
 
-        if response is None and self.fallback_client is not None:
-            logger.info(
-                "Failing over to Rust execution engine on :%d",
-                self.fallback_client.port,
-            )
-            response = self._try_engine(self.fallback_client, signal, "rust")
-
-        if response:
-            logger.info(
-                f"Execution response: {response['status']} "
-                f"(engine={response.get('exec_engine')})"
-            )
-        else:
-            logger.error("No execution engine reachable; signal not confirmed")
-        return response
-    
     def predict_and_trade(
         self,
         daily_df: pd.DataFrame,

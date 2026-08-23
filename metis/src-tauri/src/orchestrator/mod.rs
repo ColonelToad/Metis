@@ -1,4 +1,5 @@
 pub mod diagnostics;
+pub mod engines;
 pub mod error;
 pub mod job_queue;
 pub mod persistence;

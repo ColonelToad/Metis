@@ -94,6 +94,36 @@ pub async fn get_recent_signals(limit: u32) -> Result<serde_json::Value, String>
     }
 }
 
+/// Execution-engine health (cpp primary / rust fallback)
+pub async fn engines_status() -> Result<serde_json::Value, String> {
+    let client = Client::new();
+    let url = format!("{}/api/engines/status", ORCHESTRATOR_URL);
+
+    match client.get(&url).send().await {
+        Ok(response) => match response.json::<serde_json::Value>().await {
+            Ok(data) => Ok(data),
+            Err(e) => Err(format!("Failed to parse response: {}", e)),
+        },
+        Err(e) => Err(format!("Failed to reach orchestrator: {}", e)),
+    }
+}
+
+/// Launch an execution engine ("cpp" or "rust") via the orchestrator
+pub async fn start_engine(engine: String) -> Result<serde_json::Value, String> {
+    let client = Client::new();
+    let url = format!("{}/api/engines/start", ORCHESTRATOR_URL);
+
+    info!("Requesting engine start: {}", engine);
+
+    match client.post(&url).json(&json!({ "engine": engine })).send().await {
+        Ok(response) => match response.json::<serde_json::Value>().await {
+            Ok(data) => Ok(data),
+            Err(e) => Err(format!("Failed to parse response: {}", e)),
+        },
+        Err(e) => Err(format!("Failed to reach orchestrator: {}", e)),
+    }
+}
+
 /// Health check
 pub async fn health_check() -> Result<serde_json::Value, String> {    let client = Client::new();
     let url = format!("{}/api/health", ORCHESTRATOR_URL);

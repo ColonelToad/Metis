@@ -109,6 +109,76 @@ class SignalClient:
         return data
 
 
+class EngineRouter:
+    """
+    Routes signals to the primary execution engine, failing over to a
+    secondary when the primary is unreachable (connect failure or no
+    response). Every successful response is tagged with `exec_engine`
+    so callers can record which engine handled the signal.
+    """
+
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 8080,
+        fallback_host: Optional[str] = None,
+        fallback_port: Optional[int] = None,
+        primary_name: str = "cpp",
+        fallback_name: str = "rust",
+    ):
+        self.primary = SignalClient(host=host, port=port)
+        self.fallback = (
+            SignalClient(host=fallback_host, port=fallback_port)
+            if fallback_host and fallback_port
+            else None
+        )
+        self.primary_name = primary_name
+        self.fallback_name = fallback_name
+
+    def _try(
+        self,
+        client: SignalClient,
+        signal: Dict[str, Any],
+        engine_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Connect, send, disconnect. Returns response tagged with
+        `exec_engine`, or None if that engine is down/unresponsive."""
+        if not client.connect():
+            logger.warning(f"{engine_name} execution engine unreachable")
+            return None
+        try:
+            response = client.send_signal(signal)
+        finally:
+            client.disconnect()
+        if response is None:
+            logger.warning(f"{engine_name} execution engine failed to respond")
+            return None
+        response["exec_engine"] = engine_name
+        return response
+
+    def send(self, signal: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Send one signal with automatic failover. Returns the winning
+        engine's response (with `exec_engine` set) or None."""
+        response = self._try(self.primary, signal, self.primary_name)
+
+        if response is None and self.fallback is not None:
+            logger.info(
+                "Failing over to %s execution engine on :%d",
+                self.fallback_name,
+                self.fallback.port,
+            )
+            response = self._try(self.fallback, signal, self.fallback_name)
+
+        if response:
+            logger.info(
+                f"Execution response: {response['status']} "
+                f"(engine={response.get('exec_engine')})"
+            )
+        else:
+            logger.error("No execution engine reachable; signal not confirmed")
+        return response
+
+
 def create_signal(
     signal_id: str,
     symbol: str,

@@ -10,7 +10,8 @@ use metrics_bridge::{
     get_recent_runs,
 };
 use pipeline_bridge::{
-    get_pipeline_results, get_pipeline_status, get_recent_signals, health_check, run_pipeline,
+    engines_status, get_pipeline_results, get_pipeline_status, get_recent_signals, health_check,
+    run_pipeline, start_engine,
 };
 use pyo3::prepare_freethreaded_python;
 use rag_engine::{
@@ -60,6 +61,18 @@ async fn fetch_recent_signals(limit: Option<u32>) -> Result<serde_json::Value, S
 #[tauri::command]
 async fn check_orchestrator_health() -> Result<serde_json::Value, String> {
     health_check().await
+}
+
+/// Execution-engine health (cpp primary :8080, rust fallback :8081)
+#[tauri::command]
+async fn fetch_engines_status() -> Result<serde_json::Value, String> {
+    engines_status().await
+}
+
+/// Launch an execution engine ("cpp" or "rust") as a detached process
+#[tauri::command]
+async fn start_execution_engine(engine: String) -> Result<serde_json::Value, String> {
+    start_engine(engine).await
 }
 
 /// Check RAG engine initialization status
@@ -476,6 +489,8 @@ pub fn run_tauri() {
             fetch_pipeline_results,
             fetch_recent_signals,
             check_orchestrator_health,
+            fetch_engines_status,
+            start_execution_engine,
             check_rag_status,
             get_session_status,
             explain_trading_signal,
