@@ -26,6 +26,28 @@ function Invoke-LogRotation {
 }
 Invoke-LogRotation
 
+# ── Single-instance guard ─────────────────────────────────────────────────────
+# A previous run killed mid-backup (reboot, sleep) must not let the next boot
+# stack a duplicate full pipeline on top of it. Lock older than 6h = stale.
+$LockFile = Join-Path $LogDir "ingestion.lock"
+$script:WeHoldLock = $false
+if (Test-Path $LockFile) {
+    $lockAgeH = ((Get-Date) - (Get-Item $LockFile).LastWriteTime).TotalHours
+    if ($lockAgeH -lt 6) {
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Another ingestion run appears active (lock age $([math]::Round($lockAgeH,1))h < 6h). Exiting."
+        exit 0
+    }
+    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Stale ingestion lock found ($([math]::Round($lockAgeH,1))h old) - overriding."
+}
+Set-Content -Path $LockFile -Value "pid=$PID started=$(Get-Date -Format o)"
+$script:WeHoldLock = $true
+function Remove-MyLock {
+    if ($script:WeHoldLock) {
+        Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
+        $script:WeHoldLock = $false
+    }
+}
+
 Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] === STARTUP INGESTION TRIGGERED ==="
 if ($RedoFailed) { Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Running in REDO FAILED mode." }
 
@@ -76,6 +98,7 @@ if ($RedoFailed) {
     }
     if ($ScheduledIngesters.Count -eq 0) {
         Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] No failed ingesters found for today. Exiting."
+        Remove-MyLock
         exit 0
     }
 } else {
@@ -96,6 +119,7 @@ if ($RedoFailed) {
         }
         if ($allDone -and (Get-IngesterStatus $State "r2_backup") -eq "success") {
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] All ingesters completed successfully today. Exiting."
+            Remove-MyLock
             exit 0
         }
     }
@@ -239,22 +263,70 @@ foreach ($name in $ScheduledIngesters) {
 # Allow backup if running manual redos (as long as nothing in this current batch failed)
 if (-not $anyFailed -and ((Get-IngesterStatus $State "r2_backup") -ne "success" -or $Force -or $RedoFailed)) {
     Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Ingesters succeeded. Starting R2 backup..."
-    try {
-        $backupOut = & python (Join-Path $ResearchDir "ops\r2_auto_backup.py") 2>&1 | ForEach-Object { $_.ToString() }
-        $backupOut | Tee-Object -FilePath $LogFile -Append
-        if ($LASTEXITCODE -eq 0) {
+
+    $BackupTimeoutSeconds = 1800   # hard cap so a stalled upload can't run forever
+    $PollSeconds = 15              # how often we drain + stream child output
+
+    $job = Start-Job -ScriptBlock {
+        param($root)
+        Set-Location $root
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        $env:PYTHONPATH = $root
+        $env:PYTHONIOENCODING = "utf-8"
+        $EnvFile = Join-Path $root ".env"
+        if (Test-Path $EnvFile) {
+            Get-Content $EnvFile | ForEach-Object {
+                if ($_ -match '^\s*([^#][^=]*)=(.*)$') {
+                    [System.Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim(), "Process")
+                }
+            }
+        }
+        python "research/ops/r2_auto_backup.py" 2>&1 | ForEach-Object { $_.ToString() }
+        "PYSYNC_EXIT_CODE=$LASTEXITCODE"
+    } -ArgumentList $ProjectRoot
+
+    # Poll the job, streaming each batch of output to the log as it arrives,
+    # until the job finishes or the deadline passes.
+    $deadline    = (Get-Date).AddSeconds($BackupTimeoutSeconds)
+    $timedOut    = $false
+    $allOutput   = [System.Collections.Generic.List[string]]::new()
+    while ($true) {
+        $finished = Wait-Job $job -Timeout $PollSeconds
+        foreach ($line in @(Receive-Job $job -ErrorAction SilentlyContinue)) {
+            $s = "$line"
+            $allOutput.Add($s)
+            $s | Tee-Object -FilePath $LogFile -Append | Out-Null
+        }
+        if ($finished) { break }
+        if ((Get-Date) -ge $deadline) { $timedOut = $true; break }
+    }
+
+    if ($timedOut) {
+        Stop-Job $job
+        foreach ($line in @(Receive-Job $job -ErrorAction SilentlyContinue)) {
+            "$line" | Tee-Object -FilePath $LogFile -Append | Out-Null
+        }
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] R2 backup TIMED OUT after $($BackupTimeoutSeconds / 60) minutes (non-blocking) - killing."
+    }
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+
+    if (-not $timedOut) {
+        $exitLine = $allOutput | Where-Object { $_ -like 'PYSYNC_EXIT_CODE=*' } | Select-Object -Last 1
+        $backupExit = if ($exitLine) { [int]($exitLine -replace 'PYSYNC_EXIT_CODE=', '') } else { 1 }
+
+        if ($backupExit -eq 0) {
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] R2 backup completed successfully."
             Set-IngesterStatus $State "r2_backup" "success"
         } else {
-            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] R2 backup failed (non-blocking)."
-            Set-IngesterStatus $State "r2_backup" "failed" "exitCode=$LASTEXITCODE"
+            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] R2 backup failed (non-blocking). exitCode=$backupExit"
+            Set-IngesterStatus $State "r2_backup" "failed" "exitCode=$backupExit"
         }
-    } catch {
-        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] R2 backup exception (non-blocking): $_"
-        Set-IngesterStatus $State "r2_backup" "failed" "$_"
+    } else {
+        Set-IngesterStatus $State "r2_backup" "failed" "timeout after ${BackupTimeoutSeconds}s"
     }
 }
 
+Remove-MyLock
 if (-not $anyFailed) {
     Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] === STARTUP INGESTION COMPLETED SUCCESSFULLY ==="
     exit 0
