@@ -40,6 +40,7 @@ from data_ingest import ingest_fred_building_permits
 from data_ingest import ingest_eia_jet_fuel
 from data_ingest import ingest_storm_events
 from data_ingest import ingest_stooq
+from data_ingest import ingest_cme_settlements
 from data_ingest import ingest_lobbying_disclosures
 from features import extract_lobbying_bill_references
 
@@ -123,6 +124,7 @@ DAILY_INGESTERS = [
     ("Weather", ingest_weather),
     ("Maritime AIS", ingest_ais_maritime),
     ("Stock Prices", ingest_stooq),
+    ("CME Settlements (direct)", ingest_cme_settlements),
 ]
 
 WEEKLY_INGESTERS = [
