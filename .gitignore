@@ -128,3 +128,5 @@ data/dev/
 research/data/dev/
 research/data/cache_metadata/
 research/data/ingestion_metadata/
+# Tauri-side fastembed model cache
+metis/src-tauri/.fastembed_cache/

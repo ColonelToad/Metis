@@ -78,8 +78,8 @@ pub async fn engines_status() -> EnginesStatusResponse {
 
 /// Launch an execution engine as a detached OS process.
 ///
-/// - `cpp`: `wsl -d <distro> -- bash -c "... nohup metis-server ... &"`;
-///   bash exits immediately while the server keeps running under WSL init.
+/// - `cpp`: runs `research/ops/wsl_start_engine.sh` inside WSL (see that
+///   file for why the launch logic must live in a file, not argv).
 /// - `rust`: spawn `execution/target/release/metis_server.exe` detached
 ///   with stdout/stderr redirected to files (long-lived listener).
 ///
@@ -87,7 +87,7 @@ pub async fn engines_status() -> EnginesStatusResponse {
 /// spawning, so callers can treat this as idempotent.
 pub async fn start_engine(engine: &str, project_root: &Path) -> Result<StartEngineResponse, String> {
     match engine {
-        "cpp" => start_cpp_engine().await,
+        "cpp" => start_cpp_engine(project_root).await,
         "rust" => start_rust_engine(project_root).await,
         other => Err(format!(
             "Unknown engine '{other}' (expected \"cpp\" or \"rust\")"
@@ -108,7 +108,18 @@ fn windows_detached_flags() -> Option<u32> {
     }
 }
 
-async fn start_cpp_engine() -> Result<StartEngineResponse, String> {
+/// Convert a Windows path (C:\a\b) to its WSL /mnt/c/a/b form.
+fn windows_path_to_wsl(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' {
+        format!("/mnt/{}{}", (bytes[0] as char).to_ascii_lowercase(), &s[2..])
+    } else {
+        s
+    }
+}
+
+async fn start_cpp_engine(project_root: &Path) -> Result<StartEngineResponse, String> {
     let status = engines_status().await;
     if let Some(cpp) = status.engines.iter().find(|e| e.name == "cpp") {
         if cpp.alive {
@@ -122,27 +133,46 @@ async fn start_cpp_engine() -> Result<StartEngineResponse, String> {
 
     let distro = std::env::var("METIS_WSL_DISTRO").unwrap_or_else(|_| WSL_DISTRO_DEFAULT.into());
     let dir = std::env::var("METIS_CPP_ENGINE_DIR").unwrap_or_else(|_| CPP_ENGINE_DIR_DEFAULT.into());
-    let script = format!(
-        "cd {dir} && nohup ./build/src/bin/metis-server > /tmp/metis_cpp.log 2>&1 < /dev/null &"
-    );
+    // The launch logic lives in a repo shell script, NOT an inline argv
+    // string: wsl.exe mangles quoted multi-token arguments during its
+    // Win->Linux command-line reconstruction (bash then sees garbage and
+    // dies on a parse error before executing anything). Two clean path
+    // args survive any reconstruction.
+    let sh = windows_path_to_wsl(&project_root.join("research/ops/wsl_start_engine.sh"));
+    if !project_root.join("research/ops/wsl_start_engine.sh").exists() {
+        return Err(format!("WSL launcher script missing: {}", sh));
+    }
 
-    info!("Starting C++ engine in WSL ({distro}): cd {dir}");
+    info!("Starting C++ engine in WSL ({distro}) via {sh}");
     let mut cmd = std::process::Command::new("wsl");
-    cmd.args(["-d", &distro, "--", "bash", "-c", &script]);
-    if let Some(flags) = windows_detached_flags() {
+    cmd.args(["-d", &distro, "--", "bash", &sh, &dir]);
+    // wsl.exe silently does nothing without a console: CREATE_NO_WINDOW
+    // gives it an invisible one. DETACHED_PROCESS (used for the native
+    // rust engine binary below) breaks it — bash never executes.
+    #[cfg(windows)]
+    {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(flags);
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd.spawn()
         .map_err(|e| format!("Failed to spawn wsl.exe: {e}"))?;
 
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    let after = engines_status().await;
-    let alive = after.engines.iter().find(|e| e.name == "cpp").map(|e| e.alive);
-    let detail = match alive {
-        Some(true) => "Started; responding on :8080".to_string(),
-        Some(false) => "Spawned but not yet answering; check /tmp/metis_cpp.log".to_string(),
-        None => unreachable!("cpp entry always present"),
+    // The bash side holds the session until the port answers; poll here so
+    // our report reflects reality rather than a fixed guess.
+    let mut alive = false;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let s = engines_status().await;
+        if s.engines.iter().any(|e| e.name == "cpp" && e.alive) {
+            alive = true;
+            break;
+        }
+    }
+    let detail = if alive {
+        "Started; responding on :8080".to_string()
+    } else {
+        "Spawned but not answering within 20s; check /tmp/metis_cpp.log".to_string()
     };
     Ok(StartEngineResponse {
         engine: "cpp".into(),
