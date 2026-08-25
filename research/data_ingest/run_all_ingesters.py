@@ -41,6 +41,7 @@ from data_ingest import ingest_eia_jet_fuel
 from data_ingest import ingest_storm_events
 from data_ingest import ingest_stooq
 from data_ingest import ingest_cme_settlements
+from data_ingest import ingest_noaa_cpc
 from data_ingest import ingest_lobbying_disclosures
 from features import extract_lobbying_bill_references
 
@@ -122,6 +123,7 @@ DAILY_INGESTERS = [
     ("Grid LMP (Multi-ISO)", ingest_lmp_multi_iso),
     ("FRED Macro", ingest_fred),
     ("Weather", ingest_weather),
+    ("NOAA Degree Days (CPC)", ingest_noaa_cpc),
     ("Maritime AIS", ingest_ais_maritime),
     ("Stock Prices", ingest_stooq),
     ("CME Settlements (direct)", ingest_cme_settlements),
