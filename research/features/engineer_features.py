@@ -47,43 +47,111 @@ class FeatureEngineer:
         self.df = None
     
     def load_price_data(self) -> pd.DataFrame:
-        """Load NG futures price data and calculate price-based features."""
-        query = """
-        SELECT date, open, high, low, close, volume
-        FROM ng_futures_daily
-        WHERE date >= :start_date
-        ORDER BY date
         """
-        
+        Load NG futures price data, stitched best-source-first:
+
+          1. cme_settlements   -- official CME daily settlements (direct,
+             ingested since Aug 2026; authoritative OHLC/settle + full curve)
+          2. cme_futures_daily -- Yahoo NG=F weekly bridge (covers the gap
+             between ng_futures_daily's death and settlements going live;
+             overlap-validated vs official settles at 0.00% mean diff incl.
+             the Aug 20->21 front-month roll)
+          3. ng_futures_daily  -- Yahoo history back to 2000 (dead since
+             2026-01-08, retained as the historical base)
+
+        Front month per day = lowest-rowid settlement row with a non-null
+        settle (rows are stored in contract-chronological order). Volume for
+        settlements days is summed across all contract months so it remains
+        comparable to the curve-total volumes in the Yahoo series (keeps
+        volume_ratio continuous across stitches).
+        """
+        # Tier 1: direct CME settlements (front month).
+        # Volume = FRONT MONTH only: Yahoo's series carries front-month
+        # volume too (verified -- curve totals run ~2.6x higher and would
+        # break volume_ratio continuity at the stitch).
+        q_front = """
+        SELECT s.trade_date AS date, s.open, s.high, s.low, s.settle AS close,
+               s.volume
+        FROM cme_settlements s
+        WHERE s.product = 'natural_gas' AND s.settle IS NOT NULL
+          AND s.rowid = (SELECT MIN(s2.rowid) FROM cme_settlements s2
+                         WHERE s2.product = s.product
+                           AND s2.trade_date = s.trade_date
+                           AND s2.settle IS NOT NULL)
+        ORDER BY s.trade_date
+        """
         with self.engine.connect() as conn:
-            df = pd.read_sql(
-                text(query),
-                conn,
-                params={"start_date": self.start_date.isoformat()}
+            settle = pd.read_sql(text(q_front), conn)
+
+        # Tier 2: Yahoo weekly bridge (dedupe known double-stamped rows)
+        with self.engine.connect() as conn:
+            bridge = pd.read_sql(
+                text("SELECT date, open, high, low, close, volume FROM cme_futures_daily "
+                     "WHERE contract_type='natural_gas' ORDER BY date"), conn)
+
+        # Tier 3: historical base
+        with self.engine.connect() as conn:
+            hist = pd.read_sql(
+                text("SELECT date, open, high, low, close, volume FROM ng_futures_daily "
+                     "WHERE date >= :start_date ORDER BY date"),
+                conn, params={"start_date": self.start_date.isoformat()},
             )
-        
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.sort_values('date').reset_index(drop=True)
-        
+
+        def _norm(d, fmt=None):
+            d = d.copy()
+            # Sources serialize dates differently (date-only, datetime,
+            # mixed ISO variants); parse explicitly, coerce stragglers.
+            d["date"] = pd.to_datetime(d["date"], format=fmt, errors="coerce")
+            return d.dropna(subset=["date"]).sort_values("date")
+
+        settle = _norm(settle, "%Y-%m-%d")
+        bridge = _norm(bridge, "ISO8601")
+        hist = _norm(hist)
+        n_bridge_raw = len(bridge)
+        bridge = bridge.drop_duplicates(subset="date", keep="first")
+        settle["price_source"] = "cme_settlements"
+        bridge["price_source"] = "cme_futures_daily_yahoo"
+        hist["price_source"] = "yahoo_ng_futures_daily"
+
+        # Priority: official settles win; then the ORIGINAL training-era
+        # history (byte-continuity with what past features were built on);
+        # the Yahoo weekly bridge exists solely to fill the gap between
+        # ng_futures_daily's death and settlements going live.
+        # kind="stable" is load-bearing: equal dates must resolve by concat
+        # order, not quicksort whim.
+        df = (pd.concat([settle, hist, bridge], ignore_index=True)
+                .sort_values("date", kind="stable")
+                .drop_duplicates(subset="date", keep="first")
+                .reset_index(drop=True))
+        df = df[df["date"] >= self.start_date].reset_index(drop=True)
+
+        if df.empty:
+            print("[FEATURES] Warning: no price data found in any source")
+            return df
+
         # Log returns
         df['log_return'] = np.log(df['close'] / df['close'].shift(1))
         df['return_1d'] = df['log_return']
         df['return_5d'] = df['log_return'].rolling(5).sum().shift(1)
         df['return_20d'] = df['log_return'].rolling(20).sum().shift(1)
-        
+
         # Volatility (annualized)
         df['volatility_20d'] = df['log_return'].rolling(20).std() * np.sqrt(252)
         df['volatility_5d'] = df['log_return'].rolling(5).std() * np.sqrt(252)
-        
+
         # Price range and momentum
         df['price_range'] = (df['high'] - df['low']) / df['close']
         df['momentum_20d'] = (df['close'] - df['close'].shift(20)) / df['close'].shift(20)
-        
+
         # Volume trend
         df['volume_ma_20d'] = df['volume'].rolling(20).mean()
         df['volume_ratio'] = df['volume'] / (df['volume_ma_20d'] + 1e-8)
-        
-        print(f"[FEATURES] Loaded {len(df)} price records from {df['date'].min()} to {df['date'].max()}")
+
+        src_counts = df["price_source"].value_counts().to_dict()
+        print(f"[FEATURES] Price spine stitched: {len(df)} rows, "
+              f"{df['date'].min().date()} to {df['date'].max().date()}")
+        print(f"[FEATURES]   sources: {src_counts} "
+              f"(bridge deduped {n_bridge_raw - len(bridge)})")
         return df
     
     def load_eia_features(self, df: pd.DataFrame) -> pd.DataFrame:

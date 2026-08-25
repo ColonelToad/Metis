@@ -1,10 +1,12 @@
 """
-Build the Feb-July 2026 OOS feature set for frozen-model inference.
+Build OOS feature windows for frozen-model inference.
 
-Bridges the stale ng_futures_daily table (dead since 2026-01-08) with
-cme_futures_daily's natural_gas (NG=F) series for the OOS window, since we
-confirmed the two sources agree to full float precision on overlapping dates
-(2026-01-02 to 2026-01-07) -- safe to stitch.
+Price-spine note (Aug 2026): FeatureEngineer.load_price_data now stitches
+three tiers internally -- official cme_settlements > ng_futures_daily
+history > cme_futures_daily Yahoo bridge -- so the old two-way bridge
+override here is superseded and this script simply uses the base class.
+Overlap validation: official settles vs Yahoo agreed to 0.00% mean diff on
+all five products across the first week of direct collection.
 
 Reuses the real FeatureEngineer class (with the PPI merge_asof fix already
 applied) so every derived feature -- rolling returns, volatility, EIA/FRED/PPI
@@ -40,56 +42,10 @@ OUTPUT_DIR = Path("data/features/oos")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# Kept as a named subclass for continuity with prior runs; price stitching
+# now lives in the base class (see load_price_data there).
 class BridgedFeatureEngineer(FeatureEngineer):
-    """Overrides only price loading to bridge ng_futures_daily -> cme_futures_daily(NG=F)."""
-
-    def load_price_data(self) -> pd.DataFrame:
-        engine = self.engine
-
-        # Primary source: ng_futures_daily, as-is, up to its max date
-        with engine.connect() as conn:
-            ng = pd.read_sql(
-                text("SELECT date, open, high, low, close, volume FROM ng_futures_daily "
-                     "WHERE date >= :start_date ORDER BY date"),
-                conn, params={"start_date": self.start_date.isoformat()},
-            )
-        ng["date"] = pd.to_datetime(ng["date"]).dt.normalize()
-        ng_max_date = ng["date"].max()
-        print(f"[BRIDGE] ng_futures_daily: {ng['date'].min()} to {ng_max_date} ({len(ng)} rows)")
-
-        # Bridge source: cme_futures_daily, natural_gas contract, dates after ng_futures_daily's max
-        with engine.connect() as conn:
-            cme_ng = pd.read_sql(
-                text("SELECT date, open, high, low, close, volume FROM cme_futures_daily "
-                     "WHERE contract_type = 'natural_gas' AND date > :cutoff ORDER BY date"),
-                conn, params={"cutoff": ng_max_date.isoformat()},
-            )
-        cme_ng["date"] = pd.to_datetime(cme_ng["date"], format="ISO8601").dt.normalize()
-
-        # Confirmed duplicate rows per date (two timestamp serializations of the same day) --
-        # dedupe before anything else touches this.
-        n_before = len(cme_ng)
-        cme_ng = cme_ng.drop_duplicates(subset="date", keep="first").sort_values("date")
-        n_after = len(cme_ng)
-        print(f"[BRIDGE] cme_futures_daily(natural_gas) bridge: {cme_ng['date'].min()} to "
-              f"{cme_ng['date'].max()} ({n_after} unique rows, deduped from {n_before})")
-
-        df = pd.concat([ng, cme_ng], ignore_index=True).sort_values("date").reset_index(drop=True)
-
-        # From here down: identical to FeatureEngineer.load_price_data()
-        df["log_return"] = np.log(df["close"] / df["close"].shift(1))
-        df["return_1d"] = df["log_return"]
-        df["return_5d"] = df["log_return"].rolling(5).sum().shift(1)
-        df["return_20d"] = df["log_return"].rolling(20).sum().shift(1)
-        df["volatility_20d"] = df["log_return"].rolling(20).std() * np.sqrt(252)
-        df["volatility_5d"] = df["log_return"].rolling(5).std() * np.sqrt(252)
-        df["price_range"] = (df["high"] - df["low"]) / df["close"]
-        df["momentum_20d"] = (df["close"] - df["close"].shift(20)) / df["close"].shift(20)
-        df["volume_ma_20d"] = df["volume"].rolling(20).mean()
-        df["volume_ratio"] = df["volume"] / (df["volume_ma_20d"] + 1e-8)
-
-        print(f"[BRIDGE] Combined price series: {df['date'].min()} to {df['date'].max()} ({len(df)} rows)")
-        return df
+    pass
 
 
 def main():
