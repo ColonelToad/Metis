@@ -338,6 +338,148 @@ class FeatureEngineer:
         
         return df
     
+    def load_weather_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Weather demand-forcing from NOAA CPC daily degree days
+        (population-weighted and gas-heating-customer-weighted),
+        expressed as deviations from the 1981-2010 daily climatology so
+        the feature isolates weather SURPRISE rather than seasonality.
+        Also merges hub-level observed temperatures from
+        weather_observations (henry_hub_la, cushing_ok).
+
+        Cumulative deviations reset at season anchors:
+          - HDD season starts Jul 1 (withdrawal season)
+          - CDD season starts Jan 1 (injection/cooling season)
+        Rolling 7-day deviation sums capture short-term demand surprise;
+        because they are computed on the full daily calendar BEFORE the
+        merge, weekend degree days are not silently dropped.
+        """
+
+        query_dd = """
+        SELECT date, weight_basis, degree_type, region_type, region, value
+        FROM noaa_degree_days
+        WHERE date >= :start_date
+          AND (
+            (region = 'CONUS' AND weight_basis = 'population'
+             AND degree_type IN ('HDD','CDD'))
+            OR (region = 'CONUS' AND weight_basis = 'utility_gas'
+                AND degree_type = 'HDD')
+            OR (weight_basis = 'population' AND degree_type = 'HDD'
+                AND region IN ('3|East North Central', '4|West North Central'))
+          )
+        ORDER BY date
+        """
+        query_normals = """
+        SELECT weight_basis, degree_type, region_type, region, mmdd, normal
+        FROM noaa_dd_normals
+        WHERE (region = 'CONUS' AND weight_basis = 'population'
+               AND degree_type IN ('HDD','CDD'))
+           OR (region = 'CONUS' AND weight_basis = 'utility_gas'
+               AND degree_type = 'HDD')
+           OR (weight_basis = 'population' AND degree_type = 'HDD'
+               AND region IN ('3|East North Central', '4|West North Central'))
+        """
+
+        with self.engine.connect() as conn:
+            dd = pd.read_sql(text(query_dd), conn,
+                             params={"start_date": (self.start_date - pd.Timedelta(days=400)).isoformat()})
+            normals = pd.read_sql(text(query_normals), conn)
+
+        if dd.empty:
+            print("[FEATURES] Warning: no NOAA degree day data found")
+            return df
+
+        # Wide frame keyed by series
+        dd['series'] = (dd['weight_basis'] + '_' + dd['degree_type'] + '_' +
+                        dd['region'].str.split('|').str[0])
+        wide = dd.pivot_table(index='date', columns='series', values='value',
+                              aggfunc='first')
+        normals['series'] = (normals['weight_basis'] + '_' + normals['degree_type'] +
+                             '_' + normals['region'].str.split('|').str[0])
+        nrm = normals.pivot_table(index='mmdd', columns='series', values='normal',
+                                  aggfunc='first')
+
+        wide.index = pd.to_datetime(wide.index)
+        wide = wide.sort_index()
+
+        # Deviation vs climatological normal (same month/day)
+        mmdd = wide.index.strftime('%m%d')
+        norm_aligned = nrm.reindex(mmdd)
+        norm_aligned.index = wide.index
+        devs = wide - norm_aligned
+
+        feats = pd.DataFrame(index=wide.index)
+        conus_pop_hdd = 'population_HDD_CONUS'
+        conus_pop_cdd = 'population_CDD_CONUS'
+        gas_hdd = 'utility_gas_HDD_CONUS'
+
+        if conus_pop_hdd in devs:
+            feats['hdd_conus_dev'] = devs[conus_pop_hdd]
+            # Season-to-date cumulative deviation (anchor Jul 1)
+            season = np.where(wide.index.month >= 7, wide.index.year,
+                              wide.index.year - 1)
+            feats['hdd_dev_cum_season'] = pd.Series(
+                devs[conus_pop_hdd].fillna(0).values,
+                index=wide.index
+            ).groupby(season).cumsum()
+        if conus_pop_cdd in devs:
+            feats['cdd_conus_dev'] = devs[conus_pop_cdd]
+            season = wide.index.year  # CDD season anchored Jan 1
+            feats['cdd_dev_cum_season'] = pd.Series(
+                devs[conus_pop_cdd].fillna(0).values,
+                index=wide.index
+            ).groupby(season).cumsum()
+        if gas_hdd in devs:
+            feats['hdd_gas_conus_dev'] = devs[gas_hdd]
+            season = np.where(wide.index.month >= 7, wide.index.year,
+                              wide.index.year - 1)
+            feats['hdd_gas_dev_cum_season'] = pd.Series(
+                devs[gas_hdd].fillna(0).values,
+                index=wide.index
+            ).groupby(season).cumsum()
+
+        # Top residential-gas-heating divisions
+        for div, tag in (('3|East North Central', 'enc'), ('4|West North Central', 'wnc')):
+            col = f'population_HDD_{div}'
+            if col in devs:
+                season = np.where(wide.index.month >= 7, wide.index.year,
+                                  wide.index.year - 1)
+                feats[f'hdd_{tag}_dev_cum_season'] = pd.Series(
+                    devs[col].fillna(0).values, index=wide.index
+                ).groupby(season).cumsum()
+
+        # Short-horizon demand surprise (7d sums of daily deviations)
+        if 'hdd_conus_dev' in feats:
+            feats['hdd_conus_dev_7d'] = feats['hdd_conus_dev'].rolling(7).sum()
+        if 'cdd_conus_dev' in feats:
+            feats['cdd_conus_dev_7d'] = feats['cdd_conus_dev'].rolling(7).sum()
+
+        feats = feats.reset_index().rename(columns={'index': 'date'})
+        feats['date'] = pd.to_datetime(feats['date'])
+
+        # Hub-level observed temperatures (weather_observations, open-meteo)
+        query_hubs = """
+        SELECT timestamp as date, location, temp_mean_f
+        FROM weather_observations
+        ORDER BY timestamp
+        """
+        with self.engine.connect() as conn:
+            hubs = pd.read_sql(text(query_hubs), conn)
+        if not hubs.empty:
+            hubs['date'] = pd.to_datetime(hubs['date'])
+            piv = hubs.pivot_table(index='date', columns='location',
+                                   values='temp_mean_f', aggfunc='first')
+            rename = {'henry_hub_la': 'temp_henry_hub', 'cushing_ok': 'temp_cushing'}
+            piv = piv.rename(columns=rename)
+            keep = [c for c in ('temp_henry_hub', 'temp_cushing') if c in piv.columns]
+            feats = feats.merge(piv[keep].reset_index(), on='date', how='left')
+
+        merge_cols = [c for c in feats.columns if c != 'date']
+        df = df.merge(feats[['date'] + merge_cols], on='date', how='left')
+
+        print(f"[FEATURES] Weather features added: {merge_cols}")
+        return df
+
     def load_cme_futures_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Load CME futures data (WTI, Brent, HO, RB) from cme_futures_daily table."""
         
@@ -474,6 +616,7 @@ class FeatureEngineer:
         df = self.load_bls_ppi_features(df)
         df = self.load_census_permit_features(df)
         df = self.load_congress_features(df)
+        df = self.load_weather_features(df)
         
         # Load new energy complex features
         df = self.load_cme_futures_features(df)
@@ -563,6 +706,20 @@ class FeatureEngineer:
             'ng_power_basis', 'ng_power_basis_pct'
         ]
         low_freq_cols.extend([c for c in lmp_related_cols if c in df.columns and c not in low_freq_cols])
+
+        # Weather demand-forcing (NOAA CPC degree-day anomalies + hub temps).
+        # Daily-resolution but fundamentally a demand-side input to the
+        # storage balance, so it lives in the low-freq/fundamental branch
+        # alongside EIA storage rather than the price-only daily branch.
+        weather_cols = [
+            'hdd_conus_dev', 'cdd_conus_dev',
+            'hdd_dev_cum_season', 'cdd_dev_cum_season',
+            'hdd_gas_conus_dev', 'hdd_gas_dev_cum_season',
+            'hdd_enc_dev_cum_season', 'hdd_wnc_dev_cum_season',
+            'hdd_conus_dev_7d', 'cdd_conus_dev_7d',
+            'temp_henry_hub', 'temp_cushing',
+        ]
+        low_freq_cols.extend([c for c in weather_cols if c in df.columns and c not in low_freq_cols])
         
         low_freq_features = df[[col for col in low_freq_cols if col in df.columns]].copy()
         
