@@ -44,6 +44,7 @@ from data_ingest import ingest_cme_settlements
 from data_ingest import ingest_noaa_cpc
 from data_ingest import ingest_state_bills
 from data_ingest import ingest_gie_storage
+from data_ingest import ingest_entsog_flows
 from data_ingest import ingest_lobbying_disclosures
 from features import extract_lobbying_bill_references
 
@@ -127,6 +128,7 @@ DAILY_INGESTERS = [
     ("Weather", ingest_weather),
     ("NOAA Degree Days (CPC)", ingest_noaa_cpc),
     ("GIE Gas Storage (AGSI+/ALSI)", ingest_gie_storage),
+    ("ENTSOG Entry Nominations", ingest_entsog_flows),
     ("Maritime AIS", ingest_ais_maritime),
     ("Stock Prices", ingest_stooq),
     ("CME Settlements (direct)", ingest_cme_settlements),
