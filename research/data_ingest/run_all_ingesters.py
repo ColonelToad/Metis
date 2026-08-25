@@ -42,6 +42,7 @@ from data_ingest import ingest_storm_events
 from data_ingest import ingest_stooq
 from data_ingest import ingest_cme_settlements
 from data_ingest import ingest_noaa_cpc
+from data_ingest import ingest_state_bills
 from data_ingest import ingest_lobbying_disclosures
 from features import extract_lobbying_bill_references
 
@@ -141,6 +142,9 @@ MONTHLY_INGESTERS = [
     ("Congress Bills", ingest_congress_bills_expanded),
     ("NOAA Storm Events", ingest_storm_events),
     ("LDA Lobbying Disclosures", ingest_lobbying_disclosures),
+    # 10-state shortlist energy bills via Plural/Open States (free key;
+    # see ingest_state_bills.py header for state rationale)
+    ("State Bills (Open States)", ingest_state_bills),
     # Must run after LDA Lobbying Disclosures immediately above -- reads the
     # lobbying_activities/lobbying_filings tables that ingester just wrote.
     # Ordering in this list is the only thing enforcing that dependency
