@@ -212,7 +212,10 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            protobuf-compiler
+            protobuf-compiler \
+            clang \
+            libclang-dev \
+            cmake
 
       - name: Check Rust formatting (Tauri)
         working-directory: metis/src-tauri
