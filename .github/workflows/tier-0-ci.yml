@@ -216,6 +216,11 @@ jobs:
             clang \
             libclang-dev \
             cmake
+          # bindgen can't autodetect libclang on ubuntu runners; export explicitly
+          LIBCLANG_SO=$(find /usr/lib -name "libclang-*.so*" 2>/dev/null | head -1)
+          if [ -n "$LIBCLANG_SO" ]; then
+            echo "LIBCLANG_PATH=$(dirname "$LIBCLANG_SO")" >> "$GITHUB_ENV"
+          fi
 
       - name: Check Rust formatting (Tauri)
         working-directory: metis/src-tauri
