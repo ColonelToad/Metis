@@ -11,22 +11,24 @@ Data source: Federal Reserve Economic Data (FRED)
 Series: PERMIT - New Privately-Owned Housing Units Authorized
 API documentation: https://fred.stlouisfed.org/docs/api/fred/
 """
+
+import json
 import os
 import sys
-import json
-from pathlib import Path
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from pathlib import Path
+from typing import Dict, List, Optional
 
-import requests
 import pandas as pd
-from sqlalchemy import create_engine, text
+import requests
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 # Add project root for imports
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from research.common import runtime_config as rc
 from data_ingest import incremental_utils
+
+from research.common import runtime_config as rc
 
 load_dotenv()
 
@@ -42,12 +44,14 @@ FRED_API_URL = "https://api.stlouisfed.org/fred/series/observations"
 PERMIT_SERIES_ID = "PERMIT"  # National building permits (thousands of units)
 
 
-def fetch_permits_national(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Optional[pd.DataFrame]:
+def fetch_permits_national(
+    start_date: Optional[str] = None, end_date: Optional[str] = None
+) -> Optional[pd.DataFrame]:
     """
     Fetch national building permits data from FRED API.
-    
+
     Returns monthly data: total permits issued (in thousands of units).
-    
+
     Args:
         start_date: Start date (YYYY-MM-DD format), or None to use config
         end_date: End date (YYYY-MM-DD format), or None to use today
@@ -55,21 +59,21 @@ def fetch_permits_national(start_date: Optional[str] = None, end_date: Optional[
     if not rc.require_real_mode("FRED Building Permits API"):
         # Return synthetic data for DEV mode
         return generate_synthetic_permits()
-    
+
     if not FRED_API_KEY:
         print("[FRED] Missing FRED_API_KEY - using synthetic data")
         return generate_synthetic_permits()
-    
+
     # Convert datetime objects to string if needed
     if isinstance(start_date, datetime):
-        start_date = start_date.strftime('%Y-%m-%d')
+        start_date = start_date.strftime("%Y-%m-%d")
     if isinstance(end_date, datetime):
-        end_date = end_date.strftime('%Y-%m-%d')
-    
+        end_date = end_date.strftime("%Y-%m-%d")
+
     # Default to 2015 if not specified
     if not start_date:
         start_date = "2015-01-01"
-    
+
     try:
         params = {
             "series_id": PERMIT_SERIES_ID,
@@ -77,40 +81,40 @@ def fetch_permits_national(start_date: Optional[str] = None, end_date: Optional[
             "file_type": "json",
             "observation_start": start_date,
         }
-        
+
         if end_date:
             params["observation_end"] = end_date
-        
+
         response = requests.get(FRED_API_URL, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
-        
+
         # Check for API errors
         if "error_code" in data:
             print(f"[FRED] API error: {data.get('error_message', 'Unknown error')}")
             return generate_synthetic_permits()
-        
+
         observations = data.get("observations", [])
-        
+
         if not observations:
             print("[FRED] No data returned from API")
             return None
-        
+
         # Convert to DataFrame
         df = pd.DataFrame(observations)
-        df = df[['date', 'value']].copy()
-        df['date'] = pd.to_datetime(df['date'])
-        df['value'] = pd.to_numeric(df['value'], errors='coerce')
+        df = df[["date", "value"]].copy()
+        df["date"] = pd.to_datetime(df["date"])
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
         df = df.dropna()
-        
+
         # FRED returns data in thousands - convert to actual count
-        df['permit_count'] = (df['value'] * 1000).astype(int)
-        df = df[['date', 'permit_count']].copy()
-        df = df.sort_values('date')
-        
+        df["permit_count"] = (df["value"] * 1000).astype(int)
+        df = df[["date", "permit_count"]].copy()
+        df = df.sort_values("date")
+
         print(f"[FRED] Fetched {len(df)} monthly permit records")
         return df
-        
+
     except requests.exceptions.HTTPError as e:
         print(f"[FRED] API fetch failed: {e}")
         if e.response.status_code == 400:
@@ -129,47 +133,48 @@ def generate_synthetic_permits() -> pd.DataFrame:
     Realistic trend: rising permits → rising construction → future energy demand.
     """
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=365*10)  # 10 years back
-    
-    dates = pd.date_range(start=start_date, end=end_date, freq='MS')
-    
+    start_date = end_date - timedelta(days=365 * 10)  # 10 years back
+
+    dates = pd.date_range(start=start_date, end=end_date, freq="MS")
+
     # Synthetic data: base 1.4M permits/month with trend and seasonality
     trend = pd.Series(range(len(dates))) * 0.001  # Very slight uptrend
-    seasonal = 0.1 * pd.Series([
-        1.05 if m in [3, 4, 5] else  # Spring peak
-        0.95 if m in [11, 12] else   # Winter trough
-        1.0
-        for m in dates.month
-    ])
-    
+    seasonal = 0.1 * pd.Series(
+        [
+            (
+                1.05
+                if m in [3, 4, 5]  # Spring peak
+                else 0.95 if m in [11, 12] else 1.0  # Winter trough
+            )
+            for m in dates.month
+        ]
+    )
+
     permits = (1_400_000 + trend * 100_000) * (1 + seasonal)
     permits = permits + (pd.Series(range(len(dates))) * 0.02 * 100_000).values  # Long-term growth
-    
-    return pd.DataFrame({
-        'date': dates,
-        'permit_count': permits.astype(int)
-    })
+
+    return pd.DataFrame({"date": dates, "permit_count": permits.astype(int)})
 
 
 def calculate_rolling_metrics(df: pd.DataFrame) -> pd.DataFrame:
     """
     Calculate rolling 6-month average and YoY change.
-    
+
     Signal interpretation:
     - YoY ↑ >10% → positive energy demand outlook (12 months forward)
     """
     df = df.copy()
-    df = df.sort_values('date')
-    
+    df = df.sort_values("date")
+
     # 6-month rolling average
-    df['permit_6m_rolling'] = df['permit_count'].rolling(window=6, min_periods=1).mean()
-    
+    df["permit_6m_rolling"] = df["permit_count"].rolling(window=6, min_periods=1).mean()
+
     # YoY change (12 months back)
-    df['permit_yoy_change'] = df['permit_count'].pct_change(periods=12) * 100
-    
+    df["permit_yoy_change"] = df["permit_count"].pct_change(periods=12) * 100
+
     # Bullish signal: >10% YoY growth
-    df['permit_bullish'] = (df['permit_yoy_change'] > 10).astype(int)
-    
+    df["permit_bullish"] = (df["permit_yoy_change"] > 10).astype(int)
+
     return df
 
 
@@ -195,35 +200,29 @@ def upsert_permits(engine, df: pd.DataFrame) -> None:
     if df.empty:
         print("[FRED] No data to upsert")
         return
-    
+
     ensure_table(engine)
-    
+
     # 1. Find the maximum date currently in the database
     with engine.connect() as conn:
         max_date_str = conn.execute(text("SELECT MAX(date) FROM census_permits")).scalar()
-    
+
     # 2. Filter the incoming DataFrame to only include strictly new dates
     if max_date_str:
         max_date = pd.to_datetime(max_date_str)
-        df_insert = df[df['date'] > max_date].copy()
+        df_insert = df[df["date"] > max_date].copy()
     else:
         df_insert = df.copy()
-        
+
     if df_insert.empty:
         print("[FRED] No new records to insert. All dates already up to date.")
         return
-    
+
     # 3. Insert the new filtered records
-    df_insert['timestamp'] = datetime.now().isoformat()
-    
+    df_insert["timestamp"] = datetime.now().isoformat()
+
     try:
-        df_insert.to_sql(
-            'census_permits',
-            engine,
-            if_exists='append',
-            index=False,
-            method='multi'
-        )
+        df_insert.to_sql("census_permits", engine, if_exists="append", index=False, method="multi")
         print(f"[FRED] Upserted {len(df_insert)} new permit records")
     except Exception as e:
         print(f"[FRED] Error upserting permits: {e}")
@@ -241,45 +240,49 @@ def upsert_permits(engine, df: pd.DataFrame) -> None:
 def main():
     """Main ingestion pipeline."""
     rc.log_mode("FRED Building Permits")
-    
+
     # Skip ingestion in DEV mode - DEV mode is read-only
     if not rc.require_real_mode("FRED Building Permits ingestion"):
         print("[FRED] Skipping ingestion in DEV mode (read-only)")
         return
-    
+
     # Create engine first to query existing data
     engine = create_engine(DB_URL)
-    
+
     # Calculate fetch range based on backfill strategy
     start_date, end_date = incremental_utils.calculate_fetch_range(
-        "fred_building_permits",
-        engine=engine
+        "fred_building_permits", engine=engine
     )
-    
-    print(f"[FRED] Fetching permits from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
-    
+
+    print(
+        f"[FRED] Fetching permits from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
+    )
+
     # Fetch data with calculated date range
     df = fetch_permits_national(
-        start_date=start_date.strftime('%Y-%m-%d'),
-        end_date=end_date.strftime('%Y-%m-%d')
+        start_date=start_date.strftime("%Y-%m-%d"), end_date=end_date.strftime("%Y-%m-%d")
     )
-    
+
     if df is None or df.empty:
         print("[FRED] No permit data available")
-        incremental_utils.update_fetch_metadata("fred_building_permits", start_date, end_date, success=False)
+        incremental_utils.update_fetch_metadata(
+            "fred_building_permits", start_date, end_date, success=False
+        )
         return
-    
+
     # Calculate metrics
     df = calculate_rolling_metrics(df)
-    
+
     # Save to database only in REAL mode
     if rc.require_real_mode("FRED Building Permits ingestion"):
         upsert_permits(engine, df)
         # Update metadata to track successful fetch
-        incremental_utils.update_fetch_metadata("fred_building_permits", start_date, end_date, success=True)
+        incremental_utils.update_fetch_metadata(
+            "fred_building_permits", start_date, end_date, success=True
+        )
     else:
         print("[FRED] Skipping database write in DEV mode (read-only)")
-    
+
     # Log summary
     if not df.empty:
         latest = df.iloc[-1]

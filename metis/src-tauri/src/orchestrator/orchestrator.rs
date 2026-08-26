@@ -57,7 +57,10 @@ impl Orchestrator {
 
         // Run Python pipeline
         match self.python_runner.run_pipeline().await {
-            Ok(python_result) => self.handle_success(&job_id, python_result, mode, start).await,
+            Ok(python_result) => {
+                self.handle_success(&job_id, python_result, mode, start)
+                    .await
+            }
             Err(e) => {
                 let error_msg = format!("Python pipeline execution failed: {}", e);
                 error!("[{}] {}", job_id, error_msg);

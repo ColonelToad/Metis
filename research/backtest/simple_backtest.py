@@ -75,16 +75,18 @@ def run_backtest(df: pd.DataFrame, positions: pd.Series, cost_per_turnover: floa
     equity = (1 + net).cumprod()
     drawdown = equity / equity.cummax() - 1
 
-    result = pd.DataFrame({
-        "date": df.get("date"),
-        "close": df["close"],
-        "position": positions,
-        "gross_return": gross,
-        "cost": costs,
-        "net_return": net,
-        "equity": equity,
-        "drawdown": drawdown,
-    })
+    result = pd.DataFrame(
+        {
+            "date": df.get("date"),
+            "close": df["close"],
+            "position": positions,
+            "gross_return": gross,
+            "cost": costs,
+            "net_return": net,
+            "equity": equity,
+            "drawdown": drawdown,
+        }
+    )
     return result
 
 
@@ -134,11 +136,34 @@ def main(cfg: BacktestConfig) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple NG futures backtest")
-    parser.add_argument("--split", choices=list(SPLIT_TO_FILE.keys()), default="test", help="Which features split to use")
-    parser.add_argument("--signal-column", dest="signal_column", default="predicted_return", help="Signal column to use (fallback to momentum_20d)")
-    parser.add_argument("--threshold", type=float, default=0.0, help="Signal threshold for entering positions")
-    parser.add_argument("--cost", dest="cost_per_turnover", type=float, default=0.0005, help="Transaction cost per unit turnover (e.g., 0.0005 = 5bps)")
-    parser.add_argument("--output", dest="output_equity", default=None, help="Optional path to save equity curve CSV")
+    parser.add_argument(
+        "--split",
+        choices=list(SPLIT_TO_FILE.keys()),
+        default="test",
+        help="Which features split to use",
+    )
+    parser.add_argument(
+        "--signal-column",
+        dest="signal_column",
+        default="predicted_return",
+        help="Signal column to use (fallback to momentum_20d)",
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=0.0, help="Signal threshold for entering positions"
+    )
+    parser.add_argument(
+        "--cost",
+        dest="cost_per_turnover",
+        type=float,
+        default=0.0005,
+        help="Transaction cost per unit turnover (e.g., 0.0005 = 5bps)",
+    )
+    parser.add_argument(
+        "--output",
+        dest="output_equity",
+        default=None,
+        help="Optional path to save equity curve CSV",
+    )
     args = parser.parse_args()
 
     config = BacktestConfig(

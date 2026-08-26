@@ -23,18 +23,19 @@ Outputs (research/analysis/out/gdelt_pilot/): per-series CSVs + panel PNG.
 """
 
 import io
+import logging
 import sys
 import time
 import zipfile
-import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import requests
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
+import requests
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -49,24 +50,53 @@ CACHE.mkdir(parents=True, exist_ok=True)
 # Controlled-vocabulary terms (from THEMES), matched as exact tokens or
 # prefixes; entity terms matched as substring over location/person/org text.
 WINDOWS = [
-    ("iran_2025", datetime(2025, 6, 1), datetime(2025, 7, 15),
-     [("iran_entity", "entity", "IRAN")]),
-    ("repowereu_2022", datetime(2022, 3, 8), datetime(2022, 6, 30),
-     [("repowereu_org", "entity", "REPOWEREU"),
-      ("eu_gas_themes", "theme_any",
-       ["ENV_NATURALGAS", "ECON_NATGASPRICE", "WB_1751_LIQUEFIED"]),
-      ]),
-    ("election_2024", datetime(2024, 10, 15), datetime(2024, 12, 15),
-     [("clean_energy_theme", "theme_any",
-       ["WB_525_RENEWABLE_ENERGY", "ENV_SOLAR", "WB_528_SOLAR_ENERGY",
-        "ENV_WINDPOWER", "WB_529_WIND_ENERGY"]),
-      ("fossil_theme", "theme_any",
-       ["ENV_OIL", "ENV_COAL", "ENV_NATURALGAS"]),
-      ("energy_price_theme", "theme_any",
-       ["ECON_OILPRICE", "ECON_NATGASPRICE", "ECON_GASOLINEPRICE"])]),
-    ("cpp_collapse_2016", datetime(2016, 1, 1), datetime(2016, 3, 31),
-     [("clean_power_plan", "entity", "CLEAN POWER PLAN"),
-      ("climate_theme", "theme_prefix", "ENV_CLIMATECHANGE")]),
+    ("iran_2025", datetime(2025, 6, 1), datetime(2025, 7, 15), [("iran_entity", "entity", "IRAN")]),
+    (
+        "repowereu_2022",
+        datetime(2022, 3, 8),
+        datetime(2022, 6, 30),
+        [
+            ("repowereu_org", "entity", "REPOWEREU"),
+            (
+                "eu_gas_themes",
+                "theme_any",
+                ["ENV_NATURALGAS", "ECON_NATGASPRICE", "WB_1751_LIQUEFIED"],
+            ),
+        ],
+    ),
+    (
+        "election_2024",
+        datetime(2024, 10, 15),
+        datetime(2024, 12, 15),
+        [
+            (
+                "clean_energy_theme",
+                "theme_any",
+                [
+                    "WB_525_RENEWABLE_ENERGY",
+                    "ENV_SOLAR",
+                    "WB_528_SOLAR_ENERGY",
+                    "ENV_WINDPOWER",
+                    "WB_529_WIND_ENERGY",
+                ],
+            ),
+            ("fossil_theme", "theme_any", ["ENV_OIL", "ENV_COAL", "ENV_NATURALGAS"]),
+            (
+                "energy_price_theme",
+                "theme_any",
+                ["ECON_OILPRICE", "ECON_NATGASPRICE", "ECON_GASOLINEPRICE"],
+            ),
+        ],
+    ),
+    (
+        "cpp_collapse_2016",
+        datetime(2016, 1, 1),
+        datetime(2016, 3, 31),
+        [
+            ("clean_power_plan", "entity", "CLEAN POWER PLAN"),
+            ("climate_theme", "theme_prefix", "ENV_CLIMATECHANGE"),
+        ],
+    ),
 ]
 
 IDX_DATE, IDX_THEMES, IDX_LOCS, IDX_PERSONS, IDX_ORGS, IDX_TONE = 0, 3, 4, 5, 6, 7
@@ -108,9 +138,12 @@ def fetch_day(day: datetime, keys: list):
         return None
 
     # V1 GKG TONE field = "tone,pos,neg,polarity,activity,ref" (comma-packed)
-    tones = np.array([float(f[IDX_TONE].split(",")[0])
-                      if _is_float(f[IDX_TONE].split(",")[0]) else np.nan
-                      for f in rows])
+    tones = np.array(
+        [
+            float(f[IDX_TONE].split(",")[0]) if _is_float(f[IDX_TONE].split(",")[0]) else np.nan
+            for f in rows
+        ]
+    )
     themes_split = [set(f[IDX_THEMES].split(";")) for f in rows]
     entity_text = [f"{f[IDX_LOCS]} {f[IDX_PERSONS]} {f[IDX_ORGS]}".upper() for f in rows]
 
@@ -119,13 +152,11 @@ def fetch_day(day: datetime, keys: list):
         if kind == "theme_any":
             hit = [i for i, ts in enumerate(themes_split) if ts & set(payload)]
         elif kind == "theme_prefix":
-            hit = [i for i, ts in enumerate(themes_split)
-                   if any(t.startswith(payload) for t in ts)]
+            hit = [i for i, ts in enumerate(themes_split) if any(t.startswith(payload) for t in ts)]
         else:  # entity substring
             hit = [i for i, txt in enumerate(entity_text) if payload in txt]
         tone = float(np.nanmean(tones[hit])) if hit else None
-        matches[key] = {"n": len(hit), "tone": tone,
-                        "share": len(hit) / len(rows)}
+        matches[key] = {"n": len(hit), "tone": tone, "share": len(hit) / len(rows)}
     return {"date": day.date().isoformat(), "total": len(rows), "matches": matches}
 
 
@@ -142,7 +173,8 @@ def main():
     for wname, d1, d2, terms in WINDOWS:
         for d in daterange(d1, d2):
             day_keys.setdefault(d, []).extend(
-                (f"{wname}:{slug}", kind, payload) for slug, kind, payload in terms)
+                (f"{wname}:{slug}", kind, payload) for slug, kind, payload in terms
+            )
 
     all_days = sorted(day_keys)
     log.info(f"Day-files: {len(all_days)} (cached ones are free)")
@@ -156,12 +188,12 @@ def main():
             if res:
                 totals[res["date"]] = res["total"]
                 for key, m in res["matches"].items():
-                    results.setdefault(key, {})[res["date"]] = (
-                        m["n"], m["tone"], m["share"])
+                    results.setdefault(key, {})[res["date"]] = (m["n"], m["tone"], m["share"])
             if i % 25 == 0:
                 log.info(f"  {i}/{len(all_days)} ({time.time()-t0:.0f}s)")
 
     import pickle
+
     with open(OUT / "pilot_cache.pkl", "wb") as f:
         pickle.dump({"totals": totals, "results": results}, f)
 
@@ -174,8 +206,10 @@ def main():
             if not series:
                 summary.append(f"{key:34s} NO DATA")
                 continue
-            s = pd.DataFrame([(d, *v) for d, v in sorted(series.items())],
-                             columns=["date", "n_matched", "mean_tone", "share"])
+            s = pd.DataFrame(
+                [(d, *v) for d, v in sorted(series.items())],
+                columns=["date", "n_matched", "mean_tone", "share"],
+            )
             s.to_csv(OUT / f"{wname}_{slug}.csv", index=False)
             x = pd.to_datetime(s["date"])
             ax.plot(x, s["share"], label=slug)
@@ -190,7 +224,8 @@ def main():
             summary.append(
                 f"{key:26s} days={len(s):3d} peak={peak['date']} "
                 f"n={int(peak['n_matched']):6d} share={peak['share']*100:6.2f}% "
-                f"tone_mean={s['mean_tone'].mean():+.2f}")
+                f"tone_mean={s['mean_tone'].mean():+.2f}"
+            )
     fig.tight_layout()
     fig.savefig(OUT / "framing_panel.png", dpi=130)
     print("\n".join(summary))

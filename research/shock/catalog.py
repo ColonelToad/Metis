@@ -18,6 +18,7 @@ NG relevance:
   supply_glut    : storage surplus, new supply -> bearish
   macro           : broad energy market dislocation
 """
+
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -34,8 +35,11 @@ MANUAL_EVENTS: list[dict] = [
     # ── Pre-shale era (2000-2009) ──────────────────────────────────────────────
     {
         "name": "2000-2001 Western Energy Crisis",
-        "start": "2000-11-01", "end": "2001-04-30",
-        "type": "demand_shock", "severity": 3, "source": "manual",
+        "start": "2000-11-01",
+        "end": "2001-04-30",
+        "type": "demand_shock",
+        "severity": 3,
+        "source": "manual",
         "region": "nationwide",
         "description": (
             "Post-Y2K industrial boom + cold winter drove HH to $10/MMBtu. "
@@ -45,8 +49,11 @@ MANUAL_EVENTS: list[dict] = [
     },
     {
         "name": "Iraq War / Winter 2003 Spike",
-        "start": "2003-01-15", "end": "2003-03-31",
-        "type": "macro", "severity": 2, "source": "manual",
+        "start": "2003-01-15",
+        "end": "2003-03-31",
+        "type": "macro",
+        "severity": 2,
+        "source": "manual",
         "region": "nationwide",
         "description": (
             "HH briefly hit $9.50 in Jan-Feb 2003. Prices driven primarily by "
@@ -57,8 +64,11 @@ MANUAL_EVENTS: list[dict] = [
     },
     {
         "name": "Hurricane Katrina + Rita",
-        "start": "2005-08-25", "end": "2005-11-30",
-        "type": "supply_shock", "severity": 4, "source": "manual",
+        "start": "2005-08-25",
+        "end": "2005-11-30",
+        "type": "supply_shock",
+        "severity": 4,
+        "source": "manual",
         "region": "gulf_coast",
         "description": (
             "Katrina (Cat 5, Aug 29) then Rita (Cat 5, Sep 24) destroyed offshore "
@@ -70,8 +80,11 @@ MANUAL_EVENTS: list[dict] = [
     },
     {
         "name": "2008 Financial Crisis + Demand Collapse",
-        "start": "2008-07-01", "end": "2009-03-31",
-        "type": "demand_collapse", "severity": 4, "source": "manual",
+        "start": "2008-07-01",
+        "end": "2009-03-31",
+        "type": "demand_collapse",
+        "severity": 4,
+        "source": "manual",
         "region": "nationwide",
         "description": (
             "NG peaked at $13.58 in July 2008 on oil correlation and tight supply, "
@@ -84,15 +97,21 @@ MANUAL_EVENTS: list[dict] = [
     # ── Shale era (2010-2019) ──────────────────────────────────────────────────
     {
         "name": "Polar Vortex 2014",
-        "start": "2014-01-05", "end": "2014-01-10",
-        "type": "demand_shock", "severity": 3, "source": "manual",
+        "start": "2014-01-05",
+        "end": "2014-01-10",
+        "type": "demand_shock",
+        "severity": 3,
+        "source": "manual",
         "region": "nationwide",
         "description": "Arctic air mass drove NG spot to $7+/MMBtu; demand records set across Midwest/Northeast",
     },
     {
         "name": "Crimea Annexation",
-        "start": "2014-02-27", "end": "2014-05-31",
-        "type": "macro", "severity": 1, "source": "manual",
+        "start": "2014-02-27",
+        "end": "2014-05-31",
+        "type": "macro",
+        "severity": 1,
+        "source": "manual",
         "region": "global",
         "description": (
             "Russia annexed Crimea (Feb 27, 2014); first Russia-Ukraine military conflict. "
@@ -104,100 +123,142 @@ MANUAL_EVENTS: list[dict] = [
     },
     {
         "name": "2016 Storage Glut",
-        "start": "2016-03-01", "end": "2016-04-30",
-        "type": "supply_glut", "severity": 1, "source": "manual",
+        "start": "2016-03-01",
+        "end": "2016-04-30",
+        "type": "supply_glut",
+        "severity": 1,
+        "source": "manual",
         "region": "nationwide",
         "description": "Record storage levels post-warm winter pushed NG to $1.60 lows",
     },
     {
         "name": "Hurricane Harvey",
-        "start": "2017-08-25", "end": "2017-09-15",
-        "type": "supply_shock", "severity": 2, "source": "manual",
+        "start": "2017-08-25",
+        "end": "2017-09-15",
+        "type": "supply_shock",
+        "severity": 2,
+        "source": "manual",
         "region": "gulf_coast",
         "description": "Category 4 landfall near Houston; refinery and gas processing shutdowns",
     },
     {
         "name": "Hurricane Michael",
-        "start": "2018-10-10", "end": "2018-10-20",
-        "type": "supply_shock", "severity": 2, "source": "manual",
+        "start": "2018-10-10",
+        "end": "2018-10-20",
+        "type": "supply_shock",
+        "severity": 2,
+        "source": "manual",
         "region": "gulf_coast",
         "description": "Category 5 landfall in Florida panhandle; pipeline and distribution damage",
     },
     {
         "name": "Q4 2018 Price Spike",
-        "start": "2018-11-01", "end": "2018-11-15",
-        "type": "demand_shock", "severity": 2, "source": "manual",
+        "start": "2018-11-01",
+        "end": "2018-11-15",
+        "type": "demand_shock",
+        "severity": 2,
+        "source": "manual",
         "region": "nationwide",
         "description": "Early winter cold + tight storage drove NG to $4.80; sharpest move since 2014",
     },
     # ── LNG export era (2020-present) ─────────────────────────────────────────
     {
         "name": "COVID Demand Collapse",
-        "start": "2020-03-15", "end": "2020-05-31",
-        "type": "demand_collapse", "severity": 3, "source": "manual",
+        "start": "2020-03-15",
+        "end": "2020-05-31",
+        "type": "demand_collapse",
+        "severity": 3,
+        "source": "manual",
         "region": "nationwide",
         "description": "Industrial shutdown and mild spring crushed NG demand; prices fell below $1.50",
     },
     {
         "name": "Winter Storm Uri",
-        "start": "2021-02-10", "end": "2021-02-20",
-        "type": "demand_shock", "severity": 4, "source": "manual",
+        "start": "2021-02-10",
+        "end": "2021-02-20",
+        "type": "demand_shock",
+        "severity": 4,
+        "source": "manual",
         "region": "south_central",
         "description": "Texas grid failure; wellhead freeze-offs cut supply while demand surged; spot hit $24+",
     },
     {
         "name": "Hurricane Ida",
-        "start": "2021-08-29", "end": "2021-09-15",
-        "type": "supply_shock", "severity": 2, "source": "manual",
+        "start": "2021-08-29",
+        "end": "2021-09-15",
+        "type": "supply_shock",
+        "severity": 2,
+        "source": "manual",
         "region": "gulf_coast",
         "description": "Category 4 landfall in Louisiana; 95%+ of Gulf of Mexico gas production offline",
     },
     {
         "name": "Freeport LNG Explosion",
-        "start": "2022-06-08", "end": "2022-09-01",
-        "type": "supply_glut", "severity": 3, "source": "manual",
+        "start": "2022-06-08",
+        "end": "2022-09-01",
+        "type": "supply_glut",
+        "severity": 3,
+        "source": "manual",
         "region": "gulf_coast",
         "description": "2.0 bcf/d of LNG export capacity offline; US storage surged; HH fell ~40% from peak",
     },
     {
         "name": "Russia Invades Ukraine",
-        "start": "2022-02-24", "end": "2022-06-30",
-        "type": "macro", "severity": 4, "source": "manual",
+        "start": "2022-02-24",
+        "end": "2022-06-30",
+        "type": "macro",
+        "severity": 4,
+        "source": "manual",
         "region": "global",
         "description": "European gas crisis; TTF spiked; HH followed on LNG export demand surge",
     },
     {
         "name": "2022 Summer Peak",
-        "start": "2022-07-01", "end": "2022-08-31",
-        "type": "demand_shock", "severity": 3, "source": "manual",
+        "start": "2022-07-01",
+        "end": "2022-08-31",
+        "type": "demand_shock",
+        "severity": 3,
+        "source": "manual",
         "region": "nationwide",
         "description": "Record heat + LNG export demand drove HH to $9.68 intraday; highest since 2008",
     },
     {
         "name": "Winter Storm Elliott",
-        "start": "2022-12-22", "end": "2022-12-26",
-        "type": "demand_shock", "severity": 3, "source": "manual",
+        "start": "2022-12-22",
+        "end": "2022-12-26",
+        "type": "demand_shock",
+        "severity": 3,
+        "source": "manual",
         "region": "nationwide",
         "description": "Bomb cyclone; demand surge but production freeze-offs; basis spikes in Northeast",
     },
     {
         "name": "2023 Storage Rebuild",
-        "start": "2023-02-01", "end": "2023-04-30",
-        "type": "supply_glut", "severity": 1, "source": "manual",
+        "start": "2023-02-01",
+        "end": "2023-04-30",
+        "type": "supply_glut",
+        "severity": 1,
+        "source": "manual",
         "region": "nationwide",
         "description": "Warm winter left storage bloated; NG fell below $2 through spring",
     },
     {
         "name": "Sabine Pass LNG Disruption",
-        "start": "2023-12-22", "end": "2024-01-15",
-        "type": "supply_glut", "severity": 1, "source": "manual",
+        "start": "2023-12-22",
+        "end": "2024-01-15",
+        "type": "supply_glut",
+        "severity": 1,
+        "source": "manual",
         "region": "gulf_coast",
         "description": "Freeze-related LNG loading curtailments reduced export demand; domestic prices fell",
     },
     {
         "name": "2024 Winter Cold Snap",
-        "start": "2024-01-10", "end": "2024-01-20",
-        "type": "demand_shock", "severity": 2, "source": "manual",
+        "start": "2024-01-10",
+        "end": "2024-01-20",
+        "type": "demand_shock",
+        "severity": 2,
+        "source": "manual",
         "region": "nationwide",
         "description": "Arctic blast drove demand spike; NG spiked briefly above $3.50",
     },
@@ -209,7 +270,14 @@ def fetch_fema_events(start_year: int = 2010) -> pd.DataFrame:
     Fetch FEMA disaster declarations for NG-relevant incident types.
     Returns empty DataFrame if API is unavailable (503, timeout, etc.).
     """
-    ng_types = ["Winter Storm", "Hurricane", "Severe Ice Storm", "Severe Freeze", "Typhoon", "Drought"]
+    ng_types = [
+        "Winter Storm",
+        "Hurricane",
+        "Severe Ice Storm",
+        "Severe Freeze",
+        "Typhoon",
+        "Drought",
+    ]
     records = []
 
     for incident_type in ng_types:
@@ -227,16 +295,18 @@ def fetch_fema_events(start_year: int = 2010) -> pd.DataFrame:
             if resp.status_code != 200:
                 continue
             for rec in resp.json().get("DisasterDeclarations", []):
-                records.append({
-                    "name": f"FEMA: {rec.get('declarationTitle', incident_type)}",
-                    "start": rec.get("incidentBeginDate", rec.get("declarationDate", ""))[:10],
-                    "end": (rec.get("incidentEndDate") or rec.get("declarationDate", ""))[:10],
-                    "type": _fema_type_map(incident_type),
-                    "severity": _fema_severity(incident_type),
-                    "source": "fema",
-                    "region": rec.get("state", "unknown"),
-                    "description": f"FEMA declared disaster #{rec.get('disasterNumber')} — {rec.get('declarationTitle')}",
-                })
+                records.append(
+                    {
+                        "name": f"FEMA: {rec.get('declarationTitle', incident_type)}",
+                        "start": rec.get("incidentBeginDate", rec.get("declarationDate", ""))[:10],
+                        "end": (rec.get("incidentEndDate") or rec.get("declarationDate", ""))[:10],
+                        "type": _fema_type_map(incident_type),
+                        "severity": _fema_severity(incident_type),
+                        "source": "fema",
+                        "region": rec.get("state", "unknown"),
+                        "description": f"FEMA declared disaster #{rec.get('disasterNumber')} — {rec.get('declarationTitle')}",
+                    }
+                )
         except Exception:
             continue  # API down or network issue; skip silently
 
@@ -262,8 +332,14 @@ def _fema_type_map(incident_type: str) -> str:
 
 
 def _fema_severity(incident_type: str) -> int:
-    return {"Winter Storm": 2, "Hurricane": 2, "Typhoon": 2,
-            "Severe Ice Storm": 2, "Severe Freeze": 2, "Drought": 1}.get(incident_type, 1)
+    return {
+        "Winter Storm": 2,
+        "Hurricane": 2,
+        "Typhoon": 2,
+        "Severe Ice Storm": 2,
+        "Severe Freeze": 2,
+        "Drought": 1,
+    }.get(incident_type, 1)
 
 
 def build_catalog(include_fema: bool = True) -> pd.DataFrame:
@@ -280,7 +356,7 @@ def build_catalog(include_fema: bool = True) -> pd.DataFrame:
         df = manual.copy()
 
     df["start"] = pd.to_datetime(df["start"])
-    df["end"]   = pd.to_datetime(df["end"])
+    df["end"] = pd.to_datetime(df["end"])
     df = df.sort_values("start").reset_index(drop=True)
     return df
 
@@ -288,6 +364,6 @@ def build_catalog(include_fema: bool = True) -> pd.DataFrame:
 def write_catalog_to_db(catalog: pd.DataFrame, conn: sqlite3.Connection) -> None:
     catalog_out = catalog.copy()
     catalog_out["start"] = catalog_out["start"].dt.strftime("%Y-%m-%d")
-    catalog_out["end"]   = catalog_out["end"].dt.strftime("%Y-%m-%d")
+    catalog_out["end"] = catalog_out["end"].dt.strftime("%Y-%m-%d")
     catalog_out.to_sql("shock_events", conn, if_exists="replace", index=True, index_label="id")
     print(f"  Wrote {len(catalog_out)} events to shock_events table")

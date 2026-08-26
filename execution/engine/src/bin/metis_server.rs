@@ -112,8 +112,10 @@ fn process_signal(
             // Still not a live order — no exchange connection — but the
             // response now reflects real book impact instead of a
             // planning-only handshake.
-            let (filled_qty, fill_avg) =
-                book.lock().unwrap().simulate_fill(book_side, signal.target_quantity);
+            let (filled_qty, fill_avg) = book
+                .lock()
+                .unwrap()
+                .simulate_fill(book_side, signal.target_quantity);
 
             if filled_qty <= 0.0 {
                 warn!(
@@ -284,7 +286,10 @@ fn pin_worker_threads() -> impl Fn() + Send + Sync + 'static {
         if core_affinity::set_for_current(core) {
             eprintln!("[pinning] tokio worker thread pinned to core {}", core.id);
         } else {
-            eprintln!("[pinning] failed to pin tokio worker thread to core {}", core.id);
+            eprintln!(
+                "[pinning] failed to pin tokio worker thread to core {}",
+                core.id
+            );
         }
     }
 }

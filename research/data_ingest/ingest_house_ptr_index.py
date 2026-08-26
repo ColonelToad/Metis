@@ -20,15 +20,17 @@ confirmed against a live file. This fetch prints the actual root tag and first
 row's element names before parsing, so a wrong assumption surfaces immediately
 as a clear diagnostic instead of a silent empty/wrong result.
 """
+
 import os
 import sys
+import xml.etree.ElementTree as ET
 import zipfile
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from datetime import datetime
+
 import pandas as pd
 import requests
-import xml.etree.ElementTree as ET
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 
@@ -69,7 +71,7 @@ def fetch_year_index(year: int) -> pd.DataFrame:
 
     records = []
     for i, member in enumerate(root):
-        row = {child.tag: (child.text or '').strip() for child in member}
+        row = {child.tag: (child.text or "").strip() for child in member}
         if i == 0:
             print(f"  First row element names: {list(row.keys())}")
         records.append(row)
@@ -82,24 +84,27 @@ def fetch_year_index(year: int) -> pd.DataFrame:
 
     # Field names below are the commonly-documented House Clerk XML schema --
     # verify against the printed keys above on first real run.
-    filing_type_col = next((c for c in df.columns if c.lower() in ('filingtype',)), None)
+    filing_type_col = next((c for c in df.columns if c.lower() in ("filingtype",)), None)
     if filing_type_col is None:
         print(f"  Could not find a FilingType-like column. Available columns: {list(df.columns)}")
         return df  # return unfiltered so it's still inspectable
 
     n_before = len(df)
-    df = df[df[filing_type_col] == 'P'].copy()
+    df = df[df[filing_type_col] == "P"].copy()
     print(f"  {year}: {n_before} total filings -> {len(df)} PTRs (FilingType='P')")
 
-    doc_id_col = next((c for c in df.columns if c.lower() in ('docid', 'doc_id')), None)
+    doc_id_col = next((c for c in df.columns if c.lower() in ("docid", "doc_id")), None)
     if doc_id_col:
-        df['pdf_url'] = df[doc_id_col].apply(
-            lambda docid: f"{BASE_URL}/ptr-pdfs/{year}/{docid}.pdf" if docid else None)
+        df["pdf_url"] = df[doc_id_col].apply(
+            lambda docid: f"{BASE_URL}/ptr-pdfs/{year}/{docid}.pdf" if docid else None
+        )
     else:
-        print(f"  Could not find a DocID-like column to construct PDF URLs. "
-              f"Available columns: {list(df.columns)}")
+        print(
+            f"  Could not find a DocID-like column to construct PDF URLs. "
+            f"Available columns: {list(df.columns)}"
+        )
 
-    df['filing_year'] = year
+    df["filing_year"] = year
     return df
 
 
@@ -117,9 +122,11 @@ def save_to_db(df: pd.DataFrame) -> int:
         print("No PTR filing index records to save")
         return 0
     engine = create_engine(DB_URL)
-    df.to_sql('house_ptr_index', engine, if_exists='replace', index=False)
-    print(f"Saved {len(df)} PTR filing index records to 'house_ptr_index' "
-          f"(filing metadata + PDF URLs only -- trade-level detail requires stage 2)")
+    df.to_sql("house_ptr_index", engine, if_exists="replace", index=False)
+    print(
+        f"Saved {len(df)} PTR filing index records to 'house_ptr_index' "
+        f"(filing metadata + PDF URLs only -- trade-level detail requires stage 2)"
+    )
     return len(df)
 
 

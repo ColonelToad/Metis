@@ -38,7 +38,8 @@ impl PythonRunner {
                 path.call_method1("insert", (0, project_root.to_string_lossy().to_string()))?;
 
                 // Import the orchestration module from research folder
-                let orchestrate_module = py.import_bound("research.ops.orchestrate_daily_pipeline")?;
+                let orchestrate_module =
+                    py.import_bound("research.ops.orchestrate_daily_pipeline")?;
 
                 // Call main function - it reads METIS_MODE from environment
                 let main_func = orchestrate_module.getattr("main")?;
@@ -183,7 +184,8 @@ impl PythonRunner {
                 kwargs.set_item("model_path", model_path.to_string_lossy().to_string())?;
                 kwargs.set_item("scalers_path", scalers_path.to_string_lossy().to_string())?;
                 kwargs.set_item("config_path", config_path.to_string_lossy().to_string())?;
-                kwargs.set_item("features_dir", features_dir.to_string_lossy().to_string())?;                kwargs.set_item("signal_host", "localhost")?;
+                kwargs.set_item("features_dir", features_dir.to_string_lossy().to_string())?;
+                kwargs.set_item("signal_host", "localhost")?;
                 kwargs.set_item("signal_port", 8080)?;
                 kwargs.set_item("threshold", 0.40)?;
 

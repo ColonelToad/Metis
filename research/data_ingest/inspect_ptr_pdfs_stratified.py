@@ -7,12 +7,14 @@ Pulls real sample DocIDs directly from house_ptr_index (2 short-format,
 each -- purpose is to properly test whether DocID length predicts empty/
 scanned PDFs across years, rather than generalizing from a single example.
 """
+
 import os
-import requests
-import pdfplumber
 from io import BytesIO
-from sqlalchemy import create_engine, text
+
+import pdfplumber
+import requests
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 load_dotenv()
 DB_URL = os.getenv("DB_URL", "sqlite:///data/metis.db")
@@ -23,12 +25,14 @@ BASE_URL = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs"
 samples = []
 with engine.connect() as conn:
     for year in [2015, 2018, 2021, 2024, 2026]:
-        short = conn.execute(text(
-            "SELECT DocID FROM house_ptr_index WHERE Year=:y AND LENGTH(DocID)=7 LIMIT 2"
-        ), {"y": str(year)}).fetchall()
-        long_ = conn.execute(text(
-            "SELECT DocID FROM house_ptr_index WHERE Year=:y AND LENGTH(DocID)=8 LIMIT 1"
-        ), {"y": str(year)}).fetchall()
+        short = conn.execute(
+            text("SELECT DocID FROM house_ptr_index WHERE Year=:y AND LENGTH(DocID)=7 LIMIT 2"),
+            {"y": str(year)},
+        ).fetchall()
+        long_ = conn.execute(
+            text("SELECT DocID FROM house_ptr_index WHERE Year=:y AND LENGTH(DocID)=8 LIMIT 1"),
+            {"y": str(year)},
+        ).fetchall()
         for (docid,) in short:
             samples.append((year, "short(7)", docid))
         for (docid,) in long_:

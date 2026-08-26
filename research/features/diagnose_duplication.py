@@ -6,9 +6,11 @@ known-duplicated date (2025-12-05), to find which one(s) have duplicate rows.
 Run from C:\\Users\\legot\\Metis:
     python research/features/diagnose_duplication.py
 """
+
 import os
-from sqlalchemy import create_engine, text
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 load_dotenv()
 DB_URL = os.getenv("DB_URL", "sqlite:///data/metis.db")

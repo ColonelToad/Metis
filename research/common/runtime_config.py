@@ -4,7 +4,9 @@ Runtime mode configuration
 - DEV: no external API calls; use synthetic/generator data
 - PROD or REAL: call APIs when keys available
 """
+
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()

@@ -18,6 +18,7 @@ print("Pre-flight checks:\n")
 try:
     print("1. Importing metrics module...", end=" ")
     from research.metrics import MetricsCollector
+
     print("✓")
 except Exception as e:
     print(f"✗ {e}")
@@ -34,6 +35,7 @@ except Exception as e:
 try:
     print("3. Importing orchestrate_daily_pipeline...", end=" ")
     from research.orchestrate_daily_pipeline import main as pipeline_main
+
     print("✓")
 except Exception as e:
     print(f"✗ {e}")
@@ -42,6 +44,7 @@ except Exception as e:
 try:
     print("4. Importing run_all_ingesters...", end=" ")
     from research.data_ingest.run_all_ingesters import run_all
+
     print("✓")
 except Exception as e:
     print(f"✗ {e}")

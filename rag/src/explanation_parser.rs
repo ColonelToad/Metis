@@ -399,10 +399,7 @@ impl ExplanationParser {
         if let Ok(re) = Regex::new(r"\[Doc? ?(\d+)\]") {
             let doc_indices: std::collections::BTreeSet<usize> = re
                 .captures_iter(raw_text)
-                .filter_map(|cap| {
-                    cap.get(1)
-                        .and_then(|m| m.as_str().parse::<usize>().ok())
-                })
+                .filter_map(|cap| cap.get(1).and_then(|m| m.as_str().parse::<usize>().ok()))
                 .collect();
 
             // Convert to 0-indexed and fetch documents

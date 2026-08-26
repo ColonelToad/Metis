@@ -24,6 +24,7 @@ covering 2025-12-01 through the current max date (buffer of >20 trading days
 before the true 2026-01-09 OOS start, so lookback=20 sequences are valid from
 the first real OOS row).
 """
+
 import os
 import sys
 from pathlib import Path
@@ -35,7 +36,7 @@ from sqlalchemy import create_engine, text
 # Make research/ importable regardless of cwd
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from features.engineer_features import FeatureEngineer, DB_URL
+from features.engineer_features import DB_URL, FeatureEngineer
 
 BUFFER_START = "2025-12-01"  # >20 trading days before 2026-01-09, safety margin
 OUTPUT_DIR = Path("data/features/oos")
@@ -57,17 +58,17 @@ def main():
 
     for name, freq_df in split.items():
         windowed = freq_df[freq_df["date"] >= BUFFER_START].reset_index(drop=True)
-        
+
         # 1. Force the path to be absolute based on the current script location
-        root_dir = Path(__file__).parent.parent.parent 
+        root_dir = Path(__file__).parent.parent.parent
         abs_out_dir = root_dir / "data" / "features" / "oos"
         abs_out_dir.mkdir(parents=True, exist_ok=True)
-        
+
         abs_out_path = abs_out_dir / f"oos_{name}_features.parquet"
-        
+
         # 2. Save using the absolute path
         windowed.to_parquet(abs_out_path, index=False)
-        
+
         # 3. Print the absolute path and instantly verify if it exists
         print(f"[OOS] Saved {name}: {windowed.shape}")
         print(f"[DEBUG] Target Path: {abs_out_path}")

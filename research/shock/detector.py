@@ -19,6 +19,7 @@ Final regime (daily):
 
 Backtest use: use PRIOR week's peak regime to gate EIA trades (no look-ahead).
 """
+
 import sqlite3
 from pathlib import Path
 
@@ -27,22 +28,23 @@ import pandas as pd
 import yfinance as yf
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH   = REPO_ROOT / "data" / "metis.db"
+DB_PATH = REPO_ROOT / "data" / "metis.db"
 
 # Thresholds (from Event.md)
 Z_ELEVATED = 1.5
-Z_SHOCK    = 2.5
-Z_CRISIS   = 4.0
+Z_SHOCK = 2.5
+Z_CRISIS = 4.0
 
 # Gate 2 triggers
-VOLUME_Z_THRESHOLD = 2.0   # NG volume > 2 std above 20-day mean
-XLE_Z_THRESHOLD    = 2.0   # XLE daily return > 2 std (energy sector dislocation)
+VOLUME_Z_THRESHOLD = 2.0  # NG volume > 2 std above 20-day mean
+XLE_Z_THRESHOLD = 2.0  # XLE daily return > 2 std (energy sector dislocation)
 
 
 def load_ng_prices(conn: sqlite3.Connection) -> pd.DataFrame:
     sq = pd.read_sql(
         "SELECT date, close, volume FROM ng_futures_daily ORDER BY date",
-        conn, parse_dates=["date"],
+        conn,
+        parse_dates=["date"],
     ).set_index("date")
     sq.index = sq.index.tz_localize(None)
 
@@ -73,12 +75,14 @@ def load_xle(start: str, end: str) -> pd.Series:
         return pd.Series(dtype=float)
 
 
-def _catalog_mask(dates: pd.DatetimeIndex, catalog: pd.DataFrame, buffer_days: int = 5) -> pd.Series:
+def _catalog_mask(
+    dates: pd.DatetimeIndex, catalog: pd.DataFrame, buffer_days: int = 5
+) -> pd.Series:
     """Boolean Series: True if date is within any catalog event window (+ buffer)."""
     mask = pd.Series(False, index=dates)
     for _, row in catalog.iterrows():
         lo = row["start"] - pd.Timedelta(days=buffer_days)
-        hi = row["end"]   + pd.Timedelta(days=buffer_days)
+        hi = row["end"] + pd.Timedelta(days=buffer_days)
         mask |= (dates >= lo) & (dates <= hi)
     return mask
 
@@ -108,16 +112,16 @@ def compute_regimes(
 
     # Gate 2a — NG volume spike
     vol_mean = df["volume"].rolling(vol_window_short, min_periods=10).mean()
-    vol_std  = df["volume"].rolling(vol_window_short, min_periods=10).std()
+    vol_std = df["volume"].rolling(vol_window_short, min_periods=10).std()
     df["volume_z"] = (df["volume"] - vol_mean) / vol_std.replace(0, np.nan)
 
     # Gate 2b — XLE cross-market
     start_str = df.index[0].strftime("%Y-%m-%d")
-    end_str   = (df.index[-1] + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    end_str = (df.index[-1] + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     xle_ret = load_xle(start_str, end_str)
     if not xle_ret.empty:
         xle_std = xle_ret.rolling(vol_window, min_periods=30).std()
-        xle_z   = (xle_ret / xle_std.replace(0, np.nan)).reindex(df.index)
+        xle_z = (xle_ret / xle_std.replace(0, np.nan)).reindex(df.index)
         df["xle_z"] = xle_z
     else:
         df["xle_z"] = np.nan
@@ -130,14 +134,28 @@ def compute_regimes(
     # Regime classification
     abs_z = df["return_z"].abs().fillna(0)
     regime = pd.Series("normal", index=df.index)
-    regime[abs_z > Z_ELEVATED]                                        = "elevated"
-    regime[(abs_z > Z_SHOCK) & (df["gate2"] | df["gate3"])]          = "shock"
-    regime[abs_z > Z_CRISIS]                                          = "crisis"
+    regime[abs_z > Z_ELEVATED] = "elevated"
+    regime[(abs_z > Z_SHOCK) & (df["gate2"] | df["gate3"])] = "shock"
+    regime[abs_z > Z_CRISIS] = "crisis"
 
     df["regime"] = regime
-    df["severity"] = regime.map({"normal": 0, "elevated": 1, "shock": 2, "crisis": 3}).fillna(0).astype(int)
+    df["severity"] = (
+        regime.map({"normal": 0, "elevated": 1, "shock": 2, "crisis": 3}).fillna(0).astype(int)
+    )
 
-    return df[["log_return", "return_z", "volume_z", "xle_z", "gate1", "gate2", "gate3", "regime", "severity"]]
+    return df[
+        [
+            "log_return",
+            "return_z",
+            "volume_z",
+            "xle_z",
+            "gate1",
+            "gate2",
+            "gate3",
+            "regime",
+            "severity",
+        ]
+    ]
 
 
 def rolling_peak_regime(regimes: pd.DataFrame, window_days: int = 5) -> pd.Series:
@@ -146,8 +164,8 @@ def rolling_peak_regime(regimes: pd.DataFrame, window_days: int = 5) -> pd.Serie
     Used by the backtest: 'was last week elevated/shock/crisis?'
     """
     order = {"normal": 0, "elevated": 1, "shock": 2, "crisis": 3}
-    sev   = regimes["severity"]
-    peak  = sev.rolling(window_days, min_periods=1).max()
+    sev = regimes["severity"]
+    peak = sev.rolling(window_days, min_periods=1).max()
     rev_order = {v: k for k, v in order.items()}
     return peak.map(rev_order)
 

@@ -1,10 +1,11 @@
-import pandas as pd
+import os
+
 import matplotlib.pyplot as plt
+import pandas as pd
 import seaborn as sns
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
-import os
+from sklearn.model_selection import train_test_split
 
 # Paths
 training_data_path = os.path.join("data", "processed", "training_data.parquet")
@@ -44,7 +45,7 @@ model = RandomForestRegressor(n_estimators=100, random_state=42)
 model.fit(X_train, y_train)
 
 preds = model.predict(X_test)
-#rmse = mean_squared_error(y_test, preds, squared=True)
+# rmse = mean_squared_error(y_test, preds, squared=True)
 rmse = mean_squared_error(y_test, preds) ** 0.5
 r2 = r2_score(y_test, preds)
 

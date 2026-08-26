@@ -7,7 +7,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 async def run_test_suite(suite_id: str) -> Dict[str, Any]:
@@ -58,7 +58,7 @@ async def get_active_tests() -> Dict[str, Any]:
 async def _call_coordinator(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Call test coordinator via Python subprocess"""
     project_root = Path(__file__).parent.parent.parent
-    
+
     python_code = f"""
 import sys
 sys.path.insert(0, r'{project_root}')
@@ -87,7 +87,7 @@ except Exception as e:
     print(json.dumps({{"error": str(e)}}))
     sys.exit(1)
 """
-    
+
     try:
         result = subprocess.run(
             [sys.executable, "-c", python_code],
@@ -96,12 +96,12 @@ except Exception as e:
             timeout=30,
             cwd=str(project_root),
         )
-        
+
         if result.returncode == 0:
             return json.loads(result.stdout)
         else:
             return {"error": result.stderr}
-    
+
     except subprocess.TimeoutExpired:
         return {"error": "Coordinator request timeout"}
     except json.JSONDecodeError:

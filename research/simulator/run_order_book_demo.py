@@ -4,10 +4,13 @@ Demo: simple order book simulation over test features.
 - Takes market orders based on momentum_20d sign
 - Reports basic PnL using trade fills
 """
+
+import math
 import os
 import random
-import math
+
 import pandas as pd
+
 from research.simulator.order_book import OrderBook
 
 FEATURES_PATH = os.path.join("data", "features", "test_features.csv")
@@ -32,8 +35,8 @@ def run_demo():
         # seed passive liquidity around close
         spread = 0.01  # $0.01 spread
         size = 1.0
-        ob.submit_limit("buy", close - spread/2, size)
-        ob.submit_limit("sell", close + spread/2, size)
+        ob.submit_limit("buy", close - spread / 2, size)
+        ob.submit_limit("sell", close + spread / 2, size)
 
         # take a position based on momentum sign
         if momentum > 0:

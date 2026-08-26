@@ -29,11 +29,7 @@ impl Persistence {
     pub fn new(db_path: &Path) -> rusqlite::Result<Self> {
         if let Some(parent) = db_path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                warn!(
-                    "Could not create data dir {}: {}",
-                    parent.display(),
-                    e
-                );
+                warn!("Could not create data dir {}: {}", parent.display(), e);
             }
         }
 
@@ -121,10 +117,7 @@ impl Persistence {
         for signal in &result.signals {
             if let Err(e) = persist_signal(&tx, &result.job_id, signal) {
                 // One bad signal shouldn't lose the job row or its siblings.
-                error!(
-                    "Signal {} not persisted: {}",
-                    signal.signal_id, e
-                );
+                error!("Signal {} not persisted: {}", signal.signal_id, e);
             }
         }
 
@@ -227,8 +220,8 @@ fn persist_signal(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::*;
+    use super::*;
     use std::collections::HashMap;
 
     fn sample_result(job_suffix: &str) -> PipelineResult {
@@ -236,8 +229,10 @@ mod tests {
         metadata.insert("exec_status".to_string(), "Completed".to_string());
         metadata.insert("exec_latency_ms".to_string(), "3".to_string());
         metadata.insert("exec_filled_qty".to_string(), "10".to_string());
-        metadata
-            .insert("exec_slippage_bps".to_string(), "9.990009990009778".to_string());
+        metadata.insert(
+            "exec_slippage_bps".to_string(),
+            "9.990009990009778".to_string(),
+        );
 
         PipelineResult {
             job_id: format!("job-{}", job_suffix),

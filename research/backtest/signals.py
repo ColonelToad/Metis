@@ -11,6 +11,7 @@ Signal:
   Long when z < -threshold  (less storage than expected -> bullish)
   Short when z > +threshold (more storage than expected -> bearish)
 """
+
 import sqlite3
 from pathlib import Path
 
@@ -90,8 +91,8 @@ def load_eia_signal(threshold: float = 0.5) -> pd.DataFrame:
 
     # Signal direction
     df["signal"] = 0
-    df.loc[df["surprise_z"] < -threshold, "signal"] = 1   # long (bullish surprise)
-    df.loc[df["surprise_z"] > threshold, "signal"] = -1   # short (bearish surprise)
+    df.loc[df["surprise_z"] < -threshold, "signal"] = 1  # long (bullish surprise)
+    df.loc[df["surprise_z"] > threshold, "signal"] = -1  # short (bearish surprise)
 
     df = df.dropna(subset=["surprise_z"])
 

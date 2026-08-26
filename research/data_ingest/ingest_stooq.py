@@ -23,15 +23,17 @@ Last-write-wins (DO UPDATE) is the correct policy here: a newer fetch
 reflects a more complete, more current view of that date, not a competing
 claim about what "really" happened.
 """
+
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
+
 import pandas as pd
 import pandas_datareader.data as web
-from datetime import datetime
-from sqlalchemy import create_engine, text
-from dotenv import load_dotenv
 import yfinance as yf
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from research.common import runtime_config as rc
@@ -48,31 +50,28 @@ START_DATE = os.getenv("STOCK_PRICES_START_DATE", "2015-01-01")
 # is actually correct now before assuming CHK itself is just fetchable again.
 ENERGY_TICKERS = {
     # Natural Gas & LNG
-    'CHK': 'Chesapeake Energy',  # unconfirmed post-merger ticker -- see note above
-    'EXE': 'Expand Energy',
-    'EQT': 'EQT Corporation',
-    'AR': 'Antero Resources',
-    'CNX': 'CNX Resources',
-    'RRC': 'Range Resources',
-
+    "CHK": "Chesapeake Energy",  # unconfirmed post-merger ticker -- see note above
+    "EXE": "Expand Energy",
+    "EQT": "EQT Corporation",
+    "AR": "Antero Resources",
+    "CNX": "CNX Resources",
+    "RRC": "Range Resources",
     # Pipelines & Midstream
-    'KMI': 'Kinder Morgan',
-    'WMB': 'Williams Companies',
-    'EPD': 'Enterprise Products',
-    'ET': 'Energy Transfer',
-    'OKE': 'ONEOK',
-
+    "KMI": "Kinder Morgan",
+    "WMB": "Williams Companies",
+    "EPD": "Enterprise Products",
+    "ET": "Energy Transfer",
+    "OKE": "ONEOK",
     # Utilities with Gas Exposure
-    'NEE': 'NextEra Energy',
-    'D': 'Dominion Energy',
-    'SO': 'Southern Company',
-    'DUK': 'Duke Energy',
-
+    "NEE": "NextEra Energy",
+    "D": "Dominion Energy",
+    "SO": "Southern Company",
+    "DUK": "Duke Energy",
     # ETFs
-    'XLE': 'Energy Select Sector',
-    'UNG': 'US Natural Gas Fund',
-    'FCG': 'First Trust Natural Gas ETF',
-    'XOP': 'SPDR S&P Oil & Gas',
+    "XLE": "Energy Select Sector",
+    "UNG": "US Natural Gas Fund",
+    "FCG": "First Trust Natural Gas ETF",
+    "XOP": "SPDR S&P Oil & Gas",
 }
 
 
@@ -84,24 +83,29 @@ def fetch_stock_data(ticker, start_date, end_date):
     try:
         # yfinance expects standard tickers (no .US suffix needed)
         df = yf.download(ticker, start=start_date, end=end_date, progress=False)
-        
+
         if df.empty:
             return pd.DataFrame()
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-            
+
         df = df.sort_index()
-        df['ticker'] = ticker
-        #df['timestamp'] = df.index
-        df['timestamp'] = df.index.to_pydatetime().astype('datetime64[ns]').tolist()
-        df = df.rename(columns={
-            'Open': 'open', 'High': 'high', 'Low': 'low',
-            'Close': 'close', 'Volume': 'volume'
-        })
-        
+        df["ticker"] = ticker
+        # df['timestamp'] = df.index
+        df["timestamp"] = df.index.to_pydatetime().astype("datetime64[ns]").tolist()
+        df = df.rename(
+            columns={
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Volume": "volume",
+            }
+        )
+
         # yfinance includes an 'Adj Close' column, so we just select the ones we need
-        return df[['timestamp', 'ticker', 'open', 'high', 'low', 'close', 'volume']]
+        return df[["timestamp", "ticker", "open", "high", "low", "close", "volume"]]
     except Exception as e:
         print(f"  FAILED: {ticker} -- {e}")
         return pd.DataFrame()
@@ -112,24 +116,28 @@ def ensure_unique_index(engine):
     original if_exists='replace' table never had one, since replace-based
     ingestion doesn't need it."""
     with engine.begin() as conn:
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_prices_ts_ticker "
-            "ON stock_prices(timestamp, ticker)"
-        ))
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_prices_ts_ticker "
+                "ON stock_prices(timestamp, ticker)"
+            )
+        )
 
 
 def upsert_stock_data(df: pd.DataFrame, engine):
     if df.empty:
         return 0
 
-    cols = ['timestamp', 'ticker', 'open', 'high', 'low', 'close', 'volume', 'company_name']
+    cols = ["timestamp", "ticker", "open", "high", "low", "close", "volume", "company_name"]
     for c in cols:
         if c not in df.columns:
             df[c] = None
 
-    records = df[cols].to_dict('records')
+    records = df[cols].to_dict("records")
     placeholders = ", ".join([f":{c}" for c in cols])
-    update_clause = ", ".join([f"{c}=excluded.{c}" for c in cols if c not in ('timestamp', 'ticker')])
+    update_clause = ", ".join(
+        [f"{c}=excluded.{c}" for c in cols if c not in ("timestamp", "ticker")]
+    )
 
     stmt = text(f"""
         INSERT INTO stock_prices ({', '.join(cols)})
@@ -158,7 +166,7 @@ def main():
     for ticker, company in ENERGY_TICKERS.items():
         df = fetch_stock_data(ticker, START_DATE, end_date)
         if not df.empty:
-            df['company_name'] = company
+            df["company_name"] = company
             n = upsert_stock_data(df, engine)
             total_upserted += n
             succeeded.append(ticker)

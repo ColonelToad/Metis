@@ -12,44 +12,48 @@ Environment:
   - METIS_MODE=PROD: Enable all real API calls (LMP ISOs, PJM)
   - METIS_MODE=DEV: Skip live API calls for development/testing
 """
-import sys
-import os
+
 import argparse
+import logging
+import os
+import sqlite3
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
-import sqlite3
-from typing import Optional, List, Tuple, Dict
-import logging
+from typing import Dict, List, Optional, Tuple
 
 # Add parent directory (research/) to Python path so we can import from data_ingest/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import all ingesters using qualified paths
-from data_ingest import ingest_eia
-from data_ingest import ingest_lmp
-from data_ingest import ingest_lmp_multi_iso
-from data_ingest import ingest_fred
-from data_ingest import ingest_weather
-from data_ingest import ingest_ais_maritime
-from data_ingest import ingest_cme_futures
-from data_ingest import ingest_drought
-from data_ingest import ingest_congress_bills_expanded
-from data_ingest import ingest_bls_ppi
-from data_ingest import ingest_fred_building_permits
-from data_ingest import ingest_eia_jet_fuel
-from data_ingest import ingest_storm_events
-from data_ingest import ingest_stooq
-from data_ingest import ingest_cme_settlements
-from data_ingest import ingest_noaa_cpc
-from data_ingest import ingest_state_bills
-from data_ingest import ingest_gie_storage
-from data_ingest import ingest_entsog_flows
-from data_ingest import ingest_lobbying_disclosures
+from data_ingest import (
+    ingest_ais_maritime,
+    ingest_bls_ppi,
+    ingest_cme_futures,
+    ingest_cme_settlements,
+    ingest_congress_bills_expanded,
+    ingest_drought,
+    ingest_eia,
+    ingest_eia_jet_fuel,
+    ingest_entsog_flows,
+    ingest_fred,
+    ingest_fred_building_permits,
+    ingest_gie_storage,
+    ingest_lmp,
+    ingest_lmp_multi_iso,
+    ingest_lobbying_disclosures,
+    ingest_noaa_cpc,
+    ingest_state_bills,
+    ingest_stooq,
+    ingest_storm_events,
+    ingest_weather,
+)
 from features import extract_lobbying_bill_references
 
 # Import log rotation
 from log_rotation import rotate_logs
+
 
 # Import R2 uploader for post-ingestion backup
 def backup_to_r2():
@@ -57,42 +61,42 @@ def backup_to_r2():
     try:
         import subprocess
         from pathlib import Path
-        
+
         # Run the comprehensive auto-backup script
         backup_script = Path(__file__).parent.parent / "r2_auto_backup.py"
         if not backup_script.exists():
             logger.warning(f"R2 backup script not found: {backup_script}")
             return
-        
+
         logger.info("Running R2 backup...")
         result = subprocess.run(
-            [__import__('sys').executable, str(backup_script)],
+            [__import__("sys").executable, str(backup_script)],
             cwd=Path(__file__).parent.parent.parent,
             capture_output=True,
             text=True,
-            timeout=300
+            timeout=300,
         )
-        
+
         # Log the backup output
         if result.stdout:
-            for line in result.stdout.split('\n'):
+            for line in result.stdout.split("\n"):
                 if line.strip():
                     logger.info(line)
-        
+
         if result.returncode == 0:
             logger.info("✓ R2 backup completed successfully")
         else:
             logger.warning(f"⚠ R2 backup encountered issues (non-blocking)")
             if result.stderr:
                 logger.warning(result.stderr)
-    
+
     except Exception as e:
         logger.warning(f"R2 backup failed (non-critical): {e}")
 
+
 # Setup logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -100,9 +104,11 @@ logger = logging.getLogger(__name__)
 METIS_MODE = os.getenv("METIS_MODE", "DEV")
 logger.info(f"Running in {METIS_MODE} mode")
 
+
 def is_monday() -> bool:
     """Check if today is Monday."""
     return datetime.now().weekday() == 0
+
 
 def should_run_weekly(force: bool = False) -> bool:
     """
@@ -120,6 +126,8 @@ def should_run_weekly(force: bool = False) -> bool:
         return True
     logger.debug("Skipping weekly ingesters (not Monday and no --force flag)")
     return False
+
+
 DAILY_INGESTERS = [
     ("EIA Natural Gas", ingest_eia),
     ("Grid LMP (CAISO)", ingest_lmp),
@@ -156,10 +164,11 @@ MONTHLY_INGESTERS = [
     ("Lobbying Bill Reference Extraction", extract_lobbying_bill_references),
 ]
 
+
 def get_ingesters_for_frequency(frequency: str) -> list:
     """
     Return list of (name, module) tuples based on frequency.
-    
+
     For 'daily': Always include DAILY_INGESTERS; include WEEKLY_INGESTERS only on Monday.
     For 'weekly': Always include WEEKLY_INGESTERS (implies Monday schedule or --force).
     For 'all': Include everything.
@@ -181,55 +190,59 @@ def get_ingesters_for_frequency(frequency: str) -> list:
     else:
         raise ValueError(f"Unknown frequency: {frequency}")
 
+
 def get_frequency_description(frequency: str) -> str:
     """Return human-readable description of frequency."""
     is_mon = is_monday()
     descriptions = {
-        "daily": f"Daily run (EIA, LMP, Multi-ISO LMP, FRED, Weather, AIS, Stock Prices)" + 
-                 (f" + Weekly CME Futures (Monday)" if is_mon else ""),
+        "daily": f"Daily run (EIA, LMP, Multi-ISO LMP, FRED, Weather, AIS, Stock Prices)"
+        + (f" + Weekly CME Futures (Monday)" if is_mon else ""),
         "weekly": "Weekly run (CME Futures, Drought Monitor, EIA Jet Fuel) - Runs Mondays",
         "monthly": "Monthly run (BLS PPI, FRED Building Permits, Congress Bills, NOAA Storm Events, LDA Lobbying Disclosures, Lobbying Bill Reference Extraction)",
-        "all": "All ingesters (daily + weekly + monthly)"
+        "all": "All ingesters (daily + weekly + monthly)",
     }
     return descriptions.get(frequency, frequency)
 
-def run_all(frequency: str = "all", collector=None, force_weekly: bool = False) -> Tuple[bool, List[Dict]]:
+
+def run_all(
+    frequency: str = "all", collector=None, force_weekly: bool = False
+) -> Tuple[bool, List[Dict]]:
     """
     Run ingesters filtered by frequency.
-    
+
     Args:
         frequency: 'daily', 'weekly', 'monthly', or 'all'
         collector: Optional MetricsCollector instance to log results
         force_weekly: If True, run weekly ingesters even if not Monday
-    
+
     Returns:
         (overall_success: bool, results: list of dicts with ingester status)
     """
     # Handle weekly scheduling for 'daily' frequency
     if frequency == "daily" and not is_monday():
         logger.info("Daily run scheduled (not Monday, skipping weekly ingesters)")
-    
+
     ingesters = get_ingesters_for_frequency(frequency)
-    
+
     print(f"\n{'='*70}")
     print(f"Starting {get_frequency_description(frequency)}: {datetime.now()}")
     print(f"Mode: {METIS_MODE} | Ingesters: {len(ingesters)}")
     print(f"{'='*70}\n")
-    
+
     results = []
     all_ok = True
-    
+
     for name, module in ingesters:
         start_time = time.time()
         status = "success"
         error_msg = None
         row_count = 0
-        
+
         try:
             logger.info(f"Running {name} ingester")
             print(f"\n>>> {name} ingester")
             # Call the main() function for each ingester
-            if hasattr(module, 'main'):
+            if hasattr(module, "main"):
                 result = module.main()
                 # If ingester returns row count, use it; otherwise 0
                 if isinstance(result, int):
@@ -247,7 +260,7 @@ def run_all(frequency: str = "all", collector=None, force_weekly: bool = False) 
             status = "failed"
             error_msg = str(e)
             all_ok = False
-            
+
             # Log to metrics collector if provided
             if collector:
                 try:
@@ -256,22 +269,24 @@ def run_all(frequency: str = "all", collector=None, force_weekly: bool = False) 
                         status=status,
                         duration_ms=duration_ms,
                         row_count=0,
-                        error_msg=error_msg
+                        error_msg=error_msg,
                     )
                 except Exception as collector_error:
                     logger.warning(f"Could not log to metrics: {collector_error}")
-            
-            results.append({
-                "name": name,
-                "status": status,
-                "duration_ms": duration_ms,
-                "row_count": 0,
-                "error": error_msg
-            })
+
+            results.append(
+                {
+                    "name": name,
+                    "status": status,
+                    "duration_ms": duration_ms,
+                    "row_count": 0,
+                    "error": error_msg,
+                }
+            )
             continue
-        
+
         duration_ms = (time.time() - start_time) * 1000
-        
+
         # Log to metrics collector if provided
         if collector:
             try:
@@ -280,19 +295,21 @@ def run_all(frequency: str = "all", collector=None, force_weekly: bool = False) 
                     status=status,
                     duration_ms=duration_ms,
                     row_count=row_count,
-                    error_msg=error_msg
+                    error_msg=error_msg,
                 )
             except Exception as collector_error:
                 logger.warning(f"Could not log to metrics: {collector_error}")
-        
-        results.append({
-            "name": name,
-            "status": status,
-            "duration_ms": duration_ms,
-            "row_count": row_count,
-            "error": error_msg
-        })
-    
+
+        results.append(
+            {
+                "name": name,
+                "status": status,
+                "duration_ms": duration_ms,
+                "row_count": row_count,
+                "error": error_msg,
+            }
+        )
+
     # Print summary
     print(f"\n{'='*70}")
     print("INGESTION SUMMARY")
@@ -300,26 +317,29 @@ def run_all(frequency: str = "all", collector=None, force_weekly: bool = False) 
     success_count = sum(1 for r in results if r["status"] == "success")
     fail_count = sum(1 for r in results if r["status"] == "failed")
     print(f"Total: {len(results)} | Success: {success_count} | Failed: {fail_count}\n")
-    
+
     for result in results:
         status_icon = "✓" if result["status"] == "success" else "✗"
-        print(f"{status_icon} {result['name']:30} {result['status']:8} ({result['duration_ms']:6.0f}ms, {result['row_count']:6} rows)")
+        print(
+            f"{status_icon} {result['name']:30} {result['status']:8} ({result['duration_ms']:6.0f}ms, {result['row_count']:6} rows)"
+        )
         if result["error"]:
             print(f"  └─ Error: {result['error']}")
-    
+
     print(f"\n{'='*70}")
     if all_ok:
         logger.info(f"All ingesters completed successfully")
     else:
         logger.warning(f"Some ingesters failed - check logs above")
-    
+
     return all_ok, results
+
 
 def main():
     """Entry point for command-line usage."""
     # Rotate old logs before starting ingestion
     rotate_logs()
-    
+
     parser = argparse.ArgumentParser(
         description="Run data ingesters by frequency (respects Monday schedule for weekly tasks)"
     )
@@ -327,28 +347,25 @@ def main():
         "--frequency",
         choices=["daily", "weekly", "monthly", "all"],
         default="all",
-        help="Ingestion frequency to run (default: all)"
+        help="Ingestion frequency to run (default: all)",
     )
     parser.add_argument(
         "--force-weekly",
         action="store_true",
-        help="Force weekly ingesters to run even if not Monday"
+        help="Force weekly ingesters to run even if not Monday",
     )
-    parser.add_argument(
-        "--no-backup",
-        action="store_true",
-        help="Skip R2 backup after ingestion"
-    )
+    parser.add_argument("--no-backup", action="store_true", help="Skip R2 backup after ingestion")
     args = parser.parse_args()
-    
+
     all_ok, results = run_all(args.frequency, force_weekly=args.force_weekly)
-    
+
     # Backup to R2 after successful ingestion (unless --no-backup is set)
     if all_ok and not args.no_backup:
         logger.info("Ingestion completed successfully, starting R2 backup...")
         backup_to_r2()
-    
+
     sys.exit(0 if all_ok else 1)
+
 
 if __name__ == "__main__":
     main()

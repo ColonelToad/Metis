@@ -3,10 +3,12 @@ Database Schema Migration
 Creates tables for new data sources in SQLite
 Run this once to set up schema
 """
+
 import os
+import sqlite3
 import sys
 from pathlib import Path
-import sqlite3
+
 from dotenv import load_dotenv
 
 # Add project root for imports
@@ -125,32 +127,33 @@ CREATE TABLE IF NOT EXISTS scfi_freight_rates (
 CREATE INDEX IF NOT EXISTS idx_scfi_date ON scfi_freight_rates(date);
 """
 
+
 def create_schema():
     """Create all tables if they don't exist"""
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        
+
         # Split SQL by semicolons and execute each statement
-        for statement in SCHEMA_SQL.split(';'):
+        for statement in SCHEMA_SQL.split(";"):
             if statement.strip():
                 cursor.execute(statement)
-        
+
         conn.commit()
-        
+
         # Verify tables created
         cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%fema%' OR name LIKE '%storm%' OR name LIKE '%drought%' OR name LIKE '%census%' OR name LIKE '%aviation%' OR name LIKE '%scfi%';"
         )
         tables = cursor.fetchall()
-        
+
         print(f"\n✓ Created {len(tables)} new tables:")
         for table in tables:
             print(f"  - {table[0]}")
-        
+
         conn.close()
         return True
-        
+
     except Exception as e:
         print(f"✗ Error creating schema: {e}")
         return False

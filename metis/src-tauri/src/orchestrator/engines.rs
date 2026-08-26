@@ -85,7 +85,10 @@ pub async fn engines_status() -> EnginesStatusResponse {
 ///
 /// Returns Ok(already-running detail string) if the engine answers before
 /// spawning, so callers can treat this as idempotent.
-pub async fn start_engine(engine: &str, project_root: &Path) -> Result<StartEngineResponse, String> {
+pub async fn start_engine(
+    engine: &str,
+    project_root: &Path,
+) -> Result<StartEngineResponse, String> {
     match engine {
         "cpp" => start_cpp_engine(project_root).await,
         "rust" => start_rust_engine(project_root).await,
@@ -113,7 +116,11 @@ fn windows_path_to_wsl(p: &Path) -> String {
     let s = p.to_string_lossy().replace('\\', "/");
     let bytes = s.as_bytes();
     if bytes.len() >= 2 && bytes[1] == b':' {
-        format!("/mnt/{}{}", (bytes[0] as char).to_ascii_lowercase(), &s[2..])
+        format!(
+            "/mnt/{}{}",
+            (bytes[0] as char).to_ascii_lowercase(),
+            &s[2..]
+        )
     } else {
         s
     }
@@ -132,14 +139,18 @@ async fn start_cpp_engine(project_root: &Path) -> Result<StartEngineResponse, St
     }
 
     let distro = std::env::var("METIS_WSL_DISTRO").unwrap_or_else(|_| WSL_DISTRO_DEFAULT.into());
-    let dir = std::env::var("METIS_CPP_ENGINE_DIR").unwrap_or_else(|_| CPP_ENGINE_DIR_DEFAULT.into());
+    let dir =
+        std::env::var("METIS_CPP_ENGINE_DIR").unwrap_or_else(|_| CPP_ENGINE_DIR_DEFAULT.into());
     // The launch logic lives in a repo shell script, NOT an inline argv
     // string: wsl.exe mangles quoted multi-token arguments during its
     // Win->Linux command-line reconstruction (bash then sees garbage and
     // dies on a parse error before executing anything). Two clean path
     // args survive any reconstruction.
     let sh = windows_path_to_wsl(&project_root.join("research/ops/wsl_start_engine.sh"));
-    if !project_root.join("research/ops/wsl_start_engine.sh").exists() {
+    if !project_root
+        .join("research/ops/wsl_start_engine.sh")
+        .exists()
+    {
         return Err(format!("WSL launcher script missing: {}", sh));
     }
 
@@ -214,7 +225,9 @@ async fn start_rust_engine(project_root: &Path) -> Result<StartEngineResponse, S
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(flags);
     }
-    let child = cmd.spawn().map_err(|e| format!("Failed to spawn engine: {e}"))?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn engine: {e}"))?;
 
     tokio::time::sleep(Duration::from_millis(800)).await;
     let after = engines_status().await;

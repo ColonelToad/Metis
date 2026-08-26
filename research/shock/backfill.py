@@ -6,6 +6,7 @@ Usage:
     python research/shock/backfill.py --no-fema       # skip FEMA API
     python research/shock/backfill.py --since 2014    # only compute regimes from year
 """
+
 import argparse
 import sqlite3
 import sys
@@ -30,7 +31,9 @@ def main() -> None:
     print("Building shock event catalog...")
     include_fema = not args.no_fema
     catalog = cat_module.build_catalog(include_fema=include_fema)
-    print(f"  Total events: {len(catalog)}  (manual={len(catalog[catalog.source=='manual'])}, fema={len(catalog[catalog.source=='fema'])})")
+    print(
+        f"  Total events: {len(catalog)}  (manual={len(catalog[catalog.source=='manual'])}, fema={len(catalog[catalog.source=='fema'])})"
+    )
     cat_module.write_catalog_to_db(catalog, conn)
 
     # ── 2. Load NG prices ─────────────────────────────────────────────────────

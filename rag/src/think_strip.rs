@@ -31,7 +31,10 @@ mod tests {
     #[test]
     fn strips_closed_think_block() {
         let raw = "<think>reasoning here</think>the actual answer";
-        assert_eq!(strip_think_block(raw), Some("the actual answer".to_string()));
+        assert_eq!(
+            strip_think_block(raw),
+            Some("the actual answer".to_string())
+        );
     }
 
     #[test]

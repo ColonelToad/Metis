@@ -6,10 +6,12 @@ Idempotent -- safe to run multiple times.
 Run from C:\\Users\\legot\\Metis:
     python research/features/update_shock_catalog.py
 """
+
 import os
 from datetime import date
-from sqlalchemy import create_engine, text
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 load_dotenv()
 DB_URL = os.getenv("DB_URL", "sqlite:///data/metis.db")
@@ -17,9 +19,9 @@ engine = create_engine(DB_URL)
 
 # ── 1. Inspect current source values so new entries are consistent ────────────
 with engine.connect() as conn:
-    sources = conn.execute(text(
-        "SELECT DISTINCT source FROM shock_events WHERE source IS NOT NULL"
-    )).fetchall()
+    sources = conn.execute(
+        text("SELECT DISTINCT source FROM shock_events WHERE source IS NOT NULL")
+    ).fetchall()
     print("Existing source values:", [r[0] for r in sources])
 
 TODAY = str(date.today())
@@ -61,7 +63,6 @@ NEW_EVENTS = [
             "period for OMD monitoring."
         ),
     },
-
     # ── Type 2: exogenous interrupt, aftermath measurement ────────────────────
     {
         "name": "2003 Northeast Blackout",
@@ -141,7 +142,6 @@ NEW_EVENTS = [
             "supply consequences."
         ),
     },
-
     # ── Transition periods ─────────────────────────────────────────────────────
     {
         "name": "Obama-Era Clean Energy Transition",
@@ -230,7 +230,10 @@ RECLASSIFICATIONS = [
 
 REMOVALS = [
     # Crimea Annexation: near-zero effect on US NG markets in 2014
-    {"id": 5, "reason": "Near-zero measurable effect on US NG markets in 2014. US was not exporting LNG to Europe at the time; European gas dependence on Russia was not yet transmitted to Henry Hub pricing. Relevant as a precursor to the 2022 Ukraine entry but not as a standalone US energy shock. The 2022 Russia-Ukraine + Iran/Hormuz entry captures the period when this dependence actually mattered to US markets."},
+    {
+        "id": 5,
+        "reason": "Near-zero measurable effect on US NG markets in 2014. US was not exporting LNG to Europe at the time; European gas dependence on Russia was not yet transmitted to Henry Hub pricing. Relevant as a precursor to the 2022 Ukraine entry but not as a standalone US energy shock. The 2022 Russia-Ukraine + Iran/Hormuz entry captures the period when this dependence actually mattered to US markets.",
+    },
 ]
 
 REJECTED_EVENTS = [
@@ -266,23 +269,26 @@ def run():
 
         # ── Insert rejected events (skip if already present by name) ──────────
         for ev in REJECTED_EVENTS:
-            exists = conn.execute(text(
-                "SELECT COUNT(*) FROM rejected_events WHERE name=:name"
-            ), {"name": ev["name"]}).scalar()
+            exists = conn.execute(
+                text("SELECT COUNT(*) FROM rejected_events WHERE name=:name"), {"name": ev["name"]}
+            ).scalar()
             if not exists:
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     INSERT INTO rejected_events (name, description, reason, considered_date)
                     VALUES (:name, :description, :reason, :considered_date)
-                """), ev)
+                """),
+                    ev,
+                )
                 print(f"  Rejected: {ev['name']}")
             else:
                 print(f"  Already present in rejected_events: {ev['name']}")
 
         # ── Remove events ─────────────────────────────────────────────────────
         for r in REMOVALS:
-            row = conn.execute(text(
-                "SELECT name FROM shock_events WHERE id=:id"
-            ), {"id": r["id"]}).fetchone()
+            row = conn.execute(
+                text("SELECT name FROM shock_events WHERE id=:id"), {"id": r["id"]}
+            ).fetchone()
             if row:
                 conn.execute(text("DELETE FROM shock_events WHERE id=:id"), {"id": r["id"]})
                 print(f"  Removed: [{r['id']}] {row[0]}")
@@ -291,41 +297,51 @@ def run():
 
         # ── Reclassify events ─────────────────────────────────────────────────
         for r in RECLASSIFICATIONS:
-            row = conn.execute(text(
-                "SELECT name FROM shock_events WHERE id=:id"
-            ), {"id": r["id"]}).fetchone()
+            row = conn.execute(
+                text("SELECT name FROM shock_events WHERE id=:id"), {"id": r["id"]}
+            ).fetchone()
             if row:
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     UPDATE shock_events SET type=:type, description=:description
                     WHERE id=:id
-                """), r)
+                """),
+                    r,
+                )
                 print(f"  Reclassified: [{r['id']}] {row[0]} -> type={r['type']}")
             else:
                 print(f"  Not found for reclassification: id={r['id']}")
 
         # ── Insert new events (skip if name already exists) ───────────────────
         for ev in NEW_EVENTS:
-            exists = conn.execute(text(
-                "SELECT COUNT(*) FROM shock_events WHERE name=:name"
-            ), {"name": ev["name"]}).scalar()
+            exists = conn.execute(
+                text("SELECT COUNT(*) FROM shock_events WHERE name=:name"), {"name": ev["name"]}
+            ).scalar()
             if not exists:
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     INSERT INTO shock_events
                         (name, start, end, type, severity, source, region, description)
                     VALUES
                         (:name, :start, :end, :type, :severity, :source, :region, :description)
-                """), ev)
+                """),
+                    ev,
+                )
                 print(f"  Added: {ev['name']}")
             else:
                 print(f"  Already present: {ev['name']}")
 
         # ── Final state ───────────────────────────────────────────────────────
         print("\n=== Final shock_events catalog ===")
-        for row in conn.execute(text(
-            "SELECT id, name, start, end, type, severity FROM shock_events ORDER BY start NULLS LAST"
-        )).fetchall():
+        for row in conn.execute(
+            text(
+                "SELECT id, name, start, end, type, severity FROM shock_events ORDER BY start NULLS LAST"
+            )
+        ).fetchall():
             end_str = row[3] if row[3] else "ongoing"
-            print(f"  [{row[0]}] {row[1][:50]:50s} {row[2]} -> {end_str}  type={row[4]}  sev={row[5]}")
+            print(
+                f"  [{row[0]}] {row[1][:50]:50s} {row[2]} -> {end_str}  type={row[4]}  sev={row[5]}"
+            )
 
         count = conn.execute(text("SELECT COUNT(*) FROM rejected_events")).scalar()
         print(f"\nrejected_events: {count} entries")

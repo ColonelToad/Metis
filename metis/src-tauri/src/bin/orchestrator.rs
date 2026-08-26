@@ -78,7 +78,11 @@ async fn main() {
     {
         let model_path = project_root.join("rag/llm/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf");
         let db_path = project_root.join("data/lance");
-        println!("Initializing RAG engine (model: {}, db: {})...", model_path.display(), db_path.display());
+        println!(
+            "Initializing RAG engine (model: {}, db: {})...",
+            model_path.display(),
+            db_path.display()
+        );
         match metis_lib::rag_engine::init_rag_engine(
             &model_path.to_string_lossy(),
             &db_path.to_string_lossy(),

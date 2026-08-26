@@ -3,14 +3,16 @@ US Drought Monitor Ingestion
 Fetches weekly drought condition data from USDA
 No API key required - open USDA data
 """
+
 import os
-import requests
-import pandas as pd
+import time
 from datetime import datetime
+from io import StringIO
+
+import pandas as pd
+import requests
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
-from io import StringIO
-import time
 
 load_dotenv()
 DB_URL = os.getenv("DB_URL", "sqlite:///data/metis.db")
@@ -22,6 +24,7 @@ def require_real_mode(source: str) -> bool:
         print(f"[DEV MODE] Skipping {source}")
         return False
     return True
+
 
 STATS_URL = "https://usdmdataservices.unl.edu/api/USStatistics/GetDroughtSeverityStatisticsByArea?aoi=us&startdate=1/2/2000&enddate=1/1/2024&statisticsType=1"
 
@@ -42,7 +45,9 @@ def get_us_drought() -> pd.DataFrame:
         except ValueError:
             # Fallback to CSV content
             snippet = response.text[:200].replace("\n", " ")
-            print(f"CSV response detected (status {response.status_code}), parsing... Snippet: {snippet}")
+            print(
+                f"CSV response detected (status {response.status_code}), parsing... Snippet: {snippet}"
+            )
             df = pd.read_csv(StringIO(response.text))
 
         if df.empty:
@@ -91,20 +96,20 @@ def calculate_drought_severity_index(df: pd.DataFrame) -> pd.DataFrame:
     """
     if df.empty:
         return df
-    
+
     # Handle both 'None' and 'D0'-'D4' columns
-    none_col = [c for c in df.columns if c.lower() == 'none']
+    none_col = [c for c in df.columns if c.lower() == "none"]
     none_pct = df[none_col].iloc[:, 0] if none_col else 0
-    
-    df['drought_severity_index'] = (
-        none_pct * 0 +
-        df.get('D0', 0) * 1 +
-        df.get('D1', 0) * 2 +
-        df.get('D2', 0) * 3 +
-        df.get('D3', 0) * 4 +
-        df.get('D4', 0) * 5
+
+    df["drought_severity_index"] = (
+        none_pct * 0
+        + df.get("D0", 0) * 1
+        + df.get("D1", 0) * 2
+        + df.get("D2", 0) * 3
+        + df.get("D3", 0) * 4
+        + df.get("D4", 0) * 5
     ) / 100  # Normalize to 0-5 scale
-    
+
     return df
 
 
@@ -113,37 +118,41 @@ def normalize_and_save(df: pd.DataFrame) -> None:
     if df.empty:
         print("No drought data to save")
         return
-    
+
     # Ensure we have numeric columns
-    numeric_cols = ['None', 'D0', 'D1', 'D2', 'D3', 'D4']
+    numeric_cols = ["None", "D0", "D1", "D2", "D3", "D4"]
     for col in numeric_cols:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
     # Calculate severity index
     df = calculate_drought_severity_index(df)
-    
+
     # Create normalized dataframe
-    df_normalized = pd.DataFrame({
-        'id': df['state'].astype(str) + '_' + df['MapDate'].astype(str),
-        'state': df['state'],
-        'date': df['MapDate'],
-        'drought_category_none': df.get('None', 0),
-        'drought_category_d0': df.get('D0', 0),
-        'drought_category_d1': df.get('D1', 0),
-        'drought_category_d2': df.get('D2', 0),
-        'drought_category_d3': df.get('D3', 0),
-        'drought_category_d4': df.get('D4', 0),
-        'drought_severity_index': df['drought_severity_index'],
-        'timestamp': datetime.now()
-    })
-    
+    df_normalized = pd.DataFrame(
+        {
+            "id": df["state"].astype(str) + "_" + df["MapDate"].astype(str),
+            "state": df["state"],
+            "date": df["MapDate"],
+            "drought_category_none": df.get("None", 0),
+            "drought_category_d0": df.get("D0", 0),
+            "drought_category_d1": df.get("D1", 0),
+            "drought_category_d2": df.get("D2", 0),
+            "drought_category_d3": df.get("D3", 0),
+            "drought_category_d4": df.get("D4", 0),
+            "drought_severity_index": df["drought_severity_index"],
+            "timestamp": datetime.now(),
+        }
+    )
+
     # Drop duplicates
-    df_normalized = df_normalized.drop_duplicates(subset=['id'])
+    df_normalized = df_normalized.drop_duplicates(subset=["id"])
     # Normalize datetimes for SQLite
-    for col in ['date', 'timestamp']:
+    for col in ["date", "timestamp"]:
         if col in df_normalized.columns:
-            df_normalized[col] = pd.to_datetime(df_normalized[col], errors='coerce').dt.tz_localize(None)
+            df_normalized[col] = pd.to_datetime(df_normalized[col], errors="coerce").dt.tz_localize(
+                None
+            )
 
     def _to_py(val):
         if pd.isna(val):
@@ -159,42 +168,74 @@ def normalize_and_save(df: pd.DataFrame) -> None:
         with engine.begin() as conn:
             if backend == "sqlite":
                 cols = [
-                    'id', 'state', 'date', 'drought_category_none', 'drought_category_d0',
-                    'drought_category_d1', 'drought_category_d2', 'drought_category_d3',
-                    'drought_category_d4', 'drought_severity_index', 'timestamp'
+                    "id",
+                    "state",
+                    "date",
+                    "drought_category_none",
+                    "drought_category_d0",
+                    "drought_category_d1",
+                    "drought_category_d2",
+                    "drought_category_d3",
+                    "drought_category_d4",
+                    "drought_severity_index",
+                    "timestamp",
                 ]
                 records = []
                 for row in df_normalized.itertuples(index=False):
-                    records.append({
-                        'id': row.id,
-                        'state': row.state,
-                        'date': _to_py(row.date),
-                        'drought_category_none': None if pd.isna(row.drought_category_none) else float(row.drought_category_none),
-                        'drought_category_d0': None if pd.isna(row.drought_category_d0) else float(row.drought_category_d0),
-                        'drought_category_d1': None if pd.isna(row.drought_category_d1) else float(row.drought_category_d1),
-                        'drought_category_d2': None if pd.isna(row.drought_category_d2) else float(row.drought_category_d2),
-                        'drought_category_d3': None if pd.isna(row.drought_category_d3) else float(row.drought_category_d3),
-                        'drought_category_d4': None if pd.isna(row.drought_category_d4) else float(row.drought_category_d4),
-                        'drought_severity_index': None if pd.isna(row.drought_severity_index) else float(row.drought_severity_index),
-                        'timestamp': _to_py(row.timestamp)
-                    })
+                    records.append(
+                        {
+                            "id": row.id,
+                            "state": row.state,
+                            "date": _to_py(row.date),
+                            "drought_category_none": (
+                                None
+                                if pd.isna(row.drought_category_none)
+                                else float(row.drought_category_none)
+                            ),
+                            "drought_category_d0": (
+                                None
+                                if pd.isna(row.drought_category_d0)
+                                else float(row.drought_category_d0)
+                            ),
+                            "drought_category_d1": (
+                                None
+                                if pd.isna(row.drought_category_d1)
+                                else float(row.drought_category_d1)
+                            ),
+                            "drought_category_d2": (
+                                None
+                                if pd.isna(row.drought_category_d2)
+                                else float(row.drought_category_d2)
+                            ),
+                            "drought_category_d3": (
+                                None
+                                if pd.isna(row.drought_category_d3)
+                                else float(row.drought_category_d3)
+                            ),
+                            "drought_category_d4": (
+                                None
+                                if pd.isna(row.drought_category_d4)
+                                else float(row.drought_category_d4)
+                            ),
+                            "drought_severity_index": (
+                                None
+                                if pd.isna(row.drought_severity_index)
+                                else float(row.drought_severity_index)
+                            ),
+                            "timestamp": _to_py(row.timestamp),
+                        }
+                    )
                 placeholders = ", ".join([f":{c}" for c in cols])
-                update_clause = ", ".join([f"{c}=excluded.{c}" for c in cols if c != 'id'])
-                stmt = text(
-                    f"""
+                update_clause = ", ".join([f"{c}=excluded.{c}" for c in cols if c != "id"])
+                stmt = text(f"""
                     INSERT INTO drought_conditions ({', '.join(cols)})
                     VALUES ({placeholders})
                     ON CONFLICT(id) DO UPDATE SET {update_clause}
-                    """
-                )
+                    """)
                 conn.execute(stmt, records)
             else:
                 df_normalized.to_sql(
-                    'drought_conditions',
-                    conn,
-                    if_exists='append',
-                    index=False,
-                    method='multi'
+                    "drought_conditions", conn, if_exists="append", index=False, method="multi"
                 )
 
         print(f"Saved {len(df_normalized)} drought records to database")

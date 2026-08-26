@@ -27,12 +27,12 @@ USAGE:
   python ingest_cme_settlements.py --dry-run       # print rows, no DB write
 """
 
+import json
+import logging
 import os
 import re
-import sys
-import json
 import sqlite3
-import logging
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -59,9 +59,7 @@ CME_SETTLEMENT_PRODUCTS = {
 }
 
 BASE = "https://www.cmegroup.com"
-LANDING_PAGE = (
-    BASE + "/markets/energy/natural-gas/natural-gas.settlements.html"
-)
+LANDING_PAGE = BASE + "/markets/energy/natural-gas/natural-gas.settlements.html"
 PROFILE_DIR = str(Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "metis_cme_browser")
 
 
@@ -153,8 +151,7 @@ def fetch_window(days_back: int = 7):
 
 
 def ensure_table(conn: sqlite3.Connection):
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS cme_settlements (
             product TEXT NOT NULL,
             product_id INTEGER NOT NULL,
@@ -166,8 +163,7 @@ def ensure_table(conn: sqlite3.Connection):
             fetched_at TEXT,
             PRIMARY KEY (product, trade_date, contract_month)
         )
-        """
-    )
+        """)
     conn.commit()
 
 
@@ -215,10 +211,21 @@ def main() -> int:
                     open, high, low, last, change, settle,
                     volume, open_interest, fetched_at)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (key, pid, trade_iso, month,
-                 vals["open"], vals["high"], vals["low"], vals["last"],
-                 vals["change"], vals["settle"],
-                 vals["volume"], vals["open_interest"], now),
+                (
+                    key,
+                    pid,
+                    trade_iso,
+                    month,
+                    vals["open"],
+                    vals["high"],
+                    vals["low"],
+                    vals["last"],
+                    vals["change"],
+                    vals["settle"],
+                    vals["volume"],
+                    vals["open_interest"],
+                    now,
+                ),
             )
         conn.commit()
         conn.close()

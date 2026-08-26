@@ -23,7 +23,10 @@ impl LatencyRecorder {
     }
 
     pub fn record(&self, elapsed: Duration) {
-        self.samples_ns.lock().unwrap().push(elapsed.as_nanos() as u64);
+        self.samples_ns
+            .lock()
+            .unwrap()
+            .push(elapsed.as_nanos() as u64);
     }
 
     /// Compute a percentile summary from all samples recorded so far.
@@ -79,9 +82,17 @@ impl std::fmt::Display for LatencySummary {
         writeln!(f, "  p50:   {:>10.3} \u{3bc}s", self.p50_ns as f64 / 1000.0)?;
         writeln!(f, "  p90:   {:>10.3} \u{3bc}s", self.p90_ns as f64 / 1000.0)?;
         writeln!(f, "  p99:   {:>10.3} \u{3bc}s", self.p99_ns as f64 / 1000.0)?;
-        writeln!(f, "  p99.9: {:>10.3} \u{3bc}s", self.p999_ns as f64 / 1000.0)?;
+        writeln!(
+            f,
+            "  p99.9: {:>10.3} \u{3bc}s",
+            self.p999_ns as f64 / 1000.0
+        )?;
         writeln!(f, "  max:   {:>10.3} \u{3bc}s", self.max_ns as f64 / 1000.0)?;
-        write!(f, "  mean:  {:>10.3} \u{3bc}s", self.mean_ns as f64 / 1000.0)
+        write!(
+            f,
+            "  mean:  {:>10.3} \u{3bc}s",
+            self.mean_ns as f64 / 1000.0
+        )
     }
 }
 

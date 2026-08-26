@@ -87,6 +87,7 @@ EVENTS = [
 
 # -- Data Loaders -------------------------------------------------------------
 
+
 def load_ng_prices(conn: sqlite3.Connection) -> pd.DataFrame:
     """Load NG futures daily prices, prefer cme_futures_daily where available."""
     ng = pd.read_sql(
@@ -133,9 +134,8 @@ def load_eia_storage(conn: sqlite3.Connection) -> pd.DataFrame:
     df["week_of_year"] = df.index.isocalendar().week.astype(int)
 
     # 5-year seasonal average (rolling, not look-ahead)
-    seasonal_avg = (
-        df.groupby("week_of_year")["injection"]
-        .transform(lambda x: x.expanding().mean().shift(1))
+    seasonal_avg = df.groupby("week_of_year")["injection"].transform(
+        lambda x: x.expanding().mean().shift(1)
     )
     df["injection_surprise"] = df["injection"] - seasonal_avg
     df["storage_yoy"] = df["storage_bcf"] - df["storage_bcf"].shift(52)
@@ -150,11 +150,7 @@ def load_weather(conn: sqlite3.Connection) -> pd.DataFrame:
         parse_dates=["date"],
     )
     # Average across all locations
-    daily = (
-        df.groupby("date")[["temp_mean_f", "temp_min_f", "temp_max_f"]]
-        .mean()
-        .sort_index()
-    )
+    daily = df.groupby("date")[["temp_mean_f", "temp_min_f", "temp_max_f"]].mean().sort_index()
     daily["hdd"] = np.maximum(65 - daily["temp_mean_f"], 0)
     daily["cdd"] = np.maximum(daily["temp_mean_f"] - 65, 0)
     return daily
@@ -186,6 +182,7 @@ def load_ppi(conn: sqlite3.Connection) -> pd.DataFrame:
 
 
 # -- Event Study --------------------------------------------------------------
+
 
 def plot_event_windows(ng: pd.DataFrame, eia: pd.DataFrame) -> None:
     """Plot price response windows for each event."""
@@ -235,7 +232,9 @@ def plot_event_windows(ng: pd.DataFrame, eia: pd.DataFrame) -> None:
         eia_window = eia.loc[ev_start:ev_end]
         if not eia_window.empty:
             colors = ["#4CAF50" if v >= 0 else "#F44336" for v in eia_window["injection_surprise"]]
-            ax_storage.bar(eia_window.index, eia_window["injection_surprise"], color=colors, width=5)
+            ax_storage.bar(
+                eia_window.index, eia_window["injection_surprise"], color=colors, width=5
+            )
             ax_storage.axvline(ev_date, color="red", linestyle="--", linewidth=1.5)
             ax_storage.axhline(0, color="gray", linewidth=0.8)
             ax_storage.set_title("EIA Storage Surprise (Bcf vs seasonal avg)", fontsize=10)
@@ -243,24 +242,38 @@ def plot_event_windows(ng: pd.DataFrame, eia: pd.DataFrame) -> None:
             ax_storage.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
             ax_storage.tick_params(axis="x", rotation=30)
         else:
-            ax_storage.text(0.5, 0.5, "No EIA data for this period",
-                           ha="center", va="center", transform=ax_storage.transAxes)
+            ax_storage.text(
+                0.5,
+                0.5,
+                "No EIA data for this period",
+                ha="center",
+                va="center",
+                transform=ax_storage.transAxes,
+            )
 
         # Record metrics
         pre_return = window.loc[:ev_date, "return"].sum() if ev_date in window.index else None
         post = window.loc[ev_date:]
         post_5d = post.iloc[:6]["return"].sum() if len(post) >= 5 else None
         post_20d = post.iloc[:21]["return"].sum() if len(post) >= 20 else None
-        results.append({
-            "event": event["name"],
-            "date": event["date"],
-            "type": event["type"],
-            "expected": event["expected_direction"],
-            "pre_20d_return_pct": round((window["cum_ret"].iloc[event_t] if event_t < len(window) else np.nan), 2),
-            "post_5d_return_pct": round(post_5d * 100 if post_5d else np.nan, 2),
-            "post_20d_return_pct": round(post_20d * 100 if post_20d else np.nan, 2),
-            "close_at_event": round(ng.loc[ng.index >= ev_date, "close"].iloc[0], 2) if (ng.index >= ev_date).any() else np.nan,
-        })
+        results.append(
+            {
+                "event": event["name"],
+                "date": event["date"],
+                "type": event["type"],
+                "expected": event["expected_direction"],
+                "pre_20d_return_pct": round(
+                    (window["cum_ret"].iloc[event_t] if event_t < len(window) else np.nan), 2
+                ),
+                "post_5d_return_pct": round(post_5d * 100 if post_5d else np.nan, 2),
+                "post_20d_return_pct": round(post_20d * 100 if post_20d else np.nan, 2),
+                "close_at_event": (
+                    round(ng.loc[ng.index >= ev_date, "close"].iloc[0], 2)
+                    if (ng.index >= ev_date).any()
+                    else np.nan
+                ),
+            }
+        )
 
     plt.tight_layout()
     out = OUTPUT_DIR / "event_windows.png"
@@ -277,6 +290,7 @@ def plot_event_windows(ng: pd.DataFrame, eia: pd.DataFrame) -> None:
 
 
 # -- EIA Storage Surprise Correlation -----------------------------------------
+
 
 def plot_eia_correlation(ng: pd.DataFrame, eia: pd.DataFrame) -> None:
     """Correlate EIA storage surprise with NG price moves at various lags."""
@@ -320,10 +334,13 @@ def plot_eia_correlation(ng: pd.DataFrame, eia: pd.DataFrame) -> None:
 
     # Print top correlations
     best_lag = lags[np.argmax(np.abs(corr_surprise))]
-    print(f"  Strongest EIA surprise correlation: lag={best_lag:+d}w, r={max(corr_surprise, key=abs):.3f}")
+    print(
+        f"  Strongest EIA surprise correlation: lag={best_lag:+d}w, r={max(corr_surprise, key=abs):.3f}"
+    )
 
 
 # -- 2026 High-Frequency Correlation (LMP + Weather) --------------------------
+
 
 def plot_2026_correlations(ng: pd.DataFrame, lmp: pd.DataFrame, weather: pd.DataFrame) -> None:
     """Rolling 30-day correlations for the 2026 window where LMP and weather overlap."""
@@ -346,7 +363,9 @@ def plot_2026_correlations(ng: pd.DataFrame, lmp: pd.DataFrame, weather: pd.Data
     WINDOW = 30
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 8))
-    fig.suptitle("2026 Window — Rolling 30-Day Correlations with NG Returns", fontsize=13, fontweight="bold")
+    fig.suptitle(
+        "2026 Window — Rolling 30-Day Correlations with NG Returns", fontsize=13, fontweight="bold"
+    )
 
     pairs = [
         ("lmp", "Daily LMP vs NG Return", "#9C27B0"),
@@ -379,9 +398,12 @@ def plot_2026_correlations(ng: pd.DataFrame, lmp: pd.DataFrame, weather: pd.Data
 
 # -- Full Price History Overview -----------------------------------------------
 
+
 def plot_price_history(ng: pd.DataFrame) -> None:
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 8), sharex=True)
-    fig.suptitle("Henry Hub NG Futures — Price History with Event Markers", fontsize=13, fontweight="bold")
+    fig.suptitle(
+        "Henry Hub NG Futures — Price History with Event Markers", fontsize=13, fontweight="bold"
+    )
 
     ax1.plot(ng.index, ng["close"], color="#1565C0", linewidth=1, alpha=0.9)
     ax1.set_ylabel("Price ($/MMBtu)")
@@ -393,7 +415,14 @@ def plot_price_history(ng: pd.DataFrame) -> None:
         ax1.axvline(ev_date, color=color, linewidth=1.2, alpha=0.8)
         ax1.annotate(
             event["name"].split()[0],
-            xy=(ev_date, ng.loc[ng.index >= ev_date, "close"].iloc[0] if (ng.index >= ev_date).any() else ng["close"].iloc[-1]),
+            xy=(
+                ev_date,
+                (
+                    ng.loc[ng.index >= ev_date, "close"].iloc[0]
+                    if (ng.index >= ev_date).any()
+                    else ng["close"].iloc[-1]
+                ),
+            ),
             xytext=(8, 0),
             textcoords="offset points",
             fontsize=7,
@@ -417,16 +446,29 @@ def plot_price_history(ng: pd.DataFrame) -> None:
 
 # -- Data Quality Report -------------------------------------------------------
 
+
 def print_data_quality(conn: sqlite3.Connection) -> None:
     print("\n-- Data Quality Notes ----------------------------------------")
     checks = [
-        ("drought_conditions", "date", "Timestamps appear as 1970-01-01 — likely epoch seconds stored as milliseconds (÷1000 fix needed)"),
+        (
+            "drought_conditions",
+            "date",
+            "Timestamps appear as 1970-01-01 — likely epoch seconds stored as milliseconds (÷1000 fix needed)",
+        ),
         ("eia_production", "timestamp", "Only 14 rows (3 months) — effectively empty"),
         ("storm_events", None, "Table is empty"),
         ("port_la_lb_stats", None, "Table is empty"),
         ("scfi_freight_rates", None, "Table is empty"),
-        ("fred_macro", "timestamp", "Only starts June 2024 — too short for pre-2024 event analysis"),
-        ("weather_observations", "timestamp", "Only starts 2023 — too short for Uri/Freeport events"),
+        (
+            "fred_macro",
+            "timestamp",
+            "Only starts June 2024 — too short for pre-2024 event analysis",
+        ),
+        (
+            "weather_observations",
+            "timestamp",
+            "Only starts 2023 — too short for Uri/Freeport events",
+        ),
     ]
     for table, col, note in checks:
         try:
@@ -440,6 +482,7 @@ def print_data_quality(conn: sqlite3.Connection) -> None:
 
 
 # -- Main ---------------------------------------------------------------------
+
 
 def main() -> None:
     print(f"Connecting to {DB_PATH}")
@@ -457,7 +500,9 @@ def main() -> None:
 
     print(f"  NG futures:   {len(ng)} days  ({ng.index[0].date()} -> {ng.index[-1].date()})")
     print(f"  EIA storage:  {len(eia)} weeks ({eia.index[0].date()} -> {eia.index[-1].date()})")
-    print(f"  Weather:      {len(weather)} days  ({weather.index[0].date()} -> {weather.index[-1].date()})")
+    print(
+        f"  Weather:      {len(weather)} days  ({weather.index[0].date()} -> {weather.index[-1].date()})"
+    )
     print(f"  Grid LMP:     {len(lmp)} days  ({lmp.index[0].date()} -> {lmp.index[-1].date()})")
 
     print_data_quality(conn)

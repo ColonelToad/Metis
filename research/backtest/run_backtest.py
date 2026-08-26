@@ -17,23 +17,25 @@ Outputs (research/backtest/output/):
     trade_log.csv            - every trade with P&L and regime tag
     metrics.txt              - printed report captured to file
 """
+
 import argparse
 import sqlite3
 import sys
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH   = REPO_ROOT / "data" / "metis.db"
+DB_PATH = REPO_ROOT / "data" / "metis.db"
 sys.path.insert(0, str(REPO_ROOT))
 
-from research.backtest import signals as sig_module
 from research.backtest import engine, metrics
+from research.backtest import signals as sig_module
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -79,8 +81,8 @@ def plot_equity_curve(trades: pd.DataFrame, train_end: str | None, out_path: Pat
     axes[2].set_xlabel("Date")
     axes[2].grid(True, alpha=0.3)
 
-    long_patch  = mpatches.Patch(color="steelblue", alpha=0.6, label="Long trade")
-    short_patch = mpatches.Patch(color="tomato",    alpha=0.6, label="Short trade")
+    long_patch = mpatches.Patch(color="steelblue", alpha=0.6, label="Long trade")
+    short_patch = mpatches.Patch(color="tomato", alpha=0.6, label="Short trade")
     axes[2].legend(handles=[long_patch, short_patch], fontsize=8)
 
     plt.tight_layout()
@@ -101,7 +103,8 @@ def load_regime_filter(min_regime: str) -> pd.Series:
     conn = sqlite3.connect(DB_PATH)
     reg = pd.read_sql(
         "SELECT date, severity FROM shock_regimes ORDER BY date",
-        conn, parse_dates=["date"],
+        conn,
+        parse_dates=["date"],
     ).set_index("date")
     conn.close()
 
@@ -112,20 +115,35 @@ def load_regime_filter(min_regime: str) -> pd.Series:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="EIA injection-surprise backtest")
-    parser.add_argument("--threshold",     type=float, default=0.5,
-                        help="EIA z-score threshold to take a position (default 0.5)")
-    parser.add_argument("--holding-days",  type=int,   default=5,
-                        help="Trading days to hold each trade (default 5)")
-    parser.add_argument("--train-end",     type=str,   default="2022-12-31",
-                        help="In-sample cutoff date (default 2022-12-31)")
-    parser.add_argument("--regime-filter", type=str,   default=None,
-                        choices=["elevated", "shock"],
-                        help="Only trade when prior 5-day peak regime >= this level")
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="EIA z-score threshold to take a position (default 0.5)",
+    )
+    parser.add_argument(
+        "--holding-days", type=int, default=5, help="Trading days to hold each trade (default 5)"
+    )
+    parser.add_argument(
+        "--train-end",
+        type=str,
+        default="2022-12-31",
+        help="In-sample cutoff date (default 2022-12-31)",
+    )
+    parser.add_argument(
+        "--regime-filter",
+        type=str,
+        default=None,
+        choices=["elevated", "shock"],
+        help="Only trade when prior 5-day peak regime >= this level",
+    )
     args = parser.parse_args()
 
     print("Loading price data...")
     prices = sig_module.load_ng_prices()
-    print(f"  NG prices: {prices.index[0].date()} -> {prices.index[-1].date()}  ({len(prices)} days)")
+    print(
+        f"  NG prices: {prices.index[0].date()} -> {prices.index[-1].date()}  ({len(prices)} days)"
+    )
 
     print("Building EIA signal...")
     eia_signal = sig_module.load_eia_signal(threshold=args.threshold)
@@ -161,12 +179,12 @@ def main() -> None:
     trades = metrics.tag_regimes(trades)
 
     # ── Print reports ──────────────────────────────────────────────────────────
-    in_sample  = trades[trades["sample"] == "in_sample"]
+    in_sample = trades[trades["sample"] == "in_sample"]
     out_sample = trades[trades["sample"] == "out_of_sample"]
 
-    metrics.print_report(trades,       label="FULL PERIOD")
+    metrics.print_report(trades, label="FULL PERIOD")
     if not in_sample.empty:
-        metrics.print_report(in_sample,  label=f"IN-SAMPLE  (through {args.train_end})")
+        metrics.print_report(in_sample, label=f"IN-SAMPLE  (through {args.train_end})")
     if not out_sample.empty:
         metrics.print_report(out_sample, label=f"OUT-OF-SAMPLE  ({args.train_end} ->)")
 

@@ -1,8 +1,9 @@
+import heapq
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Deque, Dict, List, Optional
-import heapq
-import time
+
 
 @dataclass
 class Order:
@@ -13,6 +14,7 @@ class Order:
     qty: float
     ts: float
 
+
 @dataclass
 class Trade:
     buy_id: int
@@ -21,9 +23,11 @@ class Trade:
     qty: float
     ts: float
 
+
 class PriceLevel:
     def __init__(self):
         self.queue: Deque[Order] = deque()
+
 
 class OrderBook:
     def __init__(self, tick_size: float = 0.001):
@@ -45,13 +49,14 @@ class OrderBook:
         return self.ask_prices[0] if self.ask_prices else None
 
     def submit_limit(self, side: str, price: float, qty: float) -> int:
-        order_id = self._next_id; self._next_id += 1
+        order_id = self._next_id
+        self._next_id += 1
         price = self._normalize_price(price)
         ts = time.time()
-        order = Order(order_id, side, 'limit', price, qty, ts)
-        book = self.bids if side == 'buy' else self.asks
-        heap = self.bid_prices if side == 'buy' else self.ask_prices
-        key_price = price if side == 'sell' else -price
+        order = Order(order_id, side, "limit", price, qty, ts)
+        book = self.bids if side == "buy" else self.asks
+        heap = self.bid_prices if side == "buy" else self.ask_prices
+        key_price = price if side == "sell" else -price
 
         if price not in book:
             book[price] = PriceLevel()
@@ -61,15 +66,19 @@ class OrderBook:
         return order_id
 
     def submit_market(self, side: str, qty: float) -> int:
-        order_id = self._next_id; self._next_id += 1
+        order_id = self._next_id
+        self._next_id += 1
         ts = time.time()
-        order = Order(order_id, side, 'market', None, qty, ts)
+        order = Order(order_id, side, "market", None, qty, ts)
         self._execute_market(order)
         return order_id
 
     def cancel(self, order_id: int) -> bool:
         # Simple linear search cancel
-        for levels, heap, invert in [(self.bids, self.bid_prices, True), (self.asks, self.ask_prices, False)]:
+        for levels, heap, invert in [
+            (self.bids, self.bid_prices, True),
+            (self.asks, self.ask_prices, False),
+        ]:
             to_delete = []
             for price, level in levels.items():
                 for i, o in enumerate(level.queue):
@@ -80,7 +89,7 @@ class OrderBook:
                         return True
             for price in to_delete:
                 del levels[price]
-                key_price = (-price if invert else price)
+                key_price = -price if invert else price
                 # rebuild heap
                 if invert:
                     self.bid_prices = [-p for p in levels.keys()]
@@ -91,21 +100,23 @@ class OrderBook:
         return False
 
     def _pop_best(self, side: str) -> Optional[Order]:
-        if side == 'sell':
-            if not self.ask_prices: return None
+        if side == "sell":
+            if not self.ask_prices:
+                return None
             best = self.ask_prices[0]
             level = self.asks[best]
             order = level.queue[0]
             return order
         else:
-            if not self.bid_prices: return None
+            if not self.bid_prices:
+                return None
             best = -self.bid_prices[0]
             level = self.bids[best]
             order = level.queue[0]
             return order
 
     def _consume_best(self, side: str):
-        if side == 'sell':
+        if side == "sell":
             best = self.ask_prices[0]
             level = self.asks[best]
             level.queue.popleft()
@@ -121,13 +132,14 @@ class OrderBook:
                 del self.bids[best]
 
     def _crossed(self) -> bool:
-        bb = self._best_bid(); ba = self._best_ask()
+        bb = self._best_bid()
+        ba = self._best_ask()
         return bb is not None and ba is not None and bb >= ba
 
     def _match(self):
         while self._crossed():
-            buy_order = self._pop_best('buy')
-            sell_order = self._pop_best('sell')
+            buy_order = self._pop_best("buy")
+            sell_order = self._pop_best("sell")
             if not buy_order or not sell_order:
                 break
             qty = min(buy_order.qty, sell_order.qty)
@@ -137,13 +149,13 @@ class OrderBook:
             buy_order.qty -= qty
             sell_order.qty -= qty
             if buy_order.qty <= 1e-12:
-                self._consume_best('buy')
+                self._consume_best("buy")
             if sell_order.qty <= 1e-12:
-                self._consume_best('sell')
+                self._consume_best("sell")
 
     def _execute_market(self, order: Order):
         side = order.side
-        opp = 'sell' if side == 'buy' else 'buy'
+        opp = "sell" if side == "buy" else "buy"
         while order.qty > 1e-12:
             best = self._pop_best(opp)
             if not best:
@@ -151,7 +163,7 @@ class OrderBook:
             qty = min(order.qty, best.qty)
             price = best.price
             ts = time.time()
-            if side == 'buy':
+            if side == "buy":
                 self.trades.append(Trade(order.id, best.id, price, qty, ts))
             else:
                 self.trades.append(Trade(best.id, order.id, price, qty, ts))
@@ -161,13 +173,17 @@ class OrderBook:
                 self._consume_best(opp)
 
     def mid_price(self) -> Optional[float]:
-        bb = self._best_bid(); ba = self._best_ask()
-        if bb is None or ba is None: return None
+        bb = self._best_bid()
+        ba = self._best_ask()
+        if bb is None or ba is None:
+            return None
         return (bb + ba) / 2
 
     def best_spread(self) -> Optional[float]:
-        bb = self._best_bid(); ba = self._best_ask()
-        if bb is None or ba is None: return None
+        bb = self._best_bid()
+        ba = self._best_ask()
+        if bb is None or ba is None:
+            return None
         return max(0.0, ba - bb)
 
     def last_trade(self) -> Optional[Trade]:

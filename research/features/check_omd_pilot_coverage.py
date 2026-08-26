@@ -5,9 +5,11 @@ Confirms which sources now cover the 2005-2007 precursor window.
 Run from C:\\Users\\legot\\Metis:
     python research/features/check_omd_pilot_coverage.py
 """
+
 import os
-from sqlalchemy import create_engine, text
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 load_dotenv()
 DB_URL = os.getenv("DB_URL", "sqlite:///data/metis.db")
@@ -22,37 +24,31 @@ SOURCES = {
                COUNT(*) as total,
                SUM(CASE WHEN date >= '{PILOT_START}' AND date <= '{PILOT_END}' THEN 1 ELSE 0 END) as in_window
         FROM ng_futures_daily""",
-
     "eia_storage": f"""
         SELECT MIN(timestamp), MAX(timestamp),
                COUNT(*) as total,
                SUM(CASE WHEN timestamp >= '{PILOT_START}' AND timestamp <= '{PILOT_END}' THEN 1 ELSE 0 END) as in_window
         FROM eia_storage""",
-
     "eia_production": f"""
         SELECT MIN(timestamp), MAX(timestamp),
                COUNT(*) as total,
                SUM(CASE WHEN timestamp >= '{PILOT_START}' AND timestamp <= '{PILOT_END}' THEN 1 ELSE 0 END) as in_window
         FROM eia_production""",
-
     "fred_macro (wti_crude_price)": f"""
         SELECT MIN(timestamp), MAX(timestamp),
                COUNT(*) as total,
                SUM(CASE WHEN timestamp >= '{PILOT_START}' AND timestamp <= '{PILOT_END}' THEN 1 ELSE 0 END) as in_window
         FROM fred_macro WHERE wti_crude_price IS NOT NULL""",
-
     "stock_prices (XLE)": f"""
         SELECT MIN(timestamp), MAX(timestamp),
                COUNT(*) as total,
                SUM(CASE WHEN timestamp >= '{PILOT_START}' AND timestamp <= '{PILOT_END}' THEN 1 ELSE 0 END) as in_window
         FROM stock_prices WHERE ticker='XLE'""",
-
     "stock_prices (EQT)": f"""
         SELECT MIN(timestamp), MAX(timestamp),
                COUNT(*) as total,
                SUM(CASE WHEN timestamp >= '{PILOT_START}' AND timestamp <= '{PILOT_END}' THEN 1 ELSE 0 END) as in_window
         FROM stock_prices WHERE ticker='EQT'""",
-
     "lobbying_filings (ENG/FUE)": f"""
         SELECT MIN(lf.dt_posted), MAX(lf.dt_posted),
                COUNT(*) as total,
@@ -60,7 +56,6 @@ SOURCES = {
         FROM lobbying_filings lf
         JOIN lobbying_activities la ON lf.filing_uuid = la.filing_uuid
         WHERE la.general_issue_code IN ('ENG','FUE')""",
-
     "congress_bills (energy-related)": f"""
         SELECT MIN(latest_action_date), MAX(latest_action_date),
                COUNT(*) as total,

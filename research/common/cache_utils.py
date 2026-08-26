@@ -3,11 +3,11 @@ TTL-based caching utilities for expensive API calls.
 Provides decorators to cache function results with time-based expiry.
 """
 
-import time
 import functools
-from typing import Callable, Any, Optional
-from pathlib import Path
 import json
+import time
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 
 class TTLCache:
@@ -61,9 +61,7 @@ class TTLCache:
         elapsed = time.time() - self.cache_timestamp
         is_valid = elapsed < self.ttl_seconds
         if not is_valid:
-            print(
-                f"[{self.cache_name}] Cache expired: {elapsed:.1f}s > {self.ttl_seconds}s TTL"
-            )
+            print(f"[{self.cache_name}] Cache expired: {elapsed:.1f}s > {self.ttl_seconds}s TTL")
         return is_valid
 
     def get(self) -> Optional[Any]:

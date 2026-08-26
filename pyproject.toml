@@ -1,0 +1,11 @@
+# Formatter contract shared by local dev and CI (.github/workflows/tier-0-ci.yml).
+# isort MUST use the black profile, otherwise the two formatters fight each
+# other and no state satisfies both checks.
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100

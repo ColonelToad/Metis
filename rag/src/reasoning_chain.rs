@@ -316,7 +316,8 @@ Synthesize the context into the JSON template provided. Return JSON only.
         println!("========================================================\n");
 
         // Parse the cleaned JSON response for the narrative fields
-        let mut explanation = ExplanationParser::parse(cleaned_json, signal.id.clone(), layer2_docs);
+        let mut explanation =
+            ExplanationParser::parse(cleaned_json, signal.id.clone(), layer2_docs);
 
         // Overwrite the structured fields with the deterministic computation
         // regardless of what (if anything) the LLM said about them — the

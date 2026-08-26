@@ -23,11 +23,13 @@ same_symbol_discontinuity:
 Run from C:\\Users\\legot\\Metis:
     python research/data_ingest/build_ticker_lineage.py
 """
+
 import os
 import sys
 from pathlib import Path
-from sqlalchemy import create_engine, text
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from research.common import runtime_config as rc
@@ -92,24 +94,34 @@ def main():
         """))
 
         for event in LINEAGE_EVENTS:
-            existing = conn.execute(text(
-                "SELECT COUNT(*) FROM ticker_lineage WHERE old_ticker=:old_ticker "
-                "AND new_ticker=:new_ticker AND change_date=:change_date"
-            ), event).scalar()
+            existing = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM ticker_lineage WHERE old_ticker=:old_ticker "
+                    "AND new_ticker=:new_ticker AND change_date=:change_date"
+                ),
+                event,
+            ).scalar()
             if existing:
-                print(f"  Already present: {event['old_ticker']} -> {event['new_ticker']} "
-                      f"({event['change_date']}), skipping")
+                print(
+                    f"  Already present: {event['old_ticker']} -> {event['new_ticker']} "
+                    f"({event['change_date']}), skipping"
+                )
                 continue
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 INSERT INTO ticker_lineage
                     (old_ticker, new_ticker, change_date, change_type,
                      same_symbol_discontinuity, note, source_url)
                 VALUES
                     (:old_ticker, :new_ticker, :change_date, :change_type,
                      :same_symbol_discontinuity, :note, :source_url)
-            """), event)
-            print(f"  Added: {event['old_ticker']} -> {event['new_ticker']} "
-                  f"({event['change_date']}, {event['change_type']})")
+            """),
+                event,
+            )
+            print(
+                f"  Added: {event['old_ticker']} -> {event['new_ticker']} "
+                f"({event['change_date']}, {event['change_type']})"
+            )
 
     print("\nticker_lineage table ready.")
 

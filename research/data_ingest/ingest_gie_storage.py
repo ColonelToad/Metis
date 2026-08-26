@@ -25,19 +25,19 @@ USAGE:
   python ingest_gie_storage.py --dataset agsi --dry-run
 """
 
+import argparse
+import logging
 import os
+import sqlite3
 import sys
 import time
-import sqlite3
-import logging
-import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dotenv import load_dotenv
 import requests
+from dotenv import load_dotenv
 
 load_dotenv()
 API_KEY = os.getenv("AGSI_API_KEY", "").strip()
@@ -52,16 +52,59 @@ DATASETS = {
         "host": "https://agsi.gie.eu",
         "table": "agsi_storage",
         # EU members + major non-EU storages; misses simply return no rows
-        "candidates": ["AT", "BA", "BE", "BG", "CH", "CZ", "DE", "DK", "EE",
-                       "ES", "FI", "FR", "GR", "HR", "HU", "IE", "IT", "LT",
-                       "LU", "LV", "NL", "NO", "PL", "PT", "RO", "RS", "SE",
-                       "SI", "SK", "UA", "UK"],
+        "candidates": [
+            "AT",
+            "BA",
+            "BE",
+            "BG",
+            "CH",
+            "CZ",
+            "DE",
+            "DK",
+            "EE",
+            "ES",
+            "FI",
+            "FR",
+            "GR",
+            "HR",
+            "HU",
+            "IE",
+            "IT",
+            "LT",
+            "LU",
+            "LV",
+            "NL",
+            "NO",
+            "PL",
+            "PT",
+            "RO",
+            "RS",
+            "SE",
+            "SI",
+            "SK",
+            "UA",
+            "UK",
+        ],
     },
     "alsi": {
         "host": "https://alsi.gie.eu",
         "table": "alsi_storage",
-        "candidates": ["BE", "EL", "ES", "FI", "FR", "GR", "IT", "LT", "NL",
-                       "PL", "PT", "SE", "TR", "UK"],
+        "candidates": [
+            "BE",
+            "EL",
+            "ES",
+            "FI",
+            "FR",
+            "GR",
+            "IT",
+            "LT",
+            "NL",
+            "PL",
+            "PT",
+            "SE",
+            "TR",
+            "UK",
+        ],
     },
 }
 
@@ -69,8 +112,7 @@ DEFAULT_START = "2019-01-01"
 
 
 def get_json(host: str, path: str, params: dict):
-    r = requests.get(f"{host}{path}", headers={"x-key": API_KEY}, params=params,
-                     timeout=60)
+    r = requests.get(f"{host}{path}", headers={"x-key": API_KEY}, params=params, timeout=60)
     if r.status_code == 429:
         logger.warning("Rate limited; sleeping 30s")
         time.sleep(30)
@@ -83,9 +125,11 @@ def fetch_range(host: str, country: str, d_from: str, d_till: str):
     """Page through one country's daily rows between dates."""
     out, page = [], 1
     while True:
-        d = get_json(host, "/api/data", {"country": country,
-                                         "from": d_from, "till": d_till,
-                                         "page": page, "size": 200})
+        d = get_json(
+            host,
+            "/api/data",
+            {"country": country, "from": d_from, "till": d_till, "page": page, "size": 200},
+        )
         rows = d.get("data") or []
         out.extend(rows)
         if page >= (d.get("last_page") or 1) or not rows:
@@ -95,30 +139,24 @@ def fetch_range(host: str, country: str, d_from: str, d_till: str):
 
 
 def ensure_tables(conn):
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS agsi_storage (
+    conn.execute("""CREATE TABLE IF NOT EXISTS agsi_storage (
             country TEXT NOT NULL, gas_day TEXT NOT NULL,
             gas_in_storage_twh REAL, injection_gwh_d REAL, withdrawal_gwh_d REAL,
             net_withdrawal_gwh_d REAL, full_pct REAL, trend REAL,
             working_gas_volume_twh REAL, available_capacity_twh REAL,
             contracted_capacity_twh REAL, consumption_gwh_d REAL,
             status TEXT, updated_at TEXT, fetched_at TEXT,
-            PRIMARY KEY (country, gas_day))"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS alsi_storage (
+            PRIMARY KEY (country, gas_day))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS alsi_storage (
             country TEXT NOT NULL, gas_day TEXT NOT NULL,
             inventory_gwh REAL, sendout_gwh_d REAL,
             dtrs_gwh_d REAL, dtmi_gwh REAL,
             status TEXT, updated_at TEXT, fetched_at TEXT,
-            PRIMARY KEY (country, gas_day))"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS gie_ingest_meta (
+            PRIMARY KEY (country, gas_day))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS gie_ingest_meta (
             dataset TEXT NOT NULL, country TEXT NOT NULL,
             last_date TEXT, active INTEGER, fetched_at TEXT,
-            PRIMARY KEY (dataset, country))"""
-    )
+            PRIMARY KEY (dataset, country))""")
     conn.commit()
 
 
@@ -136,16 +174,28 @@ def write_agsi(conn, country, rows):
         day = r.get("gasDayStart")
         if not day:
             continue
-        payload.append((country, day[:10], _f(r.get("gasInStorage")),
-                        _f(r.get("injection")), _f(r.get("withdrawal")),
-                        _f(r.get("netWithdrawal")), _f(r.get("full")),
-                        _f(r.get("trend")), _f(r.get("workingGasVolume")),
-                        _f(r.get("availableCapacity")), _f(r.get("contractedCapacity")),
-                        _f(r.get("consumption")), r.get("status"),
-                        r.get("updatedAt"), now))
+        payload.append(
+            (
+                country,
+                day[:10],
+                _f(r.get("gasInStorage")),
+                _f(r.get("injection")),
+                _f(r.get("withdrawal")),
+                _f(r.get("netWithdrawal")),
+                _f(r.get("full")),
+                _f(r.get("trend")),
+                _f(r.get("workingGasVolume")),
+                _f(r.get("availableCapacity")),
+                _f(r.get("contractedCapacity")),
+                _f(r.get("consumption")),
+                r.get("status"),
+                r.get("updatedAt"),
+                now,
+            )
+        )
     conn.executemany(
-        """INSERT OR REPLACE INTO agsi_storage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        payload)
+        """INSERT OR REPLACE INTO agsi_storage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", payload
+    )
     return len(payload)
 
 
@@ -163,13 +213,20 @@ def write_alsi(conn, country, rows):
         day = r.get("gasDayStart")
         if not day:
             continue
-        payload.append((country, day[:10], _gwh(r.get("inventory")),
-                        _f(r.get("sendOut")), _f(r.get("dtrs")),
-                        _gwh(r.get("dtmi")),
-                        r.get("status"), r.get("updatedAt"), now))
-    conn.executemany(
-        """INSERT OR REPLACE INTO alsi_storage VALUES (?,?,?,?,?,?,?,?,?)""",
-        payload)
+        payload.append(
+            (
+                country,
+                day[:10],
+                _gwh(r.get("inventory")),
+                _f(r.get("sendOut")),
+                _f(r.get("dtrs")),
+                _gwh(r.get("dtmi")),
+                r.get("status"),
+                r.get("updatedAt"),
+                now,
+            )
+        )
+    conn.executemany("""INSERT OR REPLACE INTO alsi_storage VALUES (?,?,?,?,?,?,?,?,?)""", payload)
     return len(payload)
 
 
@@ -218,8 +275,12 @@ def main():
         # would silently shrink the universe.
         meta = {}
         if conn:
-            meta = {r[0]: r[1] for r in conn.execute(
-                f"SELECT country, active FROM gie_ingest_meta WHERE dataset=?", (ds,))}
+            meta = {
+                r[0]: r[1]
+                for r in conn.execute(
+                    f"SELECT country, active FROM gie_ingest_meta WHERE dataset=?", (ds,)
+                )
+            }
         if len(meta) >= len(cfg["candidates"]):
             actives = [c for c, a in meta.items() if a]
         else:
@@ -228,21 +289,24 @@ def main():
                 now = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 for c in cfg["candidates"]:
                     conn.execute(
-                        f"INSERT OR REPLACE INTO gie_ingest_meta VALUES "
-                        f"(?,?,NULL,?,?)", (ds, c, 1 if c in actives else 0, now))
+                        f"INSERT OR REPLACE INTO gie_ingest_meta VALUES " f"(?,?,NULL,?,?)",
+                        (ds, c, 1 if c in actives else 0, now),
+                    )
                 conn.commit()
 
         for country in actives:
-            start = (args.dfrom or DEFAULT_START)
+            start = args.dfrom or DEFAULT_START
             if conn:
                 last = meta.get(country)
                 if last and not args.dfrom:
                     last_date = conn.execute(
-                        "SELECT last_date FROM gie_ingest_meta WHERE dataset=? "
-                        "AND country=?", (ds, country)).fetchone()
+                        "SELECT last_date FROM gie_ingest_meta WHERE dataset=? " "AND country=?",
+                        (ds, country),
+                    ).fetchone()
                     if last_date and last_date[0]:
-                        start = (datetime.strptime(last_date[0], "%Y-%m-%d")
-                                 + timedelta(days=1)).strftime("%Y-%m-%d")
+                        start = (
+                            datetime.strptime(last_date[0], "%Y-%m-%d") + timedelta(days=1)
+                        ).strftime("%Y-%m-%d")
             if start > today:
                 continue
 
@@ -250,8 +314,7 @@ def main():
             end = datetime.strptime(today, "%Y-%m-%d")
             n = 0
             while cursor <= end:
-                chunk_end = min(cursor + timedelta(days=364),
-                                end).strftime("%Y-%m-%d")
+                chunk_end = min(cursor + timedelta(days=364), end).strftime("%Y-%m-%d")
                 chunk_start = cursor.strftime("%Y-%m-%d")
                 try:
                     rows = fetch_range(host, country, chunk_start, chunk_end)
@@ -274,7 +337,8 @@ def main():
                 last_day = today
                 conn.execute(
                     f"INSERT OR REPLACE INTO gie_ingest_meta VALUES "
-                    f"('{ds}','{country}','{last_day}',1,'{today}')")
+                    f"('{ds}','{country}','{last_day}',1,'{today}')"
+                )
                 conn.commit()
             time.sleep(0.6)
 

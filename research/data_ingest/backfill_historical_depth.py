@@ -21,14 +21,16 @@ The existing backfill_fred_eia.py script had two problems:
 Run from C:\\Users\\legot\\Metis:
     python research/data_ingest/backfill_historical_depth.py
 """
+
 import os
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
 import pandas as pd
 import requests
-from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from research.common import runtime_config as rc
@@ -43,27 +45,33 @@ EIA_API_KEY = os.getenv("EIA_API_KEY")
 START_DATE = "2000-01-01"
 
 FRED_SERIES = {
-    "wti_crude_price":      "DCOILWTICO",
-    "cpi_energy":           "CPILEGSL",
-    "retail_gas_price":     "GASREGCOVW",
-    "industrial_production":"INDPRO",
-    "housing_starts":       "HOUST",
+    "wti_crude_price": "DCOILWTICO",
+    "cpi_energy": "CPILEGSL",
+    "retail_gas_price": "GASREGCOVW",
+    "industrial_production": "INDPRO",
+    "housing_starts": "HOUST",
     "personal_consumption": "PCE",
 }
+
 
 def ensure_unique_indexes(engine):
     """Ensure EIA tables have unique constraints so ON CONFLICT DO NOTHING works."""
     with engine.begin() as conn:
         # Add this new FRED index
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_fred_macro_ts_sid ON fred_macro(timestamp, series_id)"
-        ))
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_eia_storage_ts ON eia_storage(timestamp)"
-        ))
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_eia_production_ts ON eia_production(timestamp)"
-        ))
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_fred_macro_ts_sid ON fred_macro(timestamp, series_id)"
+            )
+        )
+        conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS idx_eia_storage_ts ON eia_storage(timestamp)")
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_eia_production_ts ON eia_production(timestamp)"
+            )
+        )
+
 
 def fetch_fred_series(series_id: str, start: str) -> pd.DataFrame:
     """Fetch one FRED series from start_date to today."""
@@ -86,7 +94,9 @@ def fetch_fred_series(series_id: str, start: str) -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["date"])
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
     df = df[df["value"].notna()][["timestamp", "value"]].copy()
-    print(f"  {series_id}: {len(df)} rows ({df['timestamp'].min().date()} to {df['timestamp'].max().date()})")
+    print(
+        f"  {series_id}: {len(df)} rows ({df['timestamp'].min().date()} to {df['timestamp'].max().date()})"
+    )
     return df
 
 
@@ -103,23 +113,35 @@ def backfill_fred(engine):
 
         with engine.begin() as conn:
             # Check what's already in the table for this series
-            existing = conn.execute(text(
-                "SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM fred_macro "
-                "WHERE series_id = :sid"
-            ), {"sid": series_id}).fetchone()
+            existing = conn.execute(
+                text(
+                    "SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM fred_macro "
+                    "WHERE series_id = :sid"
+                ),
+                {"sid": series_id},
+            ).fetchone()
             print(f"    Existing in DB: {existing[0]} to {existing[1]} ({existing[2]} rows)")
 
             # Upsert -- same last-write-wins policy as everything else this session
             for _, row in df.iterrows():
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     INSERT INTO fred_macro (timestamp, series_id, value)
                     VALUES (:ts, :sid, :val)
                     ON CONFLICT(timestamp, series_id) DO UPDATE SET value=excluded.value
-                """), {"ts": row["timestamp"].strftime('%Y-%m-%d 00:00:00.000000'), "sid": series_id, "val": float(row["value"])})
+                """),
+                    {
+                        "ts": row["timestamp"].strftime("%Y-%m-%d 00:00:00.000000"),
+                        "sid": series_id,
+                        "val": float(row["value"]),
+                    },
+                )
 
         print(f"    Upserted {len(df)} rows for {series_id}")
 
+
 import os
+
 
 def backfill_eia_storage_legacy(engine):
     """
@@ -127,47 +149,53 @@ def backfill_eia_storage_legacy(engine):
     Total Lower 48 data for 1993-2009.
     """
     file_path = "data/archngshistory.xls"
-    
+
     if not os.path.exists(file_path):
         print(f"\n[!] Legacy archive not found at {file_path}")
         print("    Please save the EIA history file as 'data/archngshistory.xls' and run again.")
         return
 
     print("\n--- EIA legacy storage archive backfill ---")
-    
+
     # Read the first sheet of the Excel file. The EIA preamble is 7 rows long.
     df = pd.read_excel(file_path, sheet_name=0, skiprows=7)
-    
-    # Find the Date and Total Lower 48 columns. 
+
+    # Find the Date and Total Lower 48 columns.
     date_col = "Week ending" if "Week ending" in df.columns else df.columns[0]
     total_col = "Total Lower 48" if "Total Lower 48" in df.columns else df.columns[7]
-    
+
     df = df.rename(columns={date_col: "timestamp", total_col: "storage_bcf"})
     df = df[["timestamp", "storage_bcf"]].dropna()
-    
+
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df["storage_bcf"] = pd.to_numeric(df["storage_bcf"], errors="coerce")
     df = df.dropna()
-    
+
     # We only need the missing 1993-2009 data to bridge the gap
     df = df[df["timestamp"] < "2010-01-01"]
-    
+
     if df.empty:
         print("  No legacy data found matching the criteria.")
         return
 
     with engine.begin() as conn:
         for _, row in df.iterrows():
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 INSERT INTO eia_storage (timestamp, storage_bcf, "area-name")
                 VALUES (:ts, :val, 'NA')
                 ON CONFLICT DO NOTHING
-            """), {
-                "ts": row["timestamp"].strftime('%Y-%m-%d 00:00:00.000000'), 
-                "val": float(row["storage_bcf"])
-            })
+            """),
+                {
+                    "ts": row["timestamp"].strftime("%Y-%m-%d 00:00:00.000000"),
+                    "val": float(row["storage_bcf"]),
+                },
+            )
 
-    print(f"  Upserted {len(df)} legacy EIA storage rows ({df['timestamp'].min().date()} to {df['timestamp'].max().date()})")
+    print(
+        f"  Upserted {len(df)} legacy EIA storage rows ({df['timestamp'].min().date()} to {df['timestamp'].max().date()})"
+    )
+
 
 def fetch_eia_storage_historical(start_year: int) -> pd.DataFrame:
     """
@@ -198,7 +226,9 @@ def fetch_eia_storage_historical(start_year: int) -> pd.DataFrame:
     df = df.rename(columns={"value": "storage_bcf"})
     df["storage_bcf"] = pd.to_numeric(df["storage_bcf"], errors="coerce")
     df = df[df["storage_bcf"].notna()][["timestamp", "storage_bcf"]].copy()
-    print(f"  EIA storage: {len(df)} rows ({df['timestamp'].min().date()} to {df['timestamp'].max().date()})")
+    print(
+        f"  EIA storage: {len(df)} rows ({df['timestamp'].min().date()} to {df['timestamp'].max().date()})"
+    )
     return df
 
 
@@ -215,18 +245,24 @@ def backfill_eia_storage(engine):
         return
 
     with engine.begin() as conn:
-        existing = conn.execute(text(
-            "SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM eia_storage"
-        )).fetchone()
+        existing = conn.execute(
+            text("SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM eia_storage")
+        ).fetchone()
         print(f"  Existing in DB: {existing[0]} to {existing[1]} ({existing[2]} rows)")
 
         # area-name is 'NA' for R48 aggregate (confirmed expected behavior)
         for _, row in df.iterrows():
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 INSERT INTO eia_storage (timestamp, storage_bcf, "area-name")
                 VALUES (:ts, :val, 'NA')
                 ON CONFLICT DO NOTHING
-            """), {"ts": row["timestamp"].strftime('%Y-%m-%d 00:00:00.000000'), "val": float(row["storage_bcf"])})
+            """),
+                {
+                    "ts": row["timestamp"].strftime("%Y-%m-%d 00:00:00.000000"),
+                    "val": float(row["storage_bcf"]),
+                },
+            )
 
     print(f"  Upserted {len(df)} EIA storage rows")
 
@@ -259,7 +295,9 @@ def fetch_eia_production_historical() -> pd.DataFrame:
     df = df.rename(columns={"value": "production_mmcf"})
     df["production_mmcf"] = pd.to_numeric(df["production_mmcf"], errors="coerce")
     df = df[df["production_mmcf"].notna()][["timestamp", "production_mmcf"]].copy()
-    print(f"  EIA production: {len(df)} rows ({df['timestamp'].min().date()} to {df['timestamp'].max().date()})")
+    print(
+        f"  EIA production: {len(df)} rows ({df['timestamp'].min().date()} to {df['timestamp'].max().date()})"
+    )
     return df
 
 
@@ -275,17 +313,23 @@ def backfill_eia_production(engine):
         return
 
     with engine.begin() as conn:
-        existing = conn.execute(text(
-            "SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM eia_production"
-        )).fetchone()
+        existing = conn.execute(
+            text("SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM eia_production")
+        ).fetchone()
         print(f"  Existing in DB: {existing[0]} to {existing[1]} ({existing[2]} rows)")
 
         for _, row in df.iterrows():
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 INSERT INTO eia_production (timestamp, production_mmcf)
                 VALUES (:ts, :val)
                 ON CONFLICT DO NOTHING
-            """), {"ts": row["timestamp"].strftime('%Y-%m-%d 00:00:00.000000'), "val": float(row["production_mmcf"])})
+            """),
+                {
+                    "ts": row["timestamp"].strftime("%Y-%m-%d 00:00:00.000000"),
+                    "val": float(row["production_mmcf"]),
+                },
+            )
 
     print(f"  Upserted {len(df)} EIA production rows")
 
@@ -315,7 +359,9 @@ def main():
         print(f"fred_macro columns: {cols}")
 
     if "value" not in cols:
-        print("\nWARNING: fred_macro has no 'value' column -- it's a wide table (one column per series).")
+        print(
+            "\nWARNING: fred_macro has no 'value' column -- it's a wide table (one column per series)."
+        )
         print("The FRED upsert below will use the wide-table approach instead.")
         backfill_fred_wide(engine, cols)
     else:
@@ -350,19 +396,21 @@ def backfill_fred_wide(engine, existing_cols):
 
         with engine.begin() as conn:
             for _, row in df.iterrows():
-                ts = row["timestamp"].strftime('%Y-%m-%d 00:00:00.000000')
+                ts = row["timestamp"].strftime("%Y-%m-%d 00:00:00.000000")
                 val = float(row["value"])
-                exists = conn.execute(text(
-                    "SELECT COUNT(*) FROM fred_macro WHERE timestamp=:ts"
-                ), {"ts": ts}).scalar()
+                exists = conn.execute(
+                    text("SELECT COUNT(*) FROM fred_macro WHERE timestamp=:ts"), {"ts": ts}
+                ).scalar()
                 if exists:
-                    conn.execute(text(
-                        f"UPDATE fred_macro SET {col_name}=:val WHERE timestamp=:ts"
-                    ), {"val": val, "ts": ts})
+                    conn.execute(
+                        text(f"UPDATE fred_macro SET {col_name}=:val WHERE timestamp=:ts"),
+                        {"val": val, "ts": ts},
+                    )
                 else:
-                    conn.execute(text(
-                        f"INSERT INTO fred_macro (timestamp, {col_name}) VALUES (:ts, :val)"
-                    ), {"ts": ts, "val": val})
+                    conn.execute(
+                        text(f"INSERT INTO fred_macro (timestamp, {col_name}) VALUES (:ts, :val)"),
+                        {"ts": ts, "val": val},
+                    )
 
         print(f"    Done: {col_name} ({series_id})")
 

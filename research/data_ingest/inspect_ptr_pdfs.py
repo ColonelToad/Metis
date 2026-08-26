@@ -6,17 +6,16 @@ Downloads a small, deliberately varied sample of real PTR PDFs and prints
 their raw extracted text -- purpose is to see actual whitespace/layout
 structure before writing any parsing regex, not to parse anything yet.
 """
-import requests
-import pdfplumber
+
 from io import BytesIO
 
+import pdfplumber
+import requests
+
 SAMPLES = {
-    "Ashford_2015_single (from your own data)":
-        "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2015/20002776.pdf",
-    "Babin_2015_short_docid (tests the odd 7-digit ID format)":
-        "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2015/9106294.pdf",
-    "Barletta_2015":
-        "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2015/20002550.pdf",
+    "Ashford_2015_single (from your own data)": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2015/20002776.pdf",
+    "Babin_2015_short_docid (tests the odd 7-digit ID format)": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2015/9106294.pdf",
+    "Barletta_2015": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2015/20002550.pdf",
 }
 
 for label, url in SAMPLES.items():

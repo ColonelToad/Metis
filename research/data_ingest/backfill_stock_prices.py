@@ -12,14 +12,16 @@ ON CONFLICT DO UPDATE last-write-wins, same as everything else this session.
 Run from C:\\Users\\legot\\Metis:
     python research/data_ingest/backfill_stock_prices.py
 """
+
 import os
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
 import pandas as pd
 import yfinance as yf
-from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from research.common import runtime_config as rc
@@ -36,17 +38,17 @@ START_DATE = "2000-01-01"
 ENERGY_TICKERS = {
     "EXE": "Expand Energy (formerly CHK, from 2024-10-02)",
     "EQT": "EQT Corporation",
-    "AR":  "Antero Resources",
+    "AR": "Antero Resources",
     "CNX": "CNX Resources",
     "RRC": "Range Resources",
     "KMI": "Kinder Morgan",
     "WMB": "Williams Companies",
     "EPD": "Enterprise Products",
-    "ET":  "Energy Transfer",
+    "ET": "Energy Transfer",
     "OKE": "ONEOK",
     "NEE": "NextEra Energy",
-    "D":   "Dominion Energy",
-    "SO":  "Southern Company",
+    "D": "Dominion Energy",
+    "SO": "Southern Company",
     "DUK": "Duke Energy",
     "XLE": "Energy Select Sector ETF",
     "UNG": "US Natural Gas Fund ETF",
@@ -57,10 +59,12 @@ ENERGY_TICKERS = {
 
 def ensure_unique_index(engine):
     with engine.begin() as conn:
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_prices_ts_ticker "
-            "ON stock_prices(timestamp, ticker)"
-        ))
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_prices_ts_ticker "
+                "ON stock_prices(timestamp, ticker)"
+            )
+        )
 
 
 def backfill_ticker(ticker: str, company: str, engine) -> int:
@@ -74,13 +78,18 @@ def backfill_ticker(ticker: str, company: str, engine) -> int:
         # yfinance returns MultiIndex columns when downloading a single ticker
         # with auto_adjust -- flatten if needed
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [c[0] if c[1] == '' else c[0] for c in df.columns]
+            df.columns = [c[0] if c[1] == "" else c[0] for c in df.columns]
 
-        df = df.rename(columns={
-            "Date": "timestamp",
-            "Open": "open", "High": "high", "Low": "low",
-            "Close": "close", "Volume": "volume",
-        })
+        df = df.rename(
+            columns={
+                "Date": "timestamp",
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Volume": "volume",
+            }
+        )
         df["ticker"] = ticker
         df["company_name"] = company
         df["timestamp"] = pd.to_datetime(df["timestamp"])
@@ -89,7 +98,7 @@ def backfill_ticker(ticker: str, company: str, engine) -> int:
         df = df[[c for c in keep if c in df.columns]].dropna(subset=["close"])
 
         # Add this line to convert timestamps to standard strings
-        df["timestamp"] = df["timestamp"].dt.strftime('%Y-%m-%d %H:%M:%S')
+        df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
         records = df.to_dict("records")
         cols = [c for c in keep if c in df.columns]
@@ -99,11 +108,14 @@ def backfill_ticker(ticker: str, company: str, engine) -> int:
         )
 
         with engine.begin() as conn:
-            conn.execute(text(f"""
+            conn.execute(
+                text(f"""
                 INSERT INTO stock_prices ({', '.join(cols)})
                 VALUES ({placeholders})
                 ON CONFLICT(timestamp, ticker) DO UPDATE SET {update_clause}
-            """), records)
+            """),
+                records,
+            )
 
         date_min = df["timestamp"].min()[:10]
         date_max = df["timestamp"].max()[:10]
@@ -141,9 +153,12 @@ def main():
     with engine.connect() as conn:
         print("\n--- Post-backfill verification ---")
         for ticker in ["XLE", "EQT", "KMI"]:
-            row = conn.execute(text(
-                "SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM stock_prices WHERE ticker=:t"
-            ), {"t": ticker}).fetchone()
+            row = conn.execute(
+                text(
+                    "SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM stock_prices WHERE ticker=:t"
+                ),
+                {"t": ticker},
+            ).fetchone()
             print(f"  {ticker}: {str(row[0])[:10]} to {str(row[1])[:10]} ({row[2]:,} rows)")
 
 

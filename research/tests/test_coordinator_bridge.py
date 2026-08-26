@@ -3,12 +3,12 @@ Run test suites via subprocess and return results to Tauri
 Wrapper around test_coordinator using subprocess model
 """
 
+import asyncio
 import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Any
-import asyncio
+from typing import Any, Dict
 
 
 async def invoke_run_test_suite(suite_id: str) -> Dict[str, Any]:
@@ -42,7 +42,7 @@ async def _run_coordinator(method: str, params: Dict[str, Any]) -> Dict[str, Any
     This allows long-running tests to execute without blocking Tauri
     """
     project_root = Path(__file__).parent.parent.parent
-    
+
     python_code = f"""
 import json
 import sys
@@ -73,7 +73,7 @@ except Exception as e:
     print(json.dumps({{"success": False, "error": str(e), "traceback": traceback.format_exc()}}))
     sys.exit(1)
 """
-    
+
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
@@ -97,7 +97,7 @@ def _run_sync(python_code: str, project_root: str) -> Dict[str, Any]:
             timeout=600,  # 10 minutes max per test
             cwd=project_root,
         )
-        
+
         if result.returncode == 0:
             return json.loads(result.stdout)
         else:

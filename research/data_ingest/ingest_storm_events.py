@@ -12,12 +12,14 @@ The creation-date suffix changes whenever NCEI revises that year's data
 current filename per year must be discovered from the live directory listing,
 not constructed from a guessed date.
 """
+
+import gzip
 import os
 import re
-import gzip
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from datetime import datetime
+
 import pandas as pd
 import requests
 from dotenv import load_dotenv
@@ -40,7 +42,7 @@ CACHE_DIR = Path("data/cache/storm_events")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Matches e.g. StormEvents_details-ftp_v1.0_d2024_c20260421.csv.gz -> ('2024', '20260421')
-_FILENAME_RE = re.compile(r'StormEvents_details-ftp_v1\.0_d(\d{4})_c(\d{8})\.csv\.gz')
+_FILENAME_RE = re.compile(r"StormEvents_details-ftp_v1\.0_d(\d{4})_c(\d{8})\.csv\.gz")
 
 
 def get_current_filenames() -> dict:
@@ -99,10 +101,10 @@ def download_year(year: int, filename_map: dict = None) -> pd.DataFrame:
             df = pd.read_csv(gz, low_memory=False)
 
         df.columns = df.columns.str.strip().str.upper()
-        if 'BEGIN_DATE_TIME' in df.columns:
-            df['BEGIN_DATE_TIME'] = pd.to_datetime(df['BEGIN_DATE_TIME'], errors='coerce')
-        if 'END_DATE_TIME' in df.columns:
-            df['END_DATE_TIME'] = pd.to_datetime(df['END_DATE_TIME'], errors='coerce')
+        if "BEGIN_DATE_TIME" in df.columns:
+            df["BEGIN_DATE_TIME"] = pd.to_datetime(df["BEGIN_DATE_TIME"], errors="coerce")
+        if "END_DATE_TIME" in df.columns:
+            df["END_DATE_TIME"] = pd.to_datetime(df["END_DATE_TIME"], errors="coerce")
 
         df.to_parquet(cache_file)
         print(f"Cached {len(df)} storm events for {year}")
@@ -116,8 +118,10 @@ def download_range(start_year: int, end_year: int) -> pd.DataFrame:
     """Download multiple years of storm events."""
     filename_map = get_current_filenames()
     if filename_map:
-        print(f"NCEI directory has {len(filename_map)} years available "
-              f"({min(filename_map)}-{max(filename_map)})")
+        print(
+            f"NCEI directory has {len(filename_map)} years available "
+            f"({min(filename_map)}-{max(filename_map)})"
+        )
 
     all_data = []
     for year in range(start_year, end_year + 1):
@@ -138,11 +142,11 @@ def parse_damage_value(val):
     if pd.isna(val):
         return None
     s = str(val).strip().upper()
-    if s in ('', 'NAN'):
+    if s in ("", "NAN"):
         return None
-    if s == '0' or s == '0.00':
+    if s == "0" or s == "0.00":
         return 0.0
-    multipliers = {'K': 1e3, 'M': 1e6, 'B': 1e9}
+    multipliers = {"K": 1e3, "M": 1e6, "B": 1e9}
     suffix = s[-1]
     if suffix in multipliers:
         try:
@@ -163,27 +167,35 @@ def normalize_and_save(df: pd.DataFrame) -> int:
 
     df.columns = df.columns.str.strip().str.upper()
 
-    df_normalized = pd.DataFrame({
-        'event_id': df['EPISODE_ID'].astype(str) + '_' + df['EVENT_ID'].astype(str),
-        'state': df.get('STATE', ''),
-        'county': df.get('COUNTY_FIPS', ''),
-        'event_type': df.get('EVENT_TYPE', ''),
-        'begin_date': df.get('BEGIN_DATE_TIME'),
-        'end_date': df.get('END_DATE_TIME'),
-        'property_damage': df.get('DAMAGE_PROPERTY', pd.Series(dtype=object)).apply(parse_damage_value),
-        'crop_damage': df.get('DAMAGE_CROPS', pd.Series(dtype=object)).apply(parse_damage_value),
-        'injuries_direct': pd.to_numeric(df.get('INJURIES_DIRECT', 0), errors='coerce'),
-        'deaths_direct': pd.to_numeric(df.get('DEATHS_DIRECT', 0), errors='coerce'),
-        'magnitude': pd.to_numeric(df.get('MAGNITUDE', None), errors='coerce'),
-        'magnitude_type': df.get('MAGNITUDE_TYPE', ''),
-        'timestamp': datetime.now()
-    })
+    df_normalized = pd.DataFrame(
+        {
+            "event_id": df["EPISODE_ID"].astype(str) + "_" + df["EVENT_ID"].astype(str),
+            "state": df.get("STATE", ""),
+            "county": df.get("COUNTY_FIPS", ""),
+            "event_type": df.get("EVENT_TYPE", ""),
+            "begin_date": df.get("BEGIN_DATE_TIME"),
+            "end_date": df.get("END_DATE_TIME"),
+            "property_damage": df.get("DAMAGE_PROPERTY", pd.Series(dtype=object)).apply(
+                parse_damage_value
+            ),
+            "crop_damage": df.get("DAMAGE_CROPS", pd.Series(dtype=object)).apply(
+                parse_damage_value
+            ),
+            "injuries_direct": pd.to_numeric(df.get("INJURIES_DIRECT", 0), errors="coerce"),
+            "deaths_direct": pd.to_numeric(df.get("DEATHS_DIRECT", 0), errors="coerce"),
+            "magnitude": pd.to_numeric(df.get("MAGNITUDE", None), errors="coerce"),
+            "magnitude_type": df.get("MAGNITUDE_TYPE", ""),
+            "timestamp": datetime.now(),
+        }
+    )
 
-    df_normalized = df_normalized.drop_duplicates(subset=['event_id'])
+    df_normalized = df_normalized.drop_duplicates(subset=["event_id"])
 
-    for col in ['begin_date', 'end_date', 'timestamp']:
+    for col in ["begin_date", "end_date", "timestamp"]:
         if col in df_normalized.columns:
-            df_normalized[col] = pd.to_datetime(df_normalized[col], errors='coerce').dt.tz_localize(None)
+            df_normalized[col] = pd.to_datetime(df_normalized[col], errors="coerce").dt.tz_localize(
+                None
+            )
 
     def _to_py(val):
         if pd.isna(val):
@@ -199,44 +211,58 @@ def normalize_and_save(df: pd.DataFrame) -> int:
         with engine.begin() as conn:
             if backend == "sqlite":
                 cols = [
-                    'event_id', 'state', 'county', 'event_type', 'begin_date', 'end_date',
-                    'property_damage', 'crop_damage', 'injuries_direct', 'deaths_direct',
-                    'magnitude', 'magnitude_type', 'timestamp'
+                    "event_id",
+                    "state",
+                    "county",
+                    "event_type",
+                    "begin_date",
+                    "end_date",
+                    "property_damage",
+                    "crop_damage",
+                    "injuries_direct",
+                    "deaths_direct",
+                    "magnitude",
+                    "magnitude_type",
+                    "timestamp",
                 ]
                 records = []
                 for row in df_normalized.itertuples(index=False):
-                    records.append({
-                        'event_id': row.event_id,
-                        'state': row.state,
-                        'county': row.county,
-                        'event_type': row.event_type,
-                        'begin_date': _to_py(row.begin_date),
-                        'end_date': _to_py(row.end_date),
-                        'property_damage': None if pd.isna(row.property_damage) else float(row.property_damage),
-                        'crop_damage': None if pd.isna(row.crop_damage) else float(row.crop_damage),
-                        'injuries_direct': None if pd.isna(row.injuries_direct) else int(row.injuries_direct),
-                        'deaths_direct': None if pd.isna(row.deaths_direct) else int(row.deaths_direct),
-                        'magnitude': None if pd.isna(row.magnitude) else float(row.magnitude),
-                        'magnitude_type': row.magnitude_type,
-                        'timestamp': _to_py(row.timestamp)
-                    })
+                    records.append(
+                        {
+                            "event_id": row.event_id,
+                            "state": row.state,
+                            "county": row.county,
+                            "event_type": row.event_type,
+                            "begin_date": _to_py(row.begin_date),
+                            "end_date": _to_py(row.end_date),
+                            "property_damage": (
+                                None if pd.isna(row.property_damage) else float(row.property_damage)
+                            ),
+                            "crop_damage": (
+                                None if pd.isna(row.crop_damage) else float(row.crop_damage)
+                            ),
+                            "injuries_direct": (
+                                None if pd.isna(row.injuries_direct) else int(row.injuries_direct)
+                            ),
+                            "deaths_direct": (
+                                None if pd.isna(row.deaths_direct) else int(row.deaths_direct)
+                            ),
+                            "magnitude": None if pd.isna(row.magnitude) else float(row.magnitude),
+                            "magnitude_type": row.magnitude_type,
+                            "timestamp": _to_py(row.timestamp),
+                        }
+                    )
                 placeholders = ", ".join([f":{c}" for c in cols])
-                update_clause = ", ".join([f"{c}=excluded.{c}" for c in cols if c != 'event_id'])
-                stmt = text(
-                    f"""
+                update_clause = ", ".join([f"{c}=excluded.{c}" for c in cols if c != "event_id"])
+                stmt = text(f"""
                     INSERT INTO storm_events ({', '.join(cols)})
                     VALUES ({placeholders})
                     ON CONFLICT(event_id) DO UPDATE SET {update_clause}
-                    """
-                )
+                    """)
                 conn.execute(stmt, records)
             else:
                 df_normalized.to_sql(
-                    'storm_events',
-                    conn,
-                    if_exists='append',
-                    index=False,
-                    method='multi'
+                    "storm_events", conn, if_exists="append", index=False, method="multi"
                 )
 
         print(f"Saved {len(df_normalized)} storm event records to database")

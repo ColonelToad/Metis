@@ -32,14 +32,16 @@ Issue codes chosen deliberately, not "everything energy-adjacent":
 Deliberately excluded: NAT (Natural Resources), TRA (Transportation),
 TRD (Trade) -- all real but broad enough to be mostly noise if included.
 """
+
 import os
 import sys
-from pathlib import Path
 from datetime import datetime
-import requests
+from pathlib import Path
+
 import pandas as pd
-from sqlalchemy import create_engine, text
+import requests
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from research.common import runtime_config as rc
@@ -62,7 +64,9 @@ def fetch_filings_for_code(code: str) -> list:
 
     page_num = 1
     while url:
-        resp = requests.get(url, headers=HEADERS, params=params if page_num == 1 else None, timeout=30)
+        resp = requests.get(
+            url, headers=HEADERS, params=params if page_num == 1 else None, timeout=30
+        )
         resp.raise_for_status()
         data = resp.json()
         results.extend(data.get("results", []))
@@ -104,14 +108,16 @@ def normalize_filing(raw: dict) -> tuple:
         )
         gov_entities = ", ".join(g.get("name", "") for g in activity.get("government_entities", []))
 
-        activity_rows.append({
-            "filing_uuid": raw["filing_uuid"],
-            "general_issue_code": activity.get("general_issue_code"),
-            "general_issue_code_display": activity.get("general_issue_code_display"),
-            "description": activity.get("description"),
-            "lobbyist_names": lobbyist_names,
-            "government_entities": gov_entities,
-        })
+        activity_rows.append(
+            {
+                "filing_uuid": raw["filing_uuid"],
+                "general_issue_code": activity.get("general_issue_code"),
+                "general_issue_code_display": activity.get("general_issue_code_display"),
+                "description": activity.get("description"),
+                "lobbyist_names": lobbyist_names,
+                "government_entities": gov_entities,
+            }
+        )
 
     return filing_row, activity_rows
 
@@ -165,18 +171,24 @@ def save_filings(filing_rows: list, activity_rows: list, engine):
     with engine.begin() as conn:
         f_cols = list(filings_df.columns)
         f_update = ", ".join(f"{c}=excluded.{c}" for c in f_cols if c != "filing_uuid")
-        conn.execute(text(f"""
+        conn.execute(
+            text(f"""
             INSERT INTO lobbying_filings ({', '.join(f_cols)})
             VALUES ({', '.join(':' + c for c in f_cols)})
             ON CONFLICT(filing_uuid) DO UPDATE SET {f_update}
-        """), filings_df.to_dict("records"))
+        """),
+            filings_df.to_dict("records"),
+        )
 
         if not activities_df.empty:
             a_cols = list(activities_df.columns)
-            conn.execute(text(f"""
+            conn.execute(
+                text(f"""
                 INSERT OR IGNORE INTO lobbying_activities ({', '.join(a_cols)})
                 VALUES ({', '.join(':' + c for c in a_cols)})
-            """), activities_df.to_dict("records"))
+            """),
+                activities_df.to_dict("records"),
+            )
 
     return len(filings_df), len(activities_df)
 
@@ -184,8 +196,10 @@ def save_filings(filing_rows: list, activity_rows: list, engine):
 def main():
     rc.log_mode("LDA Lobbying Disclosures")
     if not LDA_API_KEY:
-        print("LDA_API_KEY not set -- aborting (anonymous access is rate-limited too "
-              "aggressively for a full historical pull)")
+        print(
+            "LDA_API_KEY not set -- aborting (anonymous access is rate-limited too "
+            "aggressively for a full historical pull)"
+        )
         return 0
 
     engine = create_engine(DB_URL)
@@ -196,8 +210,10 @@ def main():
         for raw in fetch_filings_for_code(code):
             all_raw[raw["filing_uuid"]] = raw
 
-    print(f"\n{len(all_raw)} unique filings across {len(ISSUE_CODES)} issue codes "
-          f"(deduped -- a filing touching multiple chosen codes was only fetched once)")
+    print(
+        f"\n{len(all_raw)} unique filings across {len(ISSUE_CODES)} issue codes "
+        f"(deduped -- a filing touching multiple chosen codes was only fetched once)"
+    )
 
     filing_rows, activity_rows = [], []
     for raw in all_raw.values():

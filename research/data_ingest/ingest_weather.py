@@ -9,10 +9,11 @@ Usage (REAL mode):
 
 In DEV mode, skips API calls and prints a notice.
 """
+
 import argparse
 import os
-from datetime import datetime, date, timezone, timedelta
-from typing import List, Dict, Any
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List
 
 import pandas as pd
 import requests
@@ -74,15 +75,18 @@ def fetch_weather(location: str, lat: float, lon: float, start: date, end: date)
         return pd.DataFrame()
 
     df = pd.DataFrame(daily)
-    df.rename(columns={
-        "time": "date",
-        "temperature_2m_mean": "temp_mean_c",
-        "temperature_2m_max": "temp_max_c",
-        "temperature_2m_min": "temp_min_c",
-        "precipitation_sum": "precip_mm",
-        "snowfall_sum": "snow_mm",
-        "wind_speed_10m_max": "wind_kmh",
-    }, inplace=True)
+    df.rename(
+        columns={
+            "time": "date",
+            "temperature_2m_mean": "temp_mean_c",
+            "temperature_2m_max": "temp_max_c",
+            "temperature_2m_min": "temp_min_c",
+            "precipitation_sum": "precip_mm",
+            "snowfall_sum": "snow_mm",
+            "wind_speed_10m_max": "wind_kmh",
+        },
+        inplace=True,
+    )
 
     # Unit conversions
     df["temp_mean_f"] = df["temp_mean_c"].apply(to_f)
@@ -179,7 +183,7 @@ def upsert_weather(engine, df: pd.DataFrame) -> None:
 def main(start: str = None, end: str = None) -> None:
     """
     Ingest weather data from Open-Meteo.
-    
+
     Args:
         start: Start date in ISO format (YYYY-MM-DD). Defaults to 7 days ago.
         end: End date in ISO format (YYYY-MM-DD). Defaults to today.
@@ -217,6 +221,8 @@ def main(start: str = None, end: str = None) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest weather data from Open-Meteo")
     parser.add_argument("--start", default="2023-01-01", help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--end", default=datetime.now(timezone.utc).date().isoformat(), help="End date (YYYY-MM-DD)")
+    parser.add_argument(
+        "--end", default=datetime.now(timezone.utc).date().isoformat(), help="End date (YYYY-MM-DD)"
+    )
     args = parser.parse_args()
     main(args.start, args.end)

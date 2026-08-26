@@ -32,6 +32,7 @@ Run from C:\\Users\\legot\\Metis:
     python research/data_ingest/ingest_congress_bills_expanded.py --congress 119  # single session
     python research/data_ingest/ingest_congress_bills_expanded.py --start-congress 107 --end-congress 119  # range
 """
+
 import argparse
 import os
 import sys
@@ -42,8 +43,8 @@ from typing import Optional
 
 import pandas as pd
 import requests
-from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from research.common import runtime_config as rc
@@ -57,10 +58,29 @@ BASE_URL = "https://api.congress.gov/v3"
 # Keeps the detail-endpoint call budget manageable -- we only fetch CRS Policy
 # Area for bills that pass this gate, not for every renaming or appropriations bill.
 ENERGY_KEYWORDS = [
-    "natural gas", "lng", "pipeline", "energy", "infrastructure",
-    "methane", "gas", "oil", "climate", "utility", "transmission", "grid",
-    "nuclear", "renewable", "carbon", "emission", "fossil", "refinery",
-    "electricity", "power", "storage", "export terminal", "liquefied",
+    "natural gas",
+    "lng",
+    "pipeline",
+    "energy",
+    "infrastructure",
+    "methane",
+    "gas",
+    "oil",
+    "climate",
+    "utility",
+    "transmission",
+    "grid",
+    "nuclear",
+    "renewable",
+    "carbon",
+    "emission",
+    "fossil",
+    "refinery",
+    "electricity",
+    "power",
+    "storage",
+    "export terminal",
+    "liquefied",
 ]
 
 # The CRS Policy Area values that constitute "energy related" -- these are the
@@ -74,6 +94,7 @@ ENERGY_POLICY_AREAS = {
     "Public Lands and Natural Resources",
     "Commerce",
 }
+
 
 def is_energy_keyword_match(title: str, summary: str = "") -> tuple:
     blob = f"{title} {summary}".lower()
@@ -94,11 +115,14 @@ def fetch_bill_list_page(url: str, params: dict, retries: int = 3) -> dict:
             resp.raise_for_status()
             return resp.json()
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-            print(f"    [!] Timeout/Connection error on list fetch (attempt {attempt + 1}/{retries}).")
+            print(
+                f"    [!] Timeout/Connection error on list fetch (attempt {attempt + 1}/{retries})."
+            )
             if attempt < retries - 1:
                 time.sleep(5)  # Wait 5 seconds before trying again
             else:
-                raise # Fail completely if out of retries
+                raise  # Fail completely if out of retries
+
 
 def fetch_all_bills_for_congress(congress: int) -> list:
     """Paginate through all bills for a single Congress session."""
@@ -136,7 +160,9 @@ def fetch_all_bills_for_congress(congress: int) -> list:
     return all_bills
 
 
-def fetch_policy_area(congress: int, bill_type: str, bill_number: str, retries: int = 3) -> Optional[str]:
+def fetch_policy_area(
+    congress: int, bill_type: str, bill_number: str, retries: int = 3
+) -> Optional[str]:
     """
     Fetch the CRS-assigned Policy Area from the bill detail endpoint.
     Includes a retry loop to prevent single-call timeouts from crashing the script.
@@ -145,7 +171,7 @@ def fetch_policy_area(congress: int, bill_type: str, bill_number: str, retries: 
     params = {"format": "json"}
     if CONGRESS_API_KEY:
         params["api_key"] = CONGRESS_API_KEY
-        
+
     for attempt in range(retries):
         try:
             # Increased timeout to 60 seconds
@@ -197,11 +223,11 @@ def process_congress(congress: int, engine) -> int:
         # Fallback date if actionDate is missing in legacy JSON
         # Fallback date if actionDate is missing in legacy JSON
         action_date = latest_action.get("actionDate")
-        
+
         # 1. First fallback: the date the bill was introduced
         if not action_date and bill.get("introducedDate"):
             action_date = str(bill.get("introducedDate"))[:10]
-            
+
         # 2. Final fallback: the IT system update date
         if not action_date and bill.get("updateDate"):
             action_date = str(bill.get("updateDate"))[:10]
@@ -212,25 +238,29 @@ def process_congress(congress: int, engine) -> int:
         else:
             is_energy = keyword_hit
 
-        records.append({
-            "congress": congress,
-            "bill_type": bill_type,
-            "bill_number": bill_number,
-            "title": title,
-            "origin_chamber": bill.get("originChamber", ""),
-            "latest_action_date": action_date,
-            "latest_action_text": latest_action.get("text", ""),
-            "update_date": bill.get("updateDate"),
-            "url": bill.get("url", ""),
-            "policy_area": policy_area,
-            "is_energy_related": int(is_energy),
-            "matched_keywords": matched_keywords,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        records.append(
+            {
+                "congress": congress,
+                "bill_type": bill_type,
+                "bill_number": bill_number,
+                "title": title,
+                "origin_chamber": bill.get("originChamber", ""),
+                "latest_action_date": action_date,
+                "latest_action_text": latest_action.get("text", ""),
+                "update_date": bill.get("updateDate"),
+                "url": bill.get("url", ""),
+                "policy_area": policy_area,
+                "is_energy_related": int(is_energy),
+                "matched_keywords": matched_keywords,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     df = pd.DataFrame(records)
     energy_count = df["is_energy_related"].sum()
-    print(f"[Congress {congress}] {len(df)} bills, {energy_count} energy-related, {detail_calls} detail calls")
+    print(
+        f"[Congress {congress}] {len(df)} bills, {energy_count} energy-related, {detail_calls} detail calls"
+    )
 
     upsert_bills(df, engine)
     return len(df)
@@ -269,8 +299,7 @@ def upsert_bills(df: pd.DataFrame, engine):
     cols = list(df.columns)
     placeholders = ", ".join(f":{c}" for c in cols)
     update_clause = ", ".join(
-        f"{c}=excluded.{c}" for c in cols
-        if c not in ("congress", "bill_type", "bill_number")
+        f"{c}=excluded.{c}" for c in cols if c not in ("congress", "bill_type", "bill_number")
     )
     stmt = text(f"""
         INSERT INTO congress_bills ({', '.join(cols)})
@@ -304,9 +333,12 @@ def main(start_congress: int = 107, end_congress: int = 119, single: int = None)
 
     with engine.connect() as conn:
         for congress in [107, 113, 119]:
-            row = conn.execute(text(
-                "SELECT COUNT(*), SUM(is_energy_related) FROM congress_bills WHERE congress=:c"
-            ), {"c": congress}).fetchone()
+            row = conn.execute(
+                text(
+                    "SELECT COUNT(*), SUM(is_energy_related) FROM congress_bills WHERE congress=:c"
+                ),
+                {"c": congress},
+            ).fetchone()
             print(f"  Congress {congress}: {row[0]:,} bills, {row[1] or 0} energy-related")
 
     return total
@@ -314,12 +346,24 @@ def main(start_congress: int = 107, end_congress: int = 119, single: int = None)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--congress", type=int, default=None,
-                        help="Single Congress session to fetch (overrides --start/--end)")
-    parser.add_argument("--start-congress", type=int, default=107,
-                        help="First Congress to fetch (default: 107, matching lobbying data depth)")
-    parser.add_argument("--end-congress", type=int, default=119,
-                        help="Last Congress to fetch (default: 119, current)")
+    parser.add_argument(
+        "--congress",
+        type=int,
+        default=None,
+        help="Single Congress session to fetch (overrides --start/--end)",
+    )
+    parser.add_argument(
+        "--start-congress",
+        type=int,
+        default=107,
+        help="First Congress to fetch (default: 107, matching lobbying data depth)",
+    )
+    parser.add_argument(
+        "--end-congress",
+        type=int,
+        default=119,
+        help="Last Congress to fetch (default: 119, current)",
+    )
     args = parser.parse_args()
     main(
         start_congress=args.start_congress,

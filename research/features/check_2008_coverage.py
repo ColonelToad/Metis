@@ -5,9 +5,11 @@ Coverage check for the 2008 GFC pilot: which sources have real data back to
 Run from C:\\Users\\legot\\Metis:
     python research/features/check_2008_coverage.py
 """
+
 import os
-from sqlalchemy import create_engine, text
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 load_dotenv()
 DB_URL = os.getenv("DB_URL", "sqlite:///data/metis.db")

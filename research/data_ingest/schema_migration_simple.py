@@ -2,8 +2,9 @@
 Database Schema Migration - Simple Version
 Creates tables for new data sources in SQLite
 """
-import sqlite3
+
 import os
+import sqlite3
 
 DB_PATH = "data/metis.db"
 
@@ -188,37 +189,38 @@ CREATE TABLE IF NOT EXISTS grid_lmp (
 CREATE INDEX IF NOT EXISTS idx_grid_lmp_timestamp_iso_compat ON grid_lmp(timestamp, iso);
 """
 
+
 def create_schema():
     """Create all tables if they don't exist"""
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        
+
         # Split SQL by semicolons and execute each statement
-        for statement in SCHEMA_SQL.split(';'):
+        for statement in SCHEMA_SQL.split(";"):
             if statement.strip():
                 cursor.execute(statement)
-        
+
         conn.commit()
-        
+
         # Verify tables created
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
-        )
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
         tables = cursor.fetchall()
-        
+
         print(f"\n✓ All tables in database:")
         for table in tables:
             print(f"  - {table[0]}")
-        
+
         conn.close()
         return True
-        
+
     except Exception as e:
         print(f"✗ Error creating schema: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 if __name__ == "__main__":
     print(f"Creating new data source tables in {DB_PATH}...")

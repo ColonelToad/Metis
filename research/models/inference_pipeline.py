@@ -7,22 +7,22 @@ Interfaces with Rust execution engine via SignalClient.
 
 Usage:
     from inference_pipeline import DualLSTMInference
-    
+
     pipeline = DualLSTMInference(model_path="models/dual_lstm_v1.0.h5")
     signal = pipeline.predict(daily_features, low_freq_features, sparse_features)
     pipeline.send_to_execution(signal)
 """
 
-import os
 import json
+import os
+import pickle
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, Tuple, Optional, Any
-import uuid
-import pickle
-
 import tensorflow as tf
 from sklearn.preprocessing import StandardScaler
 
@@ -32,17 +32,18 @@ except ImportError:
     # Package-style import (research.models.inference_pipeline) — the
     # top-level name isn't on sys.path in that context.
     from research.signal_client import SignalClient, create_signal, EngineRouter
+
 from loguru import logger
 
 
 class DualLSTMInference:
     """
     Production inference engine for Dual LSTM + Fusion model.
-    
+
     Loads pre-trained model and scalers, generates predictions,
     and sends signals to Rust execution engine.
     """
-    
+
     def __init__(
         self,
         model_path: str = "models/dual_lstm_v1.0.h5",
@@ -87,6 +88,7 @@ class DualLSTMInference:
         logger.info(f"Loading config from {config_path}")
         with open(config_path) as f:
             import yaml
+
             self.config = yaml.safe_load(f)
 
         # The yaml's feature lists may have drifted since training (e.g. a
@@ -102,7 +104,7 @@ class DualLSTMInference:
             self.scaler_low_freq,
             self.scaler_sparse,
         ) = self._load_or_fit_scalers(scalers_path)
-        
+
         # Signal routing: primary C++ engine with automatic failover to the
         # Rust secondary (see EngineRouter).
         self.engine_router = EngineRouter(
@@ -112,7 +114,7 @@ class DualLSTMInference:
             fallback_port=fallback_port,
         )
         self.connected = False
-        
+
         logger.info(f"DualLSTM pipeline initialized (threshold={threshold})")
 
     def _reconcile_feature_lists(self, model_path: str) -> None:
@@ -163,10 +165,7 @@ class DualLSTMInference:
             isinstance(loaded, tuple)
             and len(loaded) == 3
             and all(hasattr(s, "transform") for s in loaded)
-            and all(
-                getattr(s, "n_features_in_", None) == n
-                for s, n in zip(loaded, expected)
-            )
+            and all(getattr(s, "n_features_in_", None) == n for s, n in zip(loaded, expected))
         ):
             logger.info(f"Scalers loaded from {scalers_path}")
             return loaded
@@ -204,15 +203,13 @@ class DualLSTMInference:
             df = pd.read_parquet(base / split_file)
             missing = [c for c in cols if c not in df.columns]
             if missing:
-                raise ValueError(
-                    f"{split_file} lacks required columns: {missing[:5]}..."
-                )
+                raise ValueError(f"{split_file} lacks required columns: {missing[:5]}...")
             X = df[cols].replace([np.inf, -np.inf], np.nan).dropna()
             scaler = StandardScaler().fit(X)
             logger.info(f"Fitted {feature_key} scaler on {len(X)} train rows")
             fitted.append(scaler)
         return tuple(fitted)
-    
+
     def preprocess_track(
         self,
         df: pd.DataFrame,
@@ -222,30 +219,28 @@ class DualLSTMInference:
     ) -> np.ndarray:
         """
         Preprocess a single frequency track into sequences.
-        
+
         Args:
             df: DataFrame with raw features
             scaler: StandardScaler fitted on training data
             feature_cols: List of column names to use
             lookback: Sequence length (default 20 days)
-        
+
         Returns:
             Sequences array of shape (1, lookback, num_features)
         """
         # Get last `lookback` rows
         if len(df) < lookback:
-            raise ValueError(
-                f"Not enough data. Got {len(df)} rows, need ≥{lookback}"
-            )
-        
+            raise ValueError(f"Not enough data. Got {len(df)} rows, need ≥{lookback}")
+
         recent_data = df[feature_cols].iloc[-lookback:].values
-        
+
         # Scale using pre-fitted scaler
         scaled_data = scaler.transform(recent_data)
-        
+
         # Return as sequence (add batch dimension)
         return np.expand_dims(scaled_data, axis=0)  # Shape: (1, 20, num_features)
-    
+
     def predict(
         self,
         daily_df: pd.DataFrame,
@@ -254,12 +249,12 @@ class DualLSTMInference:
     ) -> Dict[str, Any]:
         """
         Generate prediction from model.
-        
+
         Args:
             daily_df: Daily features dataframe (must have date index)
             low_freq_df: Low-frequency features dataframe
             sparse_df: Sparse event features dataframe
-        
+
         Returns:
             Dictionary with prediction details:
                 {
@@ -271,24 +266,25 @@ class DualLSTMInference:
                 }
         """
         logger.info("Generating prediction...")
-        
+
         # Get feature column names from config
         daily_cols = self.config["daily_features"]
         low_freq_cols = self.config["low_freq_features"]
         sparse_cols = self.config["sparse_features"]
         lookback = self.config.get("lookback", 20)
-        
+
         # Preprocess each track
         X_daily = self.preprocess_track(daily_df, self.scaler_daily, daily_cols, lookback)
-        X_low_freq = self.preprocess_track(low_freq_df, self.scaler_low_freq, low_freq_cols, lookback)
+        X_low_freq = self.preprocess_track(
+            low_freq_df, self.scaler_low_freq, low_freq_cols, lookback
+        )
         X_sparse = self.preprocess_track(sparse_df, self.scaler_sparse, sparse_cols, lookback)
-        
+
         # Forward pass
-        prob = self.model.predict(
-            [X_daily, X_low_freq, X_sparse],
-            verbose=0
-        )[0][0]  # Shape: (1, 1) -> scalar
-        
+        prob = self.model.predict([X_daily, X_low_freq, X_sparse], verbose=0)[0][
+            0
+        ]  # Shape: (1, 1) -> scalar
+
         # Determine direction
         if prob > self.threshold:
             direction = "Long"
@@ -296,22 +292,25 @@ class DualLSTMInference:
         else:
             direction = "Neutral"
             confidence = 1.0 - float(prob)  # Confidence in down direction
-        
+
         result = {
             "probability": float(prob),
             "direction": direction,
             "confidence": confidence,
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            "lookback_end_date": str(daily_df.index[-1].date()) if hasattr(daily_df.index[-1], 'date') else str(daily_df.iloc[-1, 0]),
+            "lookback_end_date": (
+                str(daily_df.index[-1].date())
+                if hasattr(daily_df.index[-1], "date")
+                else str(daily_df.iloc[-1, 0])
+            ),
         }
-        
+
         logger.info(
-            f"Prediction: {direction} @ {prob:.1%} confidence "
-            f"(threshold={self.threshold:.2f})"
+            f"Prediction: {direction} @ {prob:.1%} confidence " f"(threshold={self.threshold:.2f})"
         )
-        
+
         return result
-    
+
     def prediction_to_signal(
         self,
         prediction: Dict[str, Any],
@@ -321,13 +320,13 @@ class DualLSTMInference:
     ) -> Dict[str, Any]:
         """
         Convert model prediction to trading signal format.
-        
+
         Args:
             prediction: Output from predict()
             symbol: Trading instrument
             target_quantity: Number of contracts
             horizon_minutes: Time window for execution
-        
+
         Returns:
             Signal dictionary ready for execution engine
         """
@@ -340,10 +339,10 @@ class DualLSTMInference:
             horizon_minutes=horizon_minutes,
             model_version=self.config.get("version", "v1.0"),
             features_used=self.config.get("daily_features", [])
-                          + self.config.get("low_freq_features", [])
-                          + self.config.get("sparse_features", []),
+            + self.config.get("low_freq_features", [])
+            + self.config.get("sparse_features", []),
         )
-        
+
         logger.info(f"Signal created: {signal['signal_id']}")
         return signal
 
@@ -379,7 +378,7 @@ class DualLSTMInference:
     ) -> Dict[str, Any]:
         """
         End-to-end: predict → convert → send to execution.
-        
+
         Args:
             daily_df: Daily features
             low_freq_df: Low-frequency features
@@ -387,24 +386,24 @@ class DualLSTMInference:
             symbol: Trading symbol
             target_quantity: Contracts to trade
             dry_run: If True, don't actually send signal
-        
+
         Returns:
             Combined result with prediction and execution response
         """
-        logger.info("="*70)
+        logger.info("=" * 70)
         logger.info("END-TO-END INFERENCE PIPELINE")
-        logger.info("="*70)
-        
+        logger.info("=" * 70)
+
         # Step 1: Predict
         prediction = self.predict(daily_df, low_freq_df, sparse_df)
-        
+
         # Step 2: Convert to signal
         signal = self.prediction_to_signal(
             prediction,
             symbol=symbol,
             target_quantity=target_quantity,
         )
-        
+
         # Step 3: Send (or dry run)
         execution_response = None
         if not dry_run:
@@ -412,66 +411,66 @@ class DualLSTMInference:
         else:
             logger.info("[DRY RUN] Signal NOT sent to execution engine")
             logger.info(f"Would send: {signal}")
-        
+
         result = {
             "prediction": prediction,
             "signal": signal,
             "execution_response": execution_response,
             "dry_run": dry_run,
         }
-        
-        logger.info("="*70)
+
+        logger.info("=" * 70)
         return result
 
 
 def load_daily_data(csv_path: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Load feature dataframes from parquet files.
-    
+
     Assumes standard structure:
         data/features/
         ├── test_daily_features.parquet
         ├── test_low_freq_features.parquet
         └── test_sparse_features.parquet
-    
+
     Args:
         csv_path: Base path to data/features directory
-    
+
     Returns:
         Tuple of (daily_df, low_freq_df, sparse_df)
     """
     base = Path(csv_path)
-    
+
     daily_df = pd.read_parquet(base / "test_daily_features.parquet")
     low_freq_df = pd.read_parquet(base / "test_low_freq_features.parquet")
     sparse_df = pd.read_parquet(base / "test_sparse_features.parquet")
-    
+
     # Ensure date column and set as index if exists
     for df in [daily_df, low_freq_df, sparse_df]:
         if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"])
             df.set_index("date", inplace=True)
-    
+
     return daily_df, low_freq_df, sparse_df
 
 
 if __name__ == "__main__":
     import sys
-    
+
     # Example: Run inference on test set
     logger.info("Dual LSTM + Fusion Model - Inference Pipeline")
     logger.info("=" * 70)
-    
+
     # Initialize pipeline
     pipeline = DualLSTMInference(
         model_path="models/dual_lstm_v1.0.h5",
         scalers_path="models/scalers_v1.0.pkl",
         config_path="config/model_config.yaml",
     )
-    
+
     # Load test data
     daily_df, low_freq_df, sparse_df = load_daily_data("data/features")
-    
+
     # Generate prediction
     result = pipeline.predict_and_trade(
         daily_df,
@@ -480,7 +479,7 @@ if __name__ == "__main__":
         target_quantity=10.0,
         dry_run=False,  # Set to True to skip execution engine send
     )
-    
+
     logger.info(f"\nPrediction: {result['prediction']}")
     logger.info(f"Signal ID: {result['signal']['signal_id']}")
     if result["execution_response"]:

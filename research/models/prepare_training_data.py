@@ -1,11 +1,14 @@
-import pandas as pd
 import os
+
+import pandas as pd
 
 # Paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 # Build paths relative to the script's location
-weather_path = os.path.join(script_dir, "..", "data", "processed", "weather_features_3months.parquet")
+weather_path = os.path.join(
+    script_dir, "..", "data", "processed", "weather_features_3months.parquet"
+)
 tick_data_path = os.path.join(script_dir, "..", "data", "tick_data", "NGZ24_sample.csv")
 output_path = os.path.join(script_dir, "..", "data", "processed", "training_data.parquet")
 print(f"Current working directory: {os.getcwd()}")
@@ -23,11 +26,11 @@ df_merged = pd.merge_asof(
     df_weather.sort_values("timestamp"),
     left_on="timestamp_hour",
     right_on="timestamp",
-    direction="backward"
+    direction="backward",
 )
 
 # Drop helper columns
-df_merged = df_merged.drop(columns=["timestamp_hour"]) 
+df_merged = df_merged.drop(columns=["timestamp_hour"])
 
 # Save merged training data
 df_merged.to_parquet(output_path)

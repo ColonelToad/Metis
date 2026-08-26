@@ -5,14 +5,15 @@ Outputs:
 - cProfile stats saved to profiling/features_profile.txt
 - Peak memory via tracemalloc
 """
-import os
-import time
+
 import cProfile
+import os
 import pstats
+import time
 import tracemalloc
 from datetime import datetime
 
-from research.features.engineer_features import FeatureEngineer, DB_URL
+from research.features.engineer_features import DB_URL, FeatureEngineer
 
 OUTPUT_DIR = "profiling"
 PROFILE_OUT = os.path.join(OUTPUT_DIR, "features_profile.txt")
@@ -40,7 +41,9 @@ def main():
     df, t_eia = time_section("load_eia_features", lambda: fe.load_eia_features(df))
     df, t_fred = time_section("load_fred_features", lambda: fe.load_fred_features(df))
     df, t_bls = time_section("load_bls_ppi_features", lambda: fe.load_bls_ppi_features(df))
-    df, t_census = time_section("load_census_permit_features", lambda: fe.load_census_permit_features(df))
+    df, t_census = time_section(
+        "load_census_permit_features", lambda: fe.load_census_permit_features(df)
+    )
     df, t_cong = time_section("load_congress_features", lambda: fe.load_congress_features(df))
 
     # full engineer run (re-runs loaders internally, for total)
@@ -54,7 +57,9 @@ def main():
         ps = pstats.Stats(pr, stream=f).sort_stats("cumtime")
         ps.print_stats(50)
         f.write("\n\n[PROFILE] Timings (s):\n")
-        f.write(f"price={t_price:.3f}, eia={t_eia:.3f}, fred={t_fred:.3f}, bls={t_bls:.3f}, census={t_census:.3f}, congress={t_cong:.3f}, total={t_total:.3f}\n")
+        f.write(
+            f"price={t_price:.3f}, eia={t_eia:.3f}, fred={t_fred:.3f}, bls={t_bls:.3f}, census={t_census:.3f}, congress={t_cong:.3f}, total={t_total:.3f}\n"
+        )
         f.write(f"peak_memory={peak/1e6:.1f} MB\n")
 
     print(f"[PROFILE] Saved cProfile to {PROFILE_OUT}")

@@ -156,11 +156,7 @@ fn spawn_pipeline(state: Arc<AppState>, job_id: String) {
         match orchestrator.run_pipeline(job_id.clone(), mode).await {
             Ok(result) => {
                 info!("[{}] Pipeline completed successfully", job_id);
-                info!(
-                    "[{}] Generated {} signals",
-                    job_id,
-                    result.signals.len()
-                );
+                info!("[{}] Generated {} signals", job_id, result.signals.len());
             }
             Err(e) => {
                 error!("[{}] Pipeline failed: {}", job_id, e);

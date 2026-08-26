@@ -5,8 +5,8 @@ This shows how the cache decorator works without needing real API calls.
 
 import sys
 import time
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
 
 # Add workspace root
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -70,7 +70,9 @@ def main():
     print("=" * 70 + "\n")
 
     # Check if metadata was saved
-    metadata_file = Path(__file__).parent.parent / "data" / "cache_metadata" / "simulated_api_metadata.json"
+    metadata_file = (
+        Path(__file__).parent.parent / "data" / "cache_metadata" / "simulated_api_metadata.json"
+    )
     if metadata_file.exists():
         print(f"Cache metadata saved to: {metadata_file.relative_to(Path.cwd())}")
         with open(metadata_file) as f:

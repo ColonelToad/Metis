@@ -16,16 +16,17 @@ Usage (integrated in daily pipeline):
 
 Note: For regulatory decisions (orders, notices, dockets), see ingest_ferc_elibrary.py
 """
-import os
-import sys
+
 import argparse
 import logging
-from pathlib import Path
+import os
+import sys
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-import requests
 import pandas as pd
+import requests
 from sqlalchemy import create_engine, text
 
 # Setup logging
@@ -65,9 +66,7 @@ def is_ng_relevant(title: str, subject: str = "") -> bool:
 
 
 def fetch_ferc_orders(
-    limit: int = 500,
-    api_key: Optional[str] = None,
-    dry_run: bool = False
+    limit: int = 500, api_key: Optional[str] = None, dry_run: bool = False
 ) -> pd.DataFrame:
     """
     Fetch recent FERC orders from the public API.
@@ -136,16 +135,18 @@ def fetch_ferc_orders(
             filtered_count += 1
             continue
 
-        records.append({
-            "docket_id": order.get("docket_id", ""),
-            "title": title,
-            "subject": subject,
-            "issued_date": issued_date,
-            "summary": order.get("summary", order.get("description", "")),
-            "full_text_url": order.get("document_url") or order.get("url", ""),
-            "order_type": order.get("type", "ORDER"),
-            "timestamp": datetime.now(timezone.utc),
-        })
+        records.append(
+            {
+                "docket_id": order.get("docket_id", ""),
+                "title": title,
+                "subject": subject,
+                "issued_date": issued_date,
+                "summary": order.get("summary", order.get("description", "")),
+                "full_text_url": order.get("document_url") or order.get("url", ""),
+                "order_type": order.get("type", "ORDER"),
+                "timestamp": datetime.now(timezone.utc),
+            }
+        )
 
     logger.info(f"Filtered to {len(records)} NG-relevant orders (excluded {filtered_count})")
     return pd.DataFrame(records)
@@ -167,8 +168,9 @@ def ingest_to_rag(df: pd.DataFrame, mock_mode: bool = False) -> int:
         return 0
 
     try:
-        from rag.vectorstore.lancedb_store import LanceVectorStore
         from sentence_transformers import SentenceTransformer
+
+        from rag.vectorstore.lancedb_store import LanceVectorStore
     except ImportError as e:
         logger.error(f"Missing RAG dependencies: {e}")
         return 0
@@ -204,7 +206,7 @@ def ingest_to_rag(df: pd.DataFrame, mock_mode: bool = False) -> int:
                     "docket_id": row["docket_id"],
                     "order_type": row["order_type"],
                     "subject": row["subject"],
-                }
+                },
             }
 
             # Embed and store
@@ -241,9 +243,7 @@ def ingest_to_sqlite(df: pd.DataFrame) -> int:
 
 
 async def fetch_and_ingest_ferc_orders(
-    limit: int = 500,
-    api_key: Optional[str] = None,
-    skip_rag: bool = False
+    limit: int = 500, api_key: Optional[str] = None, skip_rag: bool = False
 ) -> Dict[str, Any]:
     """
     Main async entry point for FERC ingestion (call from orchestrator).
@@ -282,7 +282,9 @@ def main():
     parser.add_argument("--api-key", help="FERC API key (uses env if not provided)")
     parser.add_argument("--dry-run", action="store_true", help="Don't actually fetch/ingest")
     parser.add_argument("--skip-rag", action="store_true", help="Skip RAG embedding, SQLite only")
-    parser.add_argument("--mock-rag", action="store_true", help="Skip actual RAG embedding (testing)")
+    parser.add_argument(
+        "--mock-rag", action="store_true", help="Skip actual RAG embedding (testing)"
+    )
 
     args = parser.parse_args()
 
@@ -292,11 +294,7 @@ def main():
     logger.info(f"  Mode: {rc.mode_label()}")
 
     # Fetch from API
-    df = fetch_ferc_orders(
-        limit=args.limit,
-        api_key=args.api_key,
-        dry_run=args.dry_run
-    )
+    df = fetch_ferc_orders(limit=args.limit, api_key=args.api_key, dry_run=args.dry_run)
 
     if df.empty:
         logger.warning("No orders fetched")

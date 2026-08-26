@@ -2,9 +2,11 @@
 Run from C:\\Users\\legot\\Metis:
     python research/features/check_single_date_dup.py
 """
+
 import os
-from sqlalchemy import create_engine, text
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 load_dotenv()
 DB_URL = os.getenv("DB_URL", "sqlite:///data/metis.db")

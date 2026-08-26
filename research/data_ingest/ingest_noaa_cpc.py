@@ -30,18 +30,18 @@ USAGE:
   python ingest_noaa_cpc.py --dry-run
 """
 
-import os
-import sys
-import sqlite3
-import logging
 import argparse
+import logging
+import os
+import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dotenv import load_dotenv
 import requests
+from dotenv import load_dotenv
 
 load_dotenv()
 DB_URL = os.getenv("DB_URL", "sqlite:///data/metis.db")
@@ -66,9 +66,15 @@ FILES = [
 
 # CPC census-division IDs (standard Census nomenclature)
 CENSUS_DIVISIONS = {
-    "1": "New England", "2": "Middle Atlantic", "3": "East North Central",
-    "4": "West North Central", "5": "South Atlantic", "6": "East South Central",
-    "7": "West South Central", "8": "Mountain", "9": "Pacific",
+    "1": "New England",
+    "2": "Middle Atlantic",
+    "3": "East North Central",
+    "4": "West North Central",
+    "5": "South Atlantic",
+    "6": "East South Central",
+    "7": "West South Central",
+    "8": "Mountain",
+    "9": "Pacific",
 }
 MISSING_THRESHOLD = -900
 
@@ -88,7 +94,7 @@ def parse_dd_file(text: str):
     cols = lines[header_idx].split("|")[1:]
     is_normals = len(cols[0]) == 4  # MMDD
     out = []
-    for line in lines[header_idx + 1:]:
+    for line in lines[header_idx + 1 :]:
         parts = line.split("|")
         if len(parts) < 2:
             continue
@@ -114,24 +120,18 @@ def parse_dd_file(text: str):
 
 
 def ensure_tables(conn: sqlite3.Connection):
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS noaa_degree_days (
+    conn.execute("""CREATE TABLE IF NOT EXISTS noaa_degree_days (
             region_type TEXT NOT NULL, region TEXT NOT NULL,
             weight_basis TEXT NOT NULL, degree_type TEXT NOT NULL,
             date TEXT NOT NULL, value REAL, fetched_at TEXT,
-            PRIMARY KEY (region_type, region, weight_basis, degree_type, date))"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS noaa_dd_normals (
+            PRIMARY KEY (region_type, region, weight_basis, degree_type, date))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS noaa_dd_normals (
             region_type TEXT NOT NULL, region TEXT NOT NULL,
             weight_basis TEXT NOT NULL, degree_type TEXT NOT NULL,
             mmdd TEXT NOT NULL, normal REAL, fetched_at TEXT,
-            PRIMARY KEY (region_type, region, weight_basis, degree_type, mmdd))"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS ingest_meta (
-            key TEXT PRIMARY KEY, value TEXT)"""
-    )
+            PRIMARY KEY (region_type, region, weight_basis, degree_type, mmdd))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS ingest_meta (
+            key TEXT PRIMARY KEY, value TEXT)""")
     conn.commit()
 
 
@@ -141,9 +141,7 @@ def get_meta(conn, key):
 
 
 def set_meta(conn, key, value):
-    conn.execute(
-        "INSERT OR REPLACE INTO ingest_meta (key, value) VALUES (?,?)", (key, str(value))
-    )
+    conn.execute("INSERT OR REPLACE INTO ingest_meta (key, value) VALUES (?,?)", (key, str(value)))
     conn.commit()
 
 
@@ -158,10 +156,7 @@ def write_rows(conn, rows, normals=False, dry_run=False):
         f"""INSERT OR REPLACE INTO {table}
             (region_type, region, weight_basis, degree_type, {date_col}, {value_col}, fetched_at)
             VALUES (?,?,?,?,?,?,?)""",
-        [
-            (rt, region_name(rt, rid), wb, dt, dk, val, now)
-            for rt, rid, wb, dt, dk, val in rows
-        ],
+        [(rt, region_name(rt, rid), wb, dt, dk, val, now) for rt, rid, wb, dt, dk, val in rows],
     )
     return len(rows)
 
@@ -195,8 +190,9 @@ def main():
     parser = argparse.ArgumentParser(description="NOAA CPC degree-days ingestion")
     parser.add_argument("--start-year", type=int, default=1981)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--full", action="store_true",
-                        help="re-backfill all history even if meta says done")
+    parser.add_argument(
+        "--full", action="store_true", help="re-backfill all history even if meta says done"
+    )
     args = parser.parse_args()
 
     conn = sqlite3.connect(DB_PATH) if not args.dry_run else None
@@ -207,8 +203,10 @@ def main():
     this_year = datetime.now().year
 
     # 1. Normals (once)
-    have_normals = False if conn is None else (
-        conn.execute("SELECT COUNT(*) FROM noaa_dd_normals").fetchone()[0] > 0
+    have_normals = (
+        False
+        if conn is None
+        else (conn.execute("SELECT COUNT(*) FROM noaa_dd_normals").fetchone()[0] > 0)
     )
     if args.full or not have_normals:
         logger.info("Fetching 1981-2010 climatology normals...")
@@ -241,7 +239,9 @@ def main():
         set_meta(conn, "noaa_cpc_last_refresh", datetime.now().isoformat(timespec="seconds"))
         conn.close()
 
-    logger.info(f"Ingestion complete: {total} cells written ({'DRY RUN' if args.dry_run else 'saved'})")
+    logger.info(
+        f"Ingestion complete: {total} cells written ({'DRY RUN' if args.dry_run else 'saved'})"
+    )
     return total
 
 

@@ -28,18 +28,19 @@ Usage (specific dataset only):
     FERC_API_KEY=your_key python research/data_ingest/ingest_ferc_datasets.py --dataset 15
     FERC_API_KEY=your_key python research/data_ingest/ingest_ferc_datasets.py --dataset 27
 """
-import os
-import sys
+
 import argparse
-import logging
 import csv
 import io
-from pathlib import Path
+import logging
+import os
+import sys
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-import requests
 import pandas as pd
+import requests
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="[FERC Data] %(message)s")
@@ -74,7 +75,7 @@ DATASETS = {
             "Asset_Description",
             "Asset Type",
             "State",
-        ]
+        ],
     },
     27: {
         "name": "NEPA Schedule for Pending Infrastructure Projects",
@@ -86,12 +87,14 @@ DATASETS = {
             "Status",
             "Target NEPA Completion Date",
             "State",
-        ]
-    }
+        ],
+    },
 }
 
 
-def fetch_dataset(dataset_id: int, api_key: Optional[str] = None, limit: int = 10000) -> pd.DataFrame:
+def fetch_dataset(
+    dataset_id: int, api_key: Optional[str] = None, limit: int = 10000
+) -> pd.DataFrame:
     """
     Fetch data from a FERC dataset via API.
 
@@ -121,27 +124,25 @@ def fetch_dataset(dataset_id: int, api_key: Optional[str] = None, limit: int = 1
 
     try:
         url = f"{FERC_API_BASE}/dataset/{dataset_id}/data"
-        
+
         while has_more:
-            params = {
-                "api_key": api_key,
-                "limit": limit,
-                "offset": offset
-            }
+            params = {"api_key": api_key, "limit": limit, "offset": offset}
 
             resp = requests.get(url, params=params, timeout=30)
             resp.raise_for_status()
-            
+
             data = resp.json()
             if "row_data" in data:
                 all_rows.extend(data["row_data"])
-                
+
                 # Check if there are more pages
                 has_more = data.get("has_more", False)
                 offset += limit
                 logger.info(f"Fetched {len(all_rows)} total records so far...")
             else:
-                logger.error(f"Unexpected JSON structure in dataset {dataset_id}: missing 'row_data'")
+                logger.error(
+                    f"Unexpected JSON structure in dataset {dataset_id}: missing 'row_data'"
+                )
                 break
 
         if all_rows:
@@ -190,7 +191,7 @@ def process_dataset_15(df: pd.DataFrame) -> List[Dict[str, Any]]:
 
             # Create document for RAG
             title = f"{asset_type} - {entity_name}"
-            
+
             # Stitch all the metadata directly into the text content
             content = f"{asset_desc}. "
             if state:
@@ -230,10 +231,14 @@ def process_dataset_27(df: pd.DataFrame) -> List[Dict[str, Any]]:
         try:
             project_name = row.get("Project_Name", "")
             nepa_date = row.get("Final_NEPA_Document_Target_Issuance_Date", "")
-            project_type = row.get("NEPA_Document_Type", "") 
+            project_type = row.get("NEPA_Document_Type", "")
             # Create document for RAG
-            title = f"{project_type} Project: {project_name}" if project_type else f"Project: {project_name}"
-            
+            title = (
+                f"{project_type} Project: {project_name}"
+                if project_type
+                else f"Project: {project_name}"
+            )
+
             # Stitch all the metadata directly into the text content
             content = f"Target NEPA completion: {nepa_date}. "
             if project_type:
@@ -266,8 +271,9 @@ def ingest_to_rag(documents: List[Dict[str, Any]], dataset_id: int, mock_mode: b
         return 0
 
     try:
-        from rag.vectorstore.lancedb_store import LanceVectorStore
         from sentence_transformers import SentenceTransformer
+
+        from rag.vectorstore.lancedb_store import LanceVectorStore
     except ImportError as e:
         logger.error(f"Missing RAG dependencies: {e}")
         return 0
@@ -289,19 +295,19 @@ def ingest_to_rag(documents: List[Dict[str, Any]], dataset_id: int, mock_mode: b
     # Process in batches
     for i in range(0, len(documents), BATCH_SIZE):
         batch = documents[i : i + BATCH_SIZE]
-        
+
         try:
             if not mock_mode:
                 # 1. Prepare all texts for this batch
                 texts_for_embed = [f"{doc['title']} {doc['content']}" for doc in batch]
-                
+
                 # 2. Encode the entire batch at once (massively faster)
                 embeddings_array = embedder.encode(texts_for_embed).tolist()
-                
+
                 # 3. Attach embeddings back to the document dictionaries
                 for doc, embedding in zip(batch, embeddings_array):
                     doc["embedding"] = embedding
-                
+
                 # 4. Upsert the entire batch into LanceDB in one transaction
                 store.upsert(batch)
 
@@ -317,9 +323,7 @@ def ingest_to_rag(documents: List[Dict[str, Any]], dataset_id: int, mock_mode: b
 
 
 async def fetch_and_ingest_ferc_datasets(
-    dataset_ids: Optional[List[int]] = None,
-    api_key: Optional[str] = None,
-    skip_rag: bool = False
+    dataset_ids: Optional[List[int]] = None, api_key: Optional[str] = None, skip_rag: bool = False
 ) -> Dict[str, Any]:
     """
     Main async entry point for FERC dataset ingestion.
@@ -335,9 +339,7 @@ async def fetch_and_ingest_ferc_datasets(
     if dataset_ids is None:
         dataset_ids = [15, 27]
 
-    result = {
-        "datasets": {}
-    }
+    result = {"datasets": {}}
 
     for dataset_id in dataset_ids:
         if dataset_id not in DATASETS:
@@ -369,7 +371,7 @@ async def fetch_and_ingest_ferc_datasets(
         result["datasets"][dataset_id] = {
             "fetched": len(df),
             "documents": len(documents),
-            "ingested": ingested
+            "ingested": ingested,
         }
 
     return result
@@ -379,9 +381,7 @@ def main():
     """CLI entry point"""
     parser = argparse.ArgumentParser(description="Ingest FERC datasets for RAG")
     parser.add_argument(
-        "--dataset",
-        type=int,
-        help="Specific dataset ID to ingest (15 or 27, default: both)"
+        "--dataset", type=int, help="Specific dataset ID to ingest (15 or 27, default: both)"
     )
     parser.add_argument("--api-key", help="FERC API key (uses env if not provided)")
     parser.add_argument("--dry-run", action="store_true", help="Don't fetch, just show config")
@@ -408,21 +408,20 @@ def main():
 
     # Run async ingestion
     import asyncio
-    result = asyncio.run(fetch_and_ingest_ferc_datasets(
-        dataset_ids=dataset_ids,
-        api_key=args.api_key,
-        skip_rag=args.skip_rag
-    ))
+
+    result = asyncio.run(
+        fetch_and_ingest_ferc_datasets(
+            dataset_ids=dataset_ids, api_key=args.api_key, skip_rag=args.skip_rag
+        )
+    )
 
     # Summary
-    logger.info("\n" + "="*60)
+    logger.info("\n" + "=" * 60)
     logger.info("INGESTION SUMMARY")
-    logger.info("="*60)
+    logger.info("=" * 60)
     for ds_id, stats in result.get("datasets", {}).items():
         logger.info(
-            f"\nDataset {ds_id}: "
-            f"Fetched={stats['fetched']}, "
-            f"Ingested={stats['ingested']}"
+            f"\nDataset {ds_id}: " f"Fetched={stats['fetched']}, " f"Ingested={stats['ingested']}"
         )
 
     logger.info("\n✓ Complete")

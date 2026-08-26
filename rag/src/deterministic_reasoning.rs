@@ -80,12 +80,16 @@ pub fn compute(signal: &TradingSignal) -> DeterministicReasoning {
     } else {
         "short_thesis"
     };
-    let mut hypothesis =
-        Hypothesis::new(hypothesis_name.to_string(), signal.confidence.clamp(0.01, 0.99));
+    let mut hypothesis = Hypothesis::new(
+        hypothesis_name.to_string(),
+        signal.confidence.clamp(0.01, 0.99),
+    );
     hypothesis
         .supporting_signals
         .push("temperature_anomaly".to_string());
-    hypothesis.supporting_signals.push("grid_stress".to_string());
+    hypothesis
+        .supporting_signals
+        .push("grid_stress".to_string());
     reasoning_engine.add_hypothesis(hypothesis);
 
     reasoning_engine.bayesian_update();

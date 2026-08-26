@@ -1,17 +1,17 @@
 """
 Performance metrics computed from the trade log produced by engine.run().
 """
+
 import numpy as np
 import pandas as pd
 
-
 # Known shock events for regime tagging (from event_study.py)
 SHOCK_WINDOWS = [
-    ("Winter Storm Uri",        "2021-02-01", "2021-03-15"),
-    ("Russia-Ukraine",          "2022-02-24", "2022-05-01"),
-    ("2022 Summer Peak",        "2022-07-01", "2022-09-30"),
-    ("Freeport LNG Explosion",  "2022-06-01", "2022-08-31"),
-    ("Winter Storm Elliott",    "2022-12-15", "2023-01-15"),
+    ("Winter Storm Uri", "2021-02-01", "2021-03-15"),
+    ("Russia-Ukraine", "2022-02-24", "2022-05-01"),
+    ("2022 Summer Peak", "2022-07-01", "2022-09-30"),
+    ("Freeport LNG Explosion", "2022-06-01", "2022-08-31"),
+    ("Winter Storm Elliott", "2022-12-15", "2023-01-15"),
 ]
 
 
@@ -34,7 +34,7 @@ def summary(trades: pd.DataFrame) -> dict:
         return {}
 
     pnl = trades["net_pnl"]
-    wins  = pnl[pnl > 0]
+    wins = pnl[pnl > 0]
     losses = pnl[pnl <= 0]
 
     # Weekly Sharpe: treat each trade as one weekly observation
@@ -43,7 +43,11 @@ def summary(trades: pd.DataFrame) -> dict:
     # Sortino: downside deviation only
     downside = pnl[pnl < 0]
     sortino_denom = np.sqrt((downside**2).mean()) * np.sqrt(52) if len(downside) > 0 else np.nan
-    sortino = (pnl.mean() * np.sqrt(52) / sortino_denom) if sortino_denom and sortino_denom > 0 else np.nan
+    sortino = (
+        (pnl.mean() * np.sqrt(52) / sortino_denom)
+        if sortino_denom and sortino_denom > 0
+        else np.nan
+    )
 
     # Max drawdown on equity curve
     eq = pnl.cumsum()
@@ -52,22 +56,22 @@ def summary(trades: pd.DataFrame) -> dict:
     max_dd = drawdown.min()
 
     # Profit factor
-    gross_win  = wins.sum()
+    gross_win = wins.sum()
     gross_loss = abs(losses.sum())
     pf = gross_win / gross_loss if gross_loss > 0 else np.inf
 
     return {
-        "n_trades":      len(trades),
-        "hit_rate":      round(len(wins) / len(trades), 3),
+        "n_trades": len(trades),
+        "hit_rate": round(len(wins) / len(trades), 3),
         "profit_factor": round(pf, 2),
-        "sharpe":        round(sharpe, 2),
-        "sortino":       round(sortino, 2),
-        "avg_win":       round(wins.mean(), 0) if len(wins) > 0 else 0,
-        "avg_loss":      round(losses.mean(), 0) if len(losses) > 0 else 0,
-        "total_pnl":     round(pnl.sum(), 0),
-        "max_drawdown":  round(max_dd, 0),
-        "n_long":        int((trades["direction"] == "long").sum()),
-        "n_short":       int((trades["direction"] == "short").sum()),
+        "sharpe": round(sharpe, 2),
+        "sortino": round(sortino, 2),
+        "avg_win": round(wins.mean(), 0) if len(wins) > 0 else 0,
+        "avg_loss": round(losses.mean(), 0) if len(losses) > 0 else 0,
+        "total_pnl": round(pnl.sum(), 0),
+        "max_drawdown": round(max_dd, 0),
+        "n_long": int((trades["direction"] == "long").sum()),
+        "n_short": int((trades["direction"] == "short").sum()),
     }
 
 

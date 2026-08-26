@@ -5,13 +5,15 @@ Handles data ingestion → feature engineering → inference
 Returns dict with signals and metrics for Rust orchestrator via PyO3
 Mode is determined by METIS_MODE environment variable (DEV or REAL)
 """
-import sys
-import os
-import time
+
 import json
-from pathlib import Path
+import os
+import sys
+import time
 from datetime import datetime
-from typing import Tuple, List, Dict, Any, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
 
 def get_mode() -> str:
     """Get execution mode from environment (DEV or REAL)"""
@@ -20,54 +22,50 @@ def get_mode() -> str:
         mode = "DEV"
     return mode
 
+
 def setup_logging():
     """Initialize logging to file and terminal"""
     from loguru import logger
-    
+
     log_dir = Path(__file__).parent / "logs"
     log_dir.mkdir(exist_ok=True)
-    
+
     log_file = log_dir / "orchestrate_{time}.log"
-    
+
     # Remove default handler
     logger.remove()
-    
+
     # Add file handler
     logger.add(
-        str(log_file),
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
-        level="INFO"
+        str(log_file), format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}", level="INFO"
     )
-    
+
     # Add stderr handler for console output
-    logger.add(
-        sys.stderr,
-        format="{time:HH:mm:ss} | {level: <8} | {message}",
-        level="INFO"
-    )
-    
+    logger.add(sys.stderr, format="{time:HH:mm:ss} | {level: <8} | {message}", level="INFO")
+
     return logger
+
 
 def run_ingest_phase(mode: str, logger, collector=None) -> tuple[bool, float, list]:
     """Run data ingestion phase. Returns (success, time, errors)"""
     logger.info(f"[INGEST] Starting ingestion phase (mode: {mode})")
     start = time.time()
     errors = []
-    
+
     try:
         from research.data_ingest.run_all_ingesters import run_all as ingest_run_all
-        
+
         # Run ingesters and pass collector for metrics
         ingest_ok, ingester_results = ingest_run_all(frequency="all", collector=collector)
-        
+
         elapsed = time.time() - start
-        
+
         if not ingest_ok:
             logger.warning(f"[INGEST] Phase completed with failures in {elapsed:.2f}s")
             errors.append("Some ingesters failed")
         else:
             logger.info(f"[INGEST] Phase completed successfully in {elapsed:.2f}s")
-        
+
         return ingest_ok, elapsed, errors
     except Exception as e:
         elapsed = time.time() - start
@@ -75,26 +73,29 @@ def run_ingest_phase(mode: str, logger, collector=None) -> tuple[bool, float, li
         errors.append(error_msg)
         logger.error(f"[INGEST] {error_msg}")
         import traceback
+
         logger.error(traceback.format_exc())
         return False, elapsed, errors
+
 
 def run_features_phase(mode: str, logger) -> tuple[bool, float, list]:
     """Run feature engineering phase. Returns (success, time, errors)"""
     logger.info(f"[FEATURES] Starting feature engineering phase (mode: {mode})")
     start = time.time()
     errors = []
-    
+
     try:
-        from research.models.unify_features import main as features_main
         import io
-        from contextlib import redirect_stdout, redirect_stderr
-        
+        from contextlib import redirect_stderr, redirect_stdout
+
+        from research.models.unify_features import main as features_main
+
         # Capture output
         f_out = io.StringIO()
         f_err = io.StringIO()
         with redirect_stdout(f_out), redirect_stderr(f_err):
             features_main()
-        
+
         elapsed = time.time() - start
         logger.info(f"[FEATURES] Phase completed in {elapsed:.2f}s")
         return True, elapsed, errors
@@ -104,8 +105,10 @@ def run_features_phase(mode: str, logger) -> tuple[bool, float, list]:
         errors.append(error_msg)
         logger.error(f"[FEATURES] {error_msg}")
         import traceback
+
         logger.error(traceback.format_exc())
         return False, elapsed, errors
+
 
 def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
     """Run model inference phase and generate signals. Returns (success, time, errors, signals)"""
@@ -113,32 +116,29 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
     start = time.time()
     signals = []
     errors = []
-    
+
     try:
         if mode == "DEV":
             logger.info("[INFERENCE] DEV mode: generating synthetic signal (no model load)")
             # In DEV mode, create a synthetic signal without loading the model
-            signals = [{
-                "signal_id": "dev_signal_001",
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-                "symbol": "NG:CME",
-                "direction": "LONG",
-                "confidence": 0.73,
-                "target_quantity": 10.0,
-                "horizon_minutes": 60,
-                "metadata": {
-                    "phase": "DEV",
-                    "model": "dual_lstm_v1.0"
+            signals = [
+                {
+                    "signal_id": "dev_signal_001",
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "symbol": "NG:CME",
+                    "direction": "LONG",
+                    "confidence": 0.73,
+                    "target_quantity": 10.0,
+                    "horizon_minutes": 60,
+                    "metadata": {"phase": "DEV", "model": "dual_lstm_v1.0"},
                 }
-            }]
+            ]
         else:
             logger.info("[INFERENCE] REAL mode: running dual-LSTM inference")
-            from research.models.inference_pipeline import (
-                DualLSTMInference,
-                load_daily_data,
-            )
             import io
-            from contextlib import redirect_stdout, redirect_stderr
+            from contextlib import redirect_stderr, redirect_stdout
+
+            from research.models.inference_pipeline import DualLSTMInference, load_daily_data
 
             root = Path(__file__).resolve().parents[2]
 
@@ -149,9 +149,7 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
                 pipeline = DualLSTMInference(
                     model_path=str(root / "models" / "lstm_ng_predictor.keras"),
                     scalers_path=str(root / "models" / "scalers_v1.0.pkl"),
-                    config_path=str(
-                        root / "research" / "models" / "config" / "model_config.yaml"
-                    ),
+                    config_path=str(root / "research" / "models" / "config" / "model_config.yaml"),
                     features_dir=str(root / "data" / "features"),
                     signal_host="localhost",
                     signal_port=8080,  # primary: C++ engine
@@ -159,9 +157,7 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
                     fallback_port=8081,  # secondary: Rust engine
                     threshold=0.40,
                 )
-                daily_df, low_freq_df, sparse_df = load_daily_data(
-                    str(root / "data" / "features")
-                )
+                daily_df, low_freq_df, sparse_df = load_daily_data(str(root / "data" / "features"))
                 result = pipeline.predict_and_trade(
                     daily_df,
                     low_freq_df,
@@ -175,20 +171,12 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
             if signal:
                 exec_resp = result.get("execution_response")
                 if exec_resp:
-                    logger.info(
-                        f"[INFERENCE] Engine response: {exec_resp.get('status')}"
-                    )
+                    logger.info(f"[INFERENCE] Engine response: {exec_resp.get('status')}")
                     # Attach as metadata strings so the Rust orchestrator's
                     # parser keeps them and persistence can store them.
-                    signal["metadata"]["exec_status"] = str(
-                        exec_resp.get("status", "unknown")
-                    )
-                    signal["metadata"]["exec_latency_ms"] = str(
-                        exec_resp.get("latency_ms", "")
-                    )
-                    signal["metadata"]["exec_engine"] = str(
-                        exec_resp.get("exec_engine", "unknown")
-                    )
+                    signal["metadata"]["exec_status"] = str(exec_resp.get("status", "unknown"))
+                    signal["metadata"]["exec_latency_ms"] = str(exec_resp.get("latency_ms", ""))
+                    signal["metadata"]["exec_engine"] = str(exec_resp.get("exec_engine", "unknown"))
                     filled = exec_resp.get("filled_quantity")
                     if filled is not None:
                         signal["metadata"]["exec_filled_qty"] = repr(filled)
@@ -199,9 +187,7 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
                     if fill is not None:
                         signal["metadata"]["exec_fill_price"] = repr(fill)
                     if exec_resp.get("error_message"):
-                        signal["metadata"]["exec_error"] = str(
-                            exec_resp["error_message"]
-                        )
+                        signal["metadata"]["exec_error"] = str(exec_resp["error_message"])
                 else:
                     logger.warning(
                         "[INFERENCE] Execution engine unreachable - "
@@ -211,9 +197,11 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
                 signals = [signal]
             else:
                 logger.warning("[INFERENCE] Model produced no signal")
-        
+
         elapsed = time.time() - start
-        logger.info(f"[INFERENCE] Phase completed in {elapsed:.2f}s, generated {len(signals)} signals")
+        logger.info(
+            f"[INFERENCE] Phase completed in {elapsed:.2f}s, generated {len(signals)} signals"
+        )
         return True, elapsed, errors, signals
     except Exception as e:
         elapsed = time.time() - start
@@ -221,8 +209,10 @@ def run_inference_phase(mode: str, logger) -> tuple[bool, float, list, list]:
         errors.append(error_msg)
         logger.error(f"[INFERENCE] {error_msg}")
         import traceback
+
         logger.error(traceback.format_exc())
         return False, elapsed, errors, []
+
 
 def main() -> dict:
     """
@@ -232,54 +222,56 @@ def main() -> dict:
     """
     # Initialize log rotation (archive old logs)
     from research.log_rotation import rotate_logs
+
     rotate_logs()
-    
+
     # Initialize metrics collector
     from research.metrics import MetricsCollector
+
     collector = MetricsCollector()
-    
+
     mode = get_mode()
     logger = setup_logging()
-    
+
     # Start metrics collection
     run_id = collector.start_run(environment=mode)
     logger.info(f"Metrics run_id: {run_id}")
-    
+
     logger.info(f"═" * 60)
     logger.info(f"PIPELINE START (mode: {mode})")
     logger.info(f"═" * 60)
-    
+
     pipeline_start = time.time()
     all_errors = []
-    
+
     # Phase 1: Ingestion
     ingest_ok, ingest_time, ingest_errors = run_ingest_phase(mode, logger, collector)
     collector.add_metric("ingest_time_ms", ingest_time * 1000)
     all_errors.extend(ingest_errors)
-    
+
     # Phase 2: Features
     features_ok, features_time, features_errors = run_features_phase(mode, logger)
     collector.add_metric("features_time_ms", features_time * 1000)
     all_errors.extend(features_errors)
-    
+
     # Phase 3: Inference
     inference_ok, inference_time, inference_errors, signals = run_inference_phase(mode, logger)
     collector.add_metric("inference_time_ms", inference_time * 1000)
     all_errors.extend(inference_errors)
-    
+
     # Compute totals
     total_time = time.time() - pipeline_start
     collector.add_metric("pipeline_total_ms", total_time * 1000)
     collector.add_metric("signals_generated_count", len(signals))
-    
+
     # Determine overall status
     all_ok = ingest_ok and features_ok and inference_ok
     final_status = "success" if all_ok else "partial"
-    
+
     # Finalize metrics collection
     error_notes = "; ".join(all_errors) if all_errors else None
     collector.finalize_run(status=final_status, notes=error_notes)
-    
+
     # Build result dict for Rust
     result = {
         "status": final_status,
@@ -290,7 +282,9 @@ def main() -> dict:
             "feature_time": features_time,
             "inference_time": inference_time,
             "signals_generated": len(signals),
-            "avg_confidence": sum(s["confidence"] for s in signals) / len(signals) if signals else 0.0,
+            "avg_confidence": (
+                sum(s["confidence"] for s in signals) / len(signals) if signals else 0.0
+            ),
             "mode": mode,
             "ingest_success": ingest_ok,
             "features_success": features_ok,
@@ -299,33 +293,40 @@ def main() -> dict:
         },
         "errors": all_errors,
     }
-    
+
     # Log summary
     logger.info(f"╔" + "═" * 58 + "╗")
     logger.info(f"║ PIPELINE SUMMARY" + " " * 44 + "║")
     logger.info(f"║" + "─" * 58 + "║")
-    logger.info(f"║ Ingestion:      {ingest_time:6.2f}s  {'✓' if ingest_ok else '✗'}" + " " * 39 + "║")
-    logger.info(f"║ Features:       {features_time:6.2f}s  {'✓' if features_ok else '✗'}" + " " * 39 + "║")
-    logger.info(f"║ Inference:      {inference_time:6.2f}s  {'✓' if inference_ok else '✗'}" + " " * 39 + "║")
+    logger.info(
+        f"║ Ingestion:      {ingest_time:6.2f}s  {'✓' if ingest_ok else '✗'}" + " " * 39 + "║"
+    )
+    logger.info(
+        f"║ Features:       {features_time:6.2f}s  {'✓' if features_ok else '✗'}" + " " * 39 + "║"
+    )
+    logger.info(
+        f"║ Inference:      {inference_time:6.2f}s  {'✓' if inference_ok else '✗'}" + " " * 39 + "║"
+    )
     logger.info(f"║ Signals:        {len(signals):6d}" + " " * 46 + "║")
     logger.info(f"║ Total:          {total_time:6.2f}s" + " " * 45 + "║")
     logger.info(f"║ Mode:           {mode}" + " " * 45 + "║")
     logger.info(f"║ Metrics run_id: {run_id[-16:]}" + " " * 40 + "║")
     logger.info(f"╚" + "═" * 58 + "╝")
-    
+
     # Log errors if any
     if all_errors:
         logger.warning("Pipeline completed with errors:")
         for err in all_errors:
             logger.warning(f"  - {err}")
-    
+
     if all_ok:
         logger.info("PIPELINE COMPLETE: SUCCESS")
     else:
         logger.warning("PIPELINE COMPLETE: WITH ERRORS (graceful degradation)")
-    
+
     # Return dict for Rust (PyO3 will convert it)
     return result
+
 
 if __name__ == "__main__":
     sys.exit(main())

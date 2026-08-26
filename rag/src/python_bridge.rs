@@ -130,5 +130,4 @@ except Exception as e:
             .extract::<Vec<f32>>()
             .map_err(|e| anyhow!("Extract failed: {}", e))
     }
-
 }
