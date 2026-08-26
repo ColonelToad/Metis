@@ -235,7 +235,8 @@ jobs:
         working-directory: metis/src-tauri
         run: |
           cargo fmt --all
-          if ! git diff --quiet; then
+          # exclude the host-specific config this job deletes above
+          if ! git diff --quiet -- . ':(exclude).cargo/config.toml'; then
             echo ""
             echo "cargo fmt changed files in metis/src-tauri. Run 'cargo fmt --all' there and commit:"
             git diff --stat
