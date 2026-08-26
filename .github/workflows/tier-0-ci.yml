@@ -189,6 +189,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The repo-root .cargo/config.toml force-sets LIBCLANG_PATH to a
+      # Windows path (local-machine quirk, see CLAUDE.md). On Linux it
+      # overrides our LIBCLANG_PATH export and breaks bindgen.
+      - name: Remove host-specific cargo config
+        run: rm -f .cargo/config.toml
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
