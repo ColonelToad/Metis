@@ -221,10 +221,15 @@ async fn start_rust_engine(project_root: &Path) -> Result<StartEngineResponse, S
     let mut cmd = std::process::Command::new(&exe);
     cmd.stdout(std::fs::File::create(&stdout_path).map_err(|e| e.to_string())?)
         .stderr(std::fs::File::create(&stderr_path).map_err(|e| e.to_string())?);
-    if let Some(flags) = windows_detached_flags() {
+    #[cfg(windows)]
+    {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(flags);
+        if let Some(flags) = windows_detached_flags() {
+            cmd.creation_flags(flags);
+        }
     }
+    #[cfg(not(windows))]
+    let _ = windows_detached_flags;
     let child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn engine: {e}"))?;
