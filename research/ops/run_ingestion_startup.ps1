@@ -86,6 +86,39 @@ function Set-IngesterStatus($state, [string]$name, [string]$status, [string]$err
 
 $State = Read-State
 
+# ── VERY EARLY EXIT ───────────────────────────────────────────────────────────
+# User expectation: "check if it ran before running anything" -- this must
+# fire before network waits, log spam, or re-queuing. If today's daily
+# already succeeded (even if r2_backup hasn't), don't re-queue daily on
+# every logon. Failed runs get a 6h cooldown to avoid tight restart loops.
+$EarlyNow = Get-Date
+$EarlyIsMonday = $EarlyNow.DayOfWeek -eq [System.DayOfWeek]::Monday
+$EarlyIsFirstOfMonth = $EarlyNow.Day -eq 1
+if (-not $Force -and -not $RedoFailed) {
+    $lastDaily = $State.ingesters.PSObject.Properties["daily"]
+    if ($lastDaily -and $lastDaily.Value.status -eq "success") {
+        # Daily already succeeded today -- check if we still need weekly/monthly/r2
+        $needsWeekly = $EarlyIsMonday -and (Get-IngesterStatus $State "weekly") -ne "success"
+        $needsMonthly = $EarlyIsFirstOfMonth -and (Get-IngesterStatus $State "monthly") -ne "success"
+        $needsR2 = (Get-IngesterStatus $State "r2_backup") -ne "success"
+        if (-not $needsWeekly -and -not $needsMonthly -and -not $needsR2) {
+            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] All scheduled work already succeeded today. Exiting before network checks."
+            Remove-MyLock
+            exit 0
+        }
+    } elseif ($lastDaily -and $lastDaily.Value.status -eq "failed") {
+        try {
+            $lastTry = [datetime]::Parse($lastDaily.Value.completed_at)
+            $hrsSince = ((Get-Date) - $lastTry).TotalHours
+            if ($hrsSince -lt 6) {
+                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Daily failed ${hrsSince:F1}h ago (<6h cooldown). Skipping retry this boot -- use -Force to override."
+                Remove-MyLock
+                exit 0
+            }
+        } catch {}
+    }
+}
+
 # ── Determine which ingesters to run ───────────────────────────────────────────
 $ScheduledIngesters = [System.Collections.Generic.List[string]]::new()
 
@@ -205,7 +238,8 @@ function Invoke-Ingester {
                 }
             }
 
-            $out = python "research/ops/ingest_wrapper.py" --frequency $freq 2>&1
+            $wrapper = Join-Path $root "research/ops/ingest_wrapper.py"
+            $out = & python -u $wrapper --frequency $freq 2>&1
             [PSCustomObject]@{ output = $out -join "`n"; exitCode = $LASTEXITCODE }
         } -ArgumentList $ProjectRoot, $Frequency
 

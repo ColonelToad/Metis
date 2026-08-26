@@ -68,6 +68,9 @@ FEATURES_DIR = DATA_DIR / "features"
 LANCE_DIR = DATA_DIR / "lance"
 RAG_DIR = DATA_DIR / "rag_context"
 
+# Transient / re-downloadable caches that must NOT be backed up (huge, ephemeral)
+R2_EXCLUDE_DIRS = {"gdelt_gkg", "lbnl", "cme_browser", ".tmp"}
+
 MAX_DB_AGE_HOURS = 48
 
 
@@ -208,6 +211,9 @@ class R2AutoBackup:
         for file_path in local_dir.rglob("*"):
             if file_path.is_file():
                 rel_path = file_path.relative_to(local_dir)
+                # Skip transient caches (gdelt raw zips, lbnl xlsx, browser profiles)
+                if local_dir == CACHE_DIR and rel_path.parts[0] in R2_EXCLUDE_DIRS:
+                    continue
                 r2_key = f"{r2_prefix}/{rel_path}".replace("\\", "/")
 
                 if self.upload_file(file_path, r2_key):
