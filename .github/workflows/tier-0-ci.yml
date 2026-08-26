@@ -218,6 +218,9 @@ jobs:
             cmake
           # bindgen can't autodetect libclang on ubuntu runners; export explicitly
           LIBCLANG_SO=$(find /usr/lib /usr/local -name "libclang*.so*" 2>/dev/null | head -1)
+          echo "DEBUG libclang candidates:"
+          find /usr /opt -name "libclang*so*" 2>/dev/null | head -10 || true
+          echo "DEBUG resolved: $LIBCLANG_SO"
           if [ -n "$LIBCLANG_SO" ]; then
             echo "LIBCLANG_PATH=$(dirname "$LIBCLANG_SO")" >> "$GITHUB_ENV"
           fi
