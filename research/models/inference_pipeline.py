@@ -355,6 +355,9 @@ class DualLSTMInference:
         """
         Send signal to the primary execution engine (C++), falling back to
         the secondary (Rust) if the primary is unreachable.
+        When METIS_SHADOW=1, dual-writes to both engines and logs
+        comparative slippage/price deltas to data/logs/shadow_compare.csv
+        (see research/signal_client.py:EngineRouter.shadow_send).
 
         Args:
             signal: Output from prediction_to_signal()
@@ -365,6 +368,8 @@ class DualLSTMInference:
             Execution response dict with `exec_engine` set to "cpp" or
             "rust", or None if every configured engine is unreachable.
         """
+        if os.getenv("METIS_SHADOW") == "1" and hasattr(self.engine_router, "shadow_send"):
+            return self.engine_router.shadow_send(signal)
         return self.engine_router.send(signal)
 
     def predict_and_trade(

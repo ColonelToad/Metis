@@ -43,6 +43,11 @@ EXECUTION_ENGINE_HOST = os.getenv("EXECUTION_ENGINE_HOST", "localhost")
 EXECUTION_ENGINE_PORT = int(os.getenv("EXECUTION_ENGINE_PORT", 8080))  # C++ primary
 EXECUTION_ENGINE_FALLBACK_PORT = int(os.getenv("EXECUTION_ENGINE_FALLBACK_PORT", 8081))  # Rust
 
+# Shadow-run: dual-write to both engines for comparative study
+# Set METIS_SHADOW=1 to enable (logs to data/logs/shadow_compare.csv)
+EXECUTION_ENGINE_SHADOW = os.getenv("METIS_SHADOW", "0") == "1"
+EXECUTION_ENGINE_SHADOW_LOG = DATA_DIR / "logs" / "shadow_compare.csv"
+
 # Model configuration
 MODEL_VERSION = "v1.0"
 LSTM_HIDDEN_SIZE = 128

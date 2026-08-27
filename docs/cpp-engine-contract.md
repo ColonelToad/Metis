@@ -106,6 +106,22 @@ research/ops/orchestrate_daily_pipeline.py copies it into
 `exec_latency_ms`, `exec_fill_price`, `exec_error` strings so it persists via
 the orchestrator into SQLite and shows up in `/api/signals/recent`.
 
+## Shadow-run (comparative study before cutover)
+
+Set `METIS_SHADOW=1` to dual-write every signal to both engines via
+`EngineRouter.shadow_send()` (`research/signal_client.py:161`). Primary's
+response is returned (failover preserved), but both are attempted and
+deltas logged to `data/logs/shadow_compare.csv` (`primary_slippage_bps`,
+`secondary_slippage_bps`, `delta_slippage`, `delta_price`). Run
+`METIS_SHADOW=1` for 2 weeks; cut over when deltas < tolerance.
+`research/config.py:44` holds the flag, `research/models/inference_pipeline.py:349`
+switches `send_to_execution()` automatically.
+
+SBE replay fixture: `data/captures/ng_daily_2026-08-21.sbe` (40 packets,
+20 contracts × Quote+Trade, derived from `cme_settlements` front-month curve)
+replays through `SBEParser → OrderBook` in `cpp_engine/tests/sbe_replay_test.cpp:1`
+and verifies `update_quote` + `best_bid`/`best_ask` + `parser.stats()`.
+
 ## Long-running server note (agent tooling)
 
 `metis_server.exe` (Rust) and `metis-server` (C++) are long-lived listeners.

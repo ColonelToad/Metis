@@ -3,10 +3,12 @@ Signal interface client for communicating with Rust execution engine.
 Sends trading signals and receives execution reports.
 """
 
+import csv
 import socket
 import struct
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import msgpack
@@ -178,6 +180,83 @@ class EngineRouter:
             )
         else:
             logger.error("No execution engine reachable; signal not confirmed")
+        return response
+
+    def shadow_send(
+        self, signal: Dict[str, Any], log_path: Optional[Path] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Shadow-run: send to BOTH engines independently, log deltas.
+        Returns primary's response (or fallback if primary down) like
+        `send()`, but always attempts both when available.
+        Log: data/logs/shadow_compare.csv with primary/secondary
+        slippage_bps, avg_fill_price, status deltas. For comparative study
+        before cutover (see docs/cpp-engine-contract.md shadow-run section).
+        """
+        # Lazy import to avoid cycle; config holds shadow log path
+        try:
+            from research.config import EXECUTION_ENGINE_SHADOW_LOG
+        except ImportError:
+            EXECUTION_ENGINE_SHADOW_LOG = Path("data/logs/shadow_compare.csv")
+        if log_path is None:
+            log_path = EXECUTION_ENGINE_SHADOW_LOG
+
+        primary_resp = self._try(self.primary, signal, self.primary_name)
+        fallback_resp = None
+        if self.fallback is not None:
+            fallback_resp = self._try(self.fallback, signal, self.fallback_name)
+
+        # Choose return value like send() would (primary wins if available)
+        response = primary_resp if primary_resp is not None else fallback_resp
+
+        # Log comparative row (best-effort, never raises)
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            write_header = not log_path.exists()
+            # Extract slippage/price/status, handling None
+            def _get(d, k):
+                return d.get(k) if d else None
+
+            row = {
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "signal_id": signal.get("signal_id"),
+                "primary_status": _get(primary_resp, "status"),
+                "primary_slippage_bps": _get(primary_resp, "slippage_bps"),
+                "primary_avg_fill": _get(primary_resp, "avg_fill_price"),
+                "secondary_status": _get(fallback_resp, "status"),
+                "secondary_slippage_bps": _get(fallback_resp, "slippage_bps"),
+                "secondary_avg_fill": _get(fallback_resp, "avg_fill_price"),
+                "delta_slippage": (
+                    (primary_resp.get("slippage_bps") or 0)
+                    - (fallback_resp.get("slippage_bps") or 0)
+                    if primary_resp and fallback_resp
+                    else None
+                ),
+                "delta_price": (
+                    (primary_resp.get("avg_fill_price") or 0)
+                    - (fallback_resp.get("avg_fill_price") or 0)
+                    if primary_resp and fallback_resp
+                    and primary_resp.get("avg_fill_price") is not None
+                    and fallback_resp.get("avg_fill_price") is not None
+                    else None
+                ),
+            }
+            with open(log_path, "a", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=row.keys())
+                if write_header:
+                    w.writeheader()
+                w.writerow(row)
+            logger.info(f"Shadow compare logged to {log_path} (delta_slippage={row['delta_slippage']})")
+        except Exception as e:
+            logger.warning(f"Shadow log failed (non-fatal): {e}")
+
+        if response:
+            logger.info(
+                f"Shadow response: {response['status']} "
+                f"(engine={response.get('exec_engine')})"
+            )
+        else:
+            logger.error("Shadow: no engine reachable")
         return response
 
 
