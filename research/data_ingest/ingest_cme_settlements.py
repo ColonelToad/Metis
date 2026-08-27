@@ -77,7 +77,14 @@ def _num(s):
 
 
 def fetch_window(days_back: int = 7):
-    """Yield (product_key, trade_date_iso, row_dict) tuples via headed Chromium."""
+    """Yield (product_key, trade_date_iso, row_dict) tuples via Chromium.
+
+    Tries headless=new first (works at boot with no desktop, passes Akamai
+    since Chromium 120+). Falls back to headful off-screen. If both fail
+    (e.g., Playwright not installed or display unavailable at startup),
+    yields nothing and lets the caller treat it as 0 rows rather than a
+    hard failure that would mark the entire daily batch as failed.
+    """
     from playwright.sync_api import sync_playwright
 
     dates = []
@@ -87,13 +94,41 @@ def fetch_window(days_back: int = 7):
             dates.append(d.strftime("%m/%d/%Y"))
         d -= timedelta(days=1)
 
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            PROFILE_DIR,
-            headless=False,
-            args=["--window-position=-32000,-32000", "--window-size=1200,800"],
-            viewport={"width": 1200, "height": 800},
-        )
+    try:
+        p = sync_playwright().start()
+    except Exception as e:
+        logger.warning(f"Playwright not available ({e}); skipping CME settlements this run")
+        return
+        yield  # make this a generator
+
+    # Try headless=new first (boot-safe), then fall back to headful off-screen
+    ctx = None
+    for attempt, headless_opt in enumerate(
+        [
+            {"headless": True, "args": ["--headless=new", "--window-size=1200,800", "--no-sandbox"]},
+            {"headless": False, "args": ["--window-position=-32000,-32000", "--window-size=1200,800"]},
+        ]
+    ):
+        try:
+            ctx = p.chromium.launch_persistent_context(
+                PROFILE_DIR,
+                viewport={"width": 1200, "height": 800},
+                **headless_opt,
+            )
+            break
+        except Exception as e:
+            logger.warning(f"Chromium launch attempt {attempt+1} failed ({e})")
+            ctx = None
+    if ctx is None:
+        logger.warning("All Chromium launch attempts failed; skipping CME settlements this run (non-blocking)")
+        try:
+            p.stop()
+        except Exception:
+            pass
+        return
+        yield
+
+    try:
         pg = ctx.new_page()
         logger.info("Opening CME landing page to establish session...")
         pg.goto(LANDING_PAGE, timeout=90000)
@@ -147,7 +182,15 @@ def fetch_window(days_back: int = 7):
                 if emitted:
                     ok_dates += 1
             logger.info(f"{cfg['globex']} ({pid}): {ok_dates}/{len(dates)} dates had data")
-        ctx.close()
+    finally:
+        try:
+            ctx.close()
+        except Exception:
+            pass
+        try:
+            p.stop()
+        except Exception:
+            pass
 
 
 def ensure_table(conn: sqlite3.Connection):

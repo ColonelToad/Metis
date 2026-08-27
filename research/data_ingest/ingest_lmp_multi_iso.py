@@ -208,7 +208,8 @@ def save_lmp_to_database(df: pd.DataFrame, engine) -> int:
         return len(df)
     except Exception as e:
         logger.error(f"Error saving LMP to database: {e}")
-        # Try with conflict handling
+        # Fallback: row-by-row INSERT OR IGNORE via DBAPI (SQLAlchemy 2.0
+        # Connection.execute with '?' placeholders expects exec_driver_sql)
         try:
             with engine.connect() as conn:
                 insert_sql = """
@@ -219,7 +220,7 @@ def save_lmp_to_database(df: pd.DataFrame, engine) -> int:
                 """
                 rows_inserted = 0
                 for _, row in df.iterrows():
-                    conn.execute(
+                    conn.exec_driver_sql(
                         insert_sql,
                         (
                             row["timestamp"],
