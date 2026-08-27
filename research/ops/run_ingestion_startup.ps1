@@ -90,7 +90,7 @@ $State = Read-State
 # User expectation: "check if it ran before running anything" -- this must
 # fire before network waits, log spam, or re-queuing. If today's daily
 # already succeeded (even if r2_backup hasn't), don't re-queue daily on
-# every logon. Failed runs get a 6h cooldown to avoid tight restart loops.
+# every logon. Failed runs get a 24h cooldown to avoid same-day restart loops.
 $EarlyNow = Get-Date
 $EarlyIsMonday = $EarlyNow.DayOfWeek -eq [System.DayOfWeek]::Monday
 $EarlyIsFirstOfMonth = $EarlyNow.Day -eq 1
@@ -110,8 +110,8 @@ if (-not $Force -and -not $RedoFailed) {
         try {
             $lastTry = [datetime]::Parse($lastDaily.Value.completed_at)
             $hrsSince = ((Get-Date) - $lastTry).TotalHours
-            if ($hrsSince -lt 6) {
-                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Daily failed ${hrsSince:F1}h ago (<6h cooldown). Skipping retry this boot -- use -Force to override."
+            if ($hrsSince -lt 24) {
+                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Daily failed ${hrsSince:F1}h ago (<24h cooldown). Skipping retry this boot -- use -Force to override."
                 Remove-MyLock
                 exit 0
             }
