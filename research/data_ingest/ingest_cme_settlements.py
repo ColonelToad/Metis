@@ -240,10 +240,16 @@ def main() -> int:
     total = 0
     seen_dates = set()
     batch = []
-    for key, pid, trade_iso, month, vals in fetch_window(args.days):
-        total += 1
-        seen_dates.add((key, trade_iso))
-        batch.append((key, pid, trade_iso, month, vals))
+    try:
+        for key, pid, trade_iso, month, vals in fetch_window(args.days):
+            total += 1
+            seen_dates.add((key, trade_iso))
+            batch.append((key, pid, trade_iso, month, vals))
+    except Exception as e:
+        logger.warning(f"CME settlements fetch failed (non-blocking, will retry tomorrow): {e}")
+        # Return 0 rows but don't raise — don't mark the whole daily batch as failed
+        # for a transient Akamai/HTTP2 hiccup on a rolling 5-day window
+        return 0
 
     if conn is not None:
         now = datetime.now().isoformat(timespec="seconds")

@@ -186,14 +186,16 @@ def collect_file(stem: str, wb: str, dt: str, rt: str, path: str):
     return rows
 
 
-def main():
+def main(*_args, **_kwargs):
     parser = argparse.ArgumentParser(description="NOAA CPC degree-days ingestion")
     parser.add_argument("--start-year", type=int, default=1981)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--full", action="store_true", help="re-backfill all history even if meta says done"
     )
-    args = parser.parse_args()
+    # Tolerate being called as module.main() from run_all_ingesters which
+    # inherits the wrapper's --frequency flag in sys.argv
+    args, _ = parser.parse_known_args()
 
     conn = sqlite3.connect(DB_PATH) if not args.dry_run else None
     if conn:

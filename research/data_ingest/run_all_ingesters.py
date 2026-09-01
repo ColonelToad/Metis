@@ -242,8 +242,16 @@ def run_all(
             logger.info(f"Running {name} ingester")
             print(f"\n>>> {name} ingester")
             # Call the main() function for each ingester
+            # Isolate sys.argv so individual ingesters' argparse doesn't see
+            # the wrapper's --frequency flag (e.g., NOAA CPC would die on
+            # "unrecognized arguments: --frequency daily")
             if hasattr(module, "main"):
-                result = module.main()
+                old_argv = sys.argv
+                sys.argv = [old_argv[0]]
+                try:
+                    result = module.main()
+                finally:
+                    sys.argv = old_argv
                 # If ingester returns row count, use it; otherwise 0
                 if isinstance(result, int):
                     row_count = result
@@ -319,7 +327,7 @@ def run_all(
     print(f"Total: {len(results)} | Success: {success_count} | Failed: {fail_count}\n")
 
     for result in results:
-        status_icon = "✓" if result["status"] == "success" else "✗"
+        status_icon = "OK" if result["status"] == "success" else "FAIL"
         print(
             f"{status_icon} {result['name']:30} {result['status']:8} ({result['duration_ms']:6.0f}ms, {result['row_count']:6} rows)"
         )

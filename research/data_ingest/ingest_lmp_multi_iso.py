@@ -220,10 +220,22 @@ def save_lmp_to_database(df: pd.DataFrame, engine) -> int:
                 """
                 rows_inserted = 0
                 for _, row in df.iterrows():
+                    ts = pd.to_datetime(row["timestamp"])
+                    try:
+                        if ts.tzinfo is not None:
+                            # Keep wall time (02:00 PDT), not UTC (09:00) — must match df.to_sql's string
+                            ts = ts.tz_localize(None)  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    # Match df.to_sql's timestamp string format (with microseconds) for PK consistency
+                    try:
+                        ts_str = ts.strftime("%Y-%m-%d %H:%M:%S.%f")  # e.g. 2026-08-02 02:00:00.000000
+                    except Exception:
+                        ts_str = str(ts)
                     conn.exec_driver_sql(
                         insert_sql,
                         (
-                            row["timestamp"],
+                            ts_str,
                             row["iso"],
                             row["node_id"],
                             row.get("node_type"),
