@@ -43,19 +43,27 @@ DB_URL = rc.get_db_url()
 
 START_DATE = os.getenv("STOCK_PRICES_START_DATE", "2015-01-01")
 
-# Energy-related stocks (natural gas, LNG, pipelines, utilities)
-# NOTE: CHK was silently failing in the original version. Chesapeake went
-# through a 2020 bankruptcy and a 2024 merger with Southwestern Energy,
-# rebranding as Expand Energy (ticker EXE) -- worth confirming which ticker
-# is actually correct now before assuming CHK itself is just fetchable again.
+# Energy-related stocks (natural gas, LNG, pipelines, utilities).
+# CHK was dropped: 2020 bankruptcy + 2024 Southwestern merger -> EXE
+# (Expand Energy, listed from 2024-10-02). Lineage in ticker_lineage.
 ENERGY_TICKERS = {
     # Natural Gas & LNG
-    "CHK": "Chesapeake Energy",  # unconfirmed post-merger ticker -- see note above
     "EXE": "Expand Energy",
     "EQT": "EQT Corporation",
     "AR": "Antero Resources",
     "CNX": "CNX Resources",
     "RRC": "Range Resources",
+    "CQP": "Cheniere Energy Partners",  # LNG exporter
+    # Integrated Majors
+    "XOM": "Exxon Mobil",
+    "CVX": "Chevron",
+    "COP": "ConocoPhillips",
+    # Refiners
+    "MPC": "Marathon Petroleum",
+    "VLO": "Valero Energy",
+    # Energy Services
+    "SLB": "Schlumberger",
+    "HAL": "Halliburton",
     # Pipelines & Midstream
     "KMI": "Kinder Morgan",
     "WMB": "Williams Companies",
@@ -92,8 +100,12 @@ def fetch_stock_data(ticker, start_date, end_date):
 
         df = df.sort_index()
         df["ticker"] = ticker
-        # df['timestamp'] = df.index
-        df["timestamp"] = df.index.to_pydatetime().astype("datetime64[ns]").tolist()
+        # Canonical text format matches backfill_stock_prices ('%Y-%m-%d %H:%M:%S').
+        # The old datetime64-list form stored microseconds text while other paths
+        # wrote ns-epoch ints and NULLs -- same (ticker, day) in different formats
+        # slipped past the UNIQUE index as silent duplicates (cleaned 2026-09-15:
+        # 313k -> 151k rows). Keep this format stable.
+        df["timestamp"] = pd.to_datetime(df.index).strftime("%Y-%m-%d %H:%M:%S").tolist()
         df = df.rename(
             columns={
                 "Open": "open",

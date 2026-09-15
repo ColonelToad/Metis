@@ -715,6 +715,392 @@ class FeatureEngineer:
 
         return df
 
+    def load_eu_gas_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """EU gas balance: ENTSOG entry flows (total + Russian share),
+        GIE AGSI storage (capacity-weighted fullness + net withdrawal),
+        GIE ALSI LNG terminals (send-out + inventory).
+
+        Previously ingested-but-dark (daily runs since 2021 for ENTSOG,
+        2019 for GIE) — now merged at daily grain into the low-freq /
+        fundamental branch. Same loader feeds the P1 smooth-vs-step test
+        and the LNG-flows tensor slice; the 2023-03 ENTSOG window artifact
+        is left raw here and cleaned in the pre-reg analysis, not here.
+        """
+
+        # --- ENTSOG nominations: daily EU entry total + Russian share ---
+        entsog_q = """
+        SELECT gas_day as date, point_label, SUM(value_kwh_d) as kwh_d
+        FROM entsog_nominations
+        WHERE gas_day >= :start_date
+        GROUP BY gas_day, point_label
+        ORDER BY gas_day
+        """
+        with self.engine.connect() as conn:
+            nom = pd.read_sql(
+                text(entsog_q), conn, params={"start_date": self.start_date.isoformat()}
+            )
+
+        if not nom.empty:
+            nom["date"] = pd.to_datetime(nom["date"]).dt.normalize()
+            nom["kwh_d"] = pd.to_numeric(nom["kwh_d"], errors="coerce").fillna(0)
+            is_ru = nom["point_label"].str.contains(
+                "Greifswald|Lubmin|Mallnow|Sudzha", case=False, na=False
+            )
+            daily_total = nom.groupby("date")["kwh_d"].sum().reset_index(
+                name="eu_entry_total_kwh"
+            )
+            daily_ru = (
+                nom[is_ru]
+                .groupby("date")["kwh_d"]
+                .sum()
+                .reset_index(name="eu_entry_ru_kwh")
+            )
+            eu = daily_total.merge(daily_ru, on="date", how="left")
+            eu["eu_entry_ru_kwh"] = eu["eu_entry_ru_kwh"].fillna(0)
+            eu["eu_entry_total_gwh"] = eu["eu_entry_total_kwh"] / 1e6
+            eu["eu_russian_share"] = (
+                eu["eu_entry_ru_kwh"] / eu["eu_entry_total_kwh"].replace(0, np.nan)
+            ).fillna(0)
+            # Artifact guard (detection only): flag months where EU entry
+            # exceeds 3x the trailing median -- e.g. the 2023-03 window
+            # with duplicated operator rows (~7732 TWh vs ~700 normal).
+            med = eu["eu_entry_total_gwh"].rolling(90, min_periods=30).median()
+            flagged = eu[eu["eu_entry_total_gwh"] > 3 * med]
+            if not flagged.empty:
+                print(
+                    "[FEATURES] ENTSOG artifact warning: "
+                    f"{len(flagged)} days exceed 3x trailing median "
+                    f"(e.g. {flagged['date'].min().date()} "
+                    f"{flagged['eu_entry_total_gwh'].max():.0f} GWh/d) -- "
+                    "left raw, clean in pre-reg analysis"
+                )
+            df = df.merge(
+                eu[["date", "eu_entry_total_gwh", "eu_russian_share"]],
+                on="date",
+                how="left",
+            )
+            print(
+                f"[FEATURES] Loaded ENTSOG: {len(eu)} days, "
+                f"RU share latest={eu['eu_russian_share'].iloc[-1]:.3f}"
+            )
+        else:
+            print("[FEATURES] Warning: No ENTSOG data found")
+
+        # --- GIE AGSI: EU-aggregate storage fullness + net withdrawal ---
+        agsi_q = """
+        SELECT gas_day as date,
+               SUM(gas_in_storage_twh) as storage_twh,
+               SUM(working_gas_volume_twh) as working_twh,
+               SUM(net_withdrawal_gwh_d) as net_withdrawal_gwh_d
+        FROM agsi_storage
+        WHERE gas_day >= :start_date
+        GROUP BY gas_day
+        ORDER BY gas_day
+        """
+        with self.engine.connect() as conn:
+            agsi = pd.read_sql(
+                text(agsi_q), conn, params={"start_date": self.start_date.isoformat()}
+            )
+
+        if not agsi.empty:
+            agsi["date"] = pd.to_datetime(agsi["date"]).dt.normalize()
+            for col in ["storage_twh", "working_twh", "net_withdrawal_gwh_d"]:
+                agsi[col] = pd.to_numeric(agsi[col], errors="coerce")
+            agsi["eu_storage_full_pct"] = (
+                agsi["storage_twh"] / agsi["working_twh"].replace(0, np.nan) * 100
+            )
+            agsi.rename(
+                columns={"net_withdrawal_gwh_d": "eu_net_withdrawal_gwh_d"}, inplace=True
+            )
+            df = df.merge(
+                agsi[["date", "eu_storage_full_pct", "eu_net_withdrawal_gwh_d"]],
+                on="date",
+                how="left",
+            )
+            print(
+                f"[FEATURES] Loaded AGSI: {len(agsi)} days, "
+                f"EU fullness latest={agsi['eu_storage_full_pct'].iloc[-1]:.1f}%"
+            )
+        else:
+            print("[FEATURES] Warning: No AGSI data found")
+
+        # --- GIE ALSI: EU LNG send-out + inventory ---
+        alsi_q = """
+        SELECT gas_day as date,
+               SUM(sendout_gwh_d) as sendout_gwh_d,
+               SUM(inventory_gwh) as inventory_gwh
+        FROM alsi_storage
+        WHERE gas_day >= :start_date
+        GROUP BY gas_day
+        ORDER BY gas_day
+        """
+        with self.engine.connect() as conn:
+            alsi = pd.read_sql(
+                text(alsi_q), conn, params={"start_date": self.start_date.isoformat()}
+            )
+
+        if not alsi.empty:
+            alsi["date"] = pd.to_datetime(alsi["date"]).dt.normalize()
+            alsi.rename(
+                columns={
+                    "sendout_gwh_d": "eu_lng_sendout_gwh_d",
+                    "inventory_gwh": "eu_lng_inventory_gwh",
+                },
+                inplace=True,
+            )
+            df = df.merge(
+                alsi[["date", "eu_lng_sendout_gwh_d", "eu_lng_inventory_gwh"]],
+                on="date",
+                how="left",
+            )
+            print(f"[FEATURES] Loaded ALSI: {len(alsi)} days")
+        else:
+            print("[FEATURES] Warning: No ALSI data found")
+
+        return df
+
+    def load_policy_money_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Policy-money signals: LDA lobbying filings (counts + dollars,
+        energy-issue ENG activity) and House periodic transaction reports.
+
+        Previously ingested-but-dark (lobbying 2001->, PTR 2015->).
+        Event-driven and zero-inflated like congress bills, so sparse
+        branch. state_bills stays out until the key activates (0 rows).
+        """
+
+        # --- Lobbying filings: daily counts + dollar flow ---
+        lob_q = """
+        SELECT dt_posted as date, income, expenses
+        FROM lobbying_filings
+        ORDER BY dt_posted
+        """
+        with self.engine.connect() as conn:
+            lob = pd.read_sql(text(lob_q), conn)
+
+        if not lob.empty:
+            lob["date"] = pd.to_datetime(
+                lob["date"], errors="coerce", utc=True
+            ).dt.tz_convert(None).dt.normalize()
+            lob = lob.dropna(subset=["date"])
+            lob["income"] = pd.to_numeric(lob["income"], errors="coerce").fillna(0)
+            lob["expenses"] = pd.to_numeric(lob["expenses"], errors="coerce").fillna(0)
+            lob_agg = (
+                lob.groupby("date")
+                .agg(
+                    lobbying_filings_count=("income", "size"),
+                    lobbying_income=("income", "sum"),
+                    lobbying_expenses=("expenses", "sum"),
+                )
+                .reset_index()
+            )
+            df = df.merge(lob_agg, on="date", how="left")
+            print(
+                f"[FEATURES] Loaded lobbying: {len(lob_agg)} dates, "
+                f"filings={lob_agg['lobbying_filings_count'].sum():.0f}"
+            )
+        else:
+            print("[FEATURES] Warning: No lobbying data found")
+
+        # --- Energy-issue (ENG) lobbying activity ---
+        eng_q = """
+        SELECT f.dt_posted as date
+        FROM lobbying_activities a
+        JOIN lobbying_filings f ON a.filing_uuid = f.filing_uuid
+        WHERE a.general_issue_code = 'ENG'
+        """
+        with self.engine.connect() as conn:
+            eng = pd.read_sql(text(eng_q), conn)
+
+        if not eng.empty:
+            eng["date"] = pd.to_datetime(
+                eng["date"], errors="coerce", utc=True
+            ).dt.tz_convert(None).dt.normalize()
+            eng_agg = (
+                eng.dropna(subset=["date"])
+                .groupby("date")
+                .size()
+                .reset_index(name="lobbying_energy_count")
+            )
+            df = df.merge(eng_agg, on="date", how="left")
+            print(f"[FEATURES] Loaded lobbying-ENG: {len(eng_agg)} dates")
+        else:
+            print("[FEATURES] Warning: No lobbying-ENG activity found")
+
+        # --- House PTR filings: daily counts ---
+        ptr_q = "SELECT FilingDate as date FROM house_ptr_index"
+        with self.engine.connect() as conn:
+            ptr = pd.read_sql(text(ptr_q), conn)
+
+        if not ptr.empty:
+            ptr["date"] = pd.to_datetime(ptr["date"], errors="coerce").dt.normalize()
+            ptr_agg = (
+                ptr.dropna(subset=["date"])
+                .groupby("date")
+                .size()
+                .reset_index(name="house_ptr_count")
+            )
+            df = df.merge(ptr_agg, on="date", how="left")
+            print(
+                f"[FEATURES] Loaded House PTR: {len(ptr_agg)} dates, "
+                f"filings={ptr_agg['house_ptr_count'].sum():.0f}"
+            )
+        else:
+            print("[FEATURES] Warning: No House PTR data found")
+
+        for col in [
+            "lobbying_filings_count",
+            "lobbying_income",
+            "lobbying_expenses",
+            "lobbying_energy_count",
+            "house_ptr_count",
+        ]:
+            if col in df.columns:
+                df[col] = df[col].fillna(0)
+
+        return df
+
+    def load_shock_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Shock-event signals: NCEI storm events (counts + damage, plus a
+        grid/gas-stressor subset), FEMA disaster declarations.
+
+        Previously ingested-but-dark (storm 2015->, 740k rows). Event-driven
+        and zero-inflated, so sparse branch. Drought is intentionally left
+        out: its date column holds 1970 epoch values (ingester bug) -- flag
+        for the ingester, don't launder it into features.
+        """
+
+        # Grid/gas stressors: cold snaps, heat, hurricanes, high wind --
+        # the events that freeze wells, spike power burn, or knock out
+        # compressors (cf. Elliott Dec-2022, Texas 2021).
+        SEVERE_TYPES = (
+            "Winter Storm", "Winter Weather", "Blizzard", "Ice Storm",
+            "Extreme Cold/Wind Chill", "Cold/Wind Chill", "Frost/Freeze",
+            "Heat", "Excessive Heat", "Hurricane (Typhoon)", "Hurricane",
+            "Marine Hurricane/Typhoon", "Tropical Storm",
+            "Marine Tropical Storm", "High Wind",
+        )
+
+        storm_q = """
+        SELECT DATE(begin_date) as date, event_type,
+               COALESCE(property_damage, 0) as property_damage,
+               COALESCE(crop_damage, 0) as crop_damage
+        FROM storm_events
+        WHERE DATE(begin_date) >= :start_date
+        """
+        with self.engine.connect() as conn:
+            storm = pd.read_sql(
+                text(storm_q), conn, params={"start_date": self.start_date.isoformat()}
+            )
+
+        if not storm.empty:
+            storm["date"] = pd.to_datetime(storm["date"], errors="coerce").dt.normalize()
+            storm = storm.dropna(subset=["date"])
+            storm["property_damage"] = pd.to_numeric(
+                storm["property_damage"], errors="coerce"
+            ).fillna(0)
+            storm["crop_damage"] = pd.to_numeric(
+                storm["crop_damage"], errors="coerce"
+            ).fillna(0)
+            total_agg = (
+                storm.groupby("date")
+                .agg(
+                    storm_event_count=("event_type", "size"),
+                    storm_property_damage=("property_damage", "sum"),
+                    storm_crop_damage=("crop_damage", "sum"),
+                )
+                .reset_index()
+            )
+            severe_agg = (
+                storm[storm["event_type"].isin(SEVERE_TYPES)]
+                .groupby("date")
+                .size()
+                .reset_index(name="storm_severe_count")
+            )
+            df = df.merge(total_agg, on="date", how="left")
+            df = df.merge(severe_agg, on="date", how="left")
+            print(
+                f"[FEATURES] Loaded storms: {len(total_agg)} dates, "
+                f"events={total_agg['storm_event_count'].sum():.0f}, "
+                f"severe={severe_agg['storm_severe_count'].sum():.0f}"
+            )
+        else:
+            print("[FEATURES] Warning: No storm data found")
+
+        # --- FEMA declarations: daily counts ---
+        fema_q = "SELECT DATE(declaration_date) as date FROM fema_disasters"
+        with self.engine.connect() as conn:
+            fema = pd.read_sql(text(fema_q), conn)
+
+        if not fema.empty:
+            fema["date"] = pd.to_datetime(fema["date"], errors="coerce").dt.normalize()
+            fema_agg = (
+                fema.dropna(subset=["date"])
+                .groupby("date")
+                .size()
+                .reset_index(name="fema_declarations")
+            )
+            df = df.merge(fema_agg, on="date", how="left")
+            print(f"[FEATURES] Loaded FEMA: {len(fema_agg)} dates")
+        else:
+            print("[FEATURES] Warning: No FEMA data found")
+
+        for col in [
+            "storm_event_count",
+            "storm_property_damage",
+            "storm_crop_damage",
+            "storm_severe_count",
+            "fema_declarations",
+        ]:
+            if col in df.columns:
+                df[col] = df[col].fillna(0)
+
+        return df
+
+    def load_equity_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Energy-equity index: equal-weight daily log-return + breadth
+        (fraction of names up) across the stock_prices universe (26 names:
+        producers, majors, refiners, services, midstream, utilities, ETFs).
+
+        Previously ingested-but-dark (ingested since 2015, never loaded).
+        Requires the 2026-09-15 stock_prices cleanup (ns-epoch/NULL/micros
+        formats deduped to canonical '%Y-%m-%d %H:%M:%S' text, 313k -> 151k).
+        Caveat: closes splice adjusted (backfill) and unadjusted (daily)
+        eras -- diluted 26x in the equal-weight mean and documented here,
+        not laundered. Low-freq branch alongside CME cross-asset spreads.
+        """
+
+        eq_q = """
+        SELECT DATE("timestamp") as date, "ticker", AVG("close") as close
+        FROM stock_prices
+        WHERE DATE("timestamp") >= :start_date
+        GROUP BY DATE("timestamp"), "ticker"
+        """
+        with self.engine.connect() as conn:
+            eq = pd.read_sql(
+                text(eq_q), conn, params={"start_date": self.start_date.isoformat()}
+            )
+
+        if not eq.empty:
+            eq["date"] = pd.to_datetime(eq["date"]).dt.normalize()
+            eq["close"] = pd.to_numeric(eq["close"], errors="coerce")
+            eq = eq.dropna(subset=["date", "close"]).sort_values(["ticker", "date"])
+            eq["log_ret"] = np.log(eq["close"] / eq.groupby("ticker")["close"].shift(1))
+            daily = (
+                eq.groupby("date")["log_ret"]
+                .agg(eq_energy_eqw_ret="mean", eq_breadth_up=lambda s: (s > 0).mean())
+                .reset_index()
+            )
+            df = df.merge(daily, on="date", how="left")
+            print(
+                f"[FEATURES] Loaded equities: {len(daily)} days, "
+                f"{eq['ticker'].nunique()} names, "
+                f"index latest={daily['eq_energy_eqw_ret'].iloc[-1]:+.4f}"
+            )
+        else:
+            print("[FEATURES] Warning: No equity data found")
+
+        return df
+
     def engineer_features(self) -> pd.DataFrame:
         """Main pipeline: load all data and engineer features."""
 
@@ -735,6 +1121,18 @@ class FeatureEngineer:
         # Load new energy complex features
         df = self.load_cme_futures_features(df)
         df = self.load_power_lmp_features(df)
+
+        # Load EU gas balance (previously ingested-but-dark)
+        df = self.load_eu_gas_features(df)
+
+        # Load policy-money signals (previously ingested-but-dark)
+        df = self.load_policy_money_features(df)
+
+        # Load shock-event signals (previously ingested-but-dark)
+        df = self.load_shock_features(df)
+
+        # Load energy-equity index (previously ingested-but-dark)
+        df = self.load_equity_features(df)
 
         # Fill missing values
         # Forward fill for lagged features, back fill for forward-looking
@@ -884,6 +1282,26 @@ class FeatureEngineer:
             [c for c in weather_cols if c in df.columns and c not in low_freq_cols]
         )
 
+        # Energy-equity index -- cross-asset context like CME spreads.
+        eq_cols = ["eq_energy_eqw_ret", "eq_breadth_up"]
+        low_freq_cols.extend(
+            [c for c in eq_cols if c in df.columns and c not in low_freq_cols]
+        )
+
+        # EU gas balance (ENTSOG flows + GIE storage/LNG) -- daily grain
+        # but fundamental/supply-side, so low-freq branch like EIA storage.
+        eu_cols = [
+            "eu_entry_total_gwh",
+            "eu_russian_share",
+            "eu_storage_full_pct",
+            "eu_net_withdrawal_gwh_d",
+            "eu_lng_sendout_gwh_d",
+            "eu_lng_inventory_gwh",
+        ]
+        low_freq_cols.extend(
+            [c for c in eu_cols if c in df.columns and c not in low_freq_cols]
+        )
+
         low_freq_features = df[[col for col in low_freq_cols if col in df.columns]].copy()
 
         # Sparse features: event-driven signals with sparse occurrence
@@ -893,6 +1311,16 @@ class FeatureEngineer:
             "congress_bills_energy_count",
             "congress_bills_ma",
             "congress_bills_energy_ma",
+            "lobbying_filings_count",
+            "lobbying_income",
+            "lobbying_expenses",
+            "lobbying_energy_count",
+            "house_ptr_count",
+            "storm_event_count",
+            "storm_property_damage",
+            "storm_crop_damage",
+            "storm_severe_count",
+            "fema_declarations",
         ]
         sparse_features = df[[col for col in sparse_cols if col in df.columns]].copy()
 

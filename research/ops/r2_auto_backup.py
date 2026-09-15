@@ -273,6 +273,13 @@ class R2AutoBackup:
             if temp_snapshot.exists():
                 temp_snapshot.unlink()
 
+    def _should_backup_database(self) -> bool:
+        """Weekly-full policy: only snapshot the DB on Monday (weekday 0).
+        --force-full overrides."""
+        if self.force_full:
+            return True
+        return datetime.now().weekday() == 0
+
     def backup_all(self) -> bool:
         """Run complete backup routine."""
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -294,9 +301,12 @@ class R2AutoBackup:
         else:
             logger.info("Force-full mode: uploading everything")
 
-        # 1. Database
-        logger.info("Backing up database...")
-        self.backup_database(timestamp)
+        # 1. Database — weekly-full (Monday only, or --force-full)
+        if self._should_backup_database():
+            logger.info("Backing up database (weekly-full: Monday or --force-full)...")
+            self.backup_database(timestamp)
+        else:
+            logger.info("Skipping database snapshot (weekly-full: Monday only — use --force-full to upload now)")
 
         # 2. Processed data
         logger.info("Backing up processed data...")
@@ -352,11 +362,23 @@ def main():
     parser.add_argument(
         "--db-only",
         action="store_true",
-        help="Upload only database (not implemented in simple mode, use full script)",
+        help="Upload only database (honors weekly guard unless --force-full)",
     )
     args = parser.parse_args()
 
     backup = R2AutoBackup(dry_run=args.dry_run, force_full=args.force_full)
+    # --db-only: run only the DB path then exit (honors Monday guard)
+    if args.db_only:
+        if not backup.connect():
+            logger.error("Failed to connect to R2")
+            return 1
+        if not backup.force_full:
+            backup.load_remote_manifest()
+        if backup._should_backup_database():
+            ok = backup.backup_database(datetime.now().strftime("%Y-%m-%d_%H%M%S"))
+            return 0 if ok else 1
+        logger.info("Skipping --db-only (weekly-full: Monday only — use --force-full to upload now)")
+        return 0
 
     if not backup.connect():
         logger.error("Failed to connect to R2")

@@ -113,14 +113,32 @@ low_freq_features:
   - "ppi_yoy_PUEUUUI01"
   - "ppi_energy_avg"
   - "ppi_yoy_avg"
-feature_count_low_freq: 36
+  - "eu_entry_total_gwh"
+  - "eu_russian_share"
+  - "eu_storage_full_pct"
+  - "eu_net_withdrawal_gwh_d"
+  - "eu_lng_sendout_gwh_d"
+  - "eu_lng_inventory_gwh"
+  - "eq_energy_eqw_ret"
+  - "eq_breadth_up"
+feature_count_low_freq: 44
 
 sparse_features:
   - "congress_bills_count"
   - "congress_bills_energy_count"
   - "congress_bills_ma"
   - "congress_bills_energy_ma"
-feature_count_sparse: 4
+  - "lobbying_filings_count"
+  - "lobbying_income"
+  - "lobbying_expenses"
+  - "lobbying_energy_count"
+  - "house_ptr_count"
+  - "storm_event_count"
+  - "storm_property_damage"
+  - "storm_crop_damage"
+  - "storm_severe_count"
+  - "fema_declarations"
+feature_count_sparse: 14
 
 training:
   lookback: 20  # Sequence length
@@ -172,7 +190,7 @@ signal_format:
   horizon_minutes: 60  # Recommended execution window
   metadata:
     model_version: "1.0"
-    features_count: 55  # 15 + 36 + 4
+    features_count: 73  # 15 + 44 + 14
     temporal_coverage: "20-day lookback"
 
 deployment:

@@ -93,15 +93,19 @@ $State = Read-State
 # every logon. Failed runs get a 24h cooldown to avoid same-day restart loops.
 $EarlyNow = Get-Date
 $EarlyIsMonday = $EarlyNow.DayOfWeek -eq [System.DayOfWeek]::Monday
+$EarlyIsSunday = $EarlyNow.DayOfWeek -eq [System.DayOfWeek]::Sunday
 $EarlyIsFirstOfMonth = $EarlyNow.Day -eq 1
 if (-not $Force -and -not $RedoFailed) {
     $lastDaily = $State.ingesters.PSObject.Properties["daily"]
     if ($lastDaily -and $lastDaily.Value.status -eq "success") {
-        # Daily already succeeded today -- check if we still need weekly/monthly/r2
+        # Daily already succeeded today -- check if we still need weekly/monthly/r2/prune.
+        # needsPrune: Sunday prune is state-tracked so a missed run is retried
+        # on the next boot that same Sunday instead of waiting a week.
         $needsWeekly = $EarlyIsMonday -and (Get-IngesterStatus $State "weekly") -ne "success"
         $needsMonthly = $EarlyIsFirstOfMonth -and (Get-IngesterStatus $State "monthly") -ne "success"
         $needsR2 = (Get-IngesterStatus $State "r2_backup") -ne "success"
-        if (-not $needsWeekly -and -not $needsMonthly -and -not $needsR2) {
+        $needsPrune = $EarlyIsSunday -and (Get-IngesterStatus $State "prune") -ne "success"
+        if (-not $needsWeekly -and -not $needsMonthly -and -not $needsR2 -and -not $needsPrune) {
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] All scheduled work already succeeded today. Exiting before network checks."
             Remove-MyLock
             exit 0
@@ -144,13 +148,17 @@ if ($RedoFailed) {
     if ($IsMonday)       { $ScheduledIngesters.Add("weekly") }
     if ($IsFirstOfMonth) { $ScheduledIngesters.Add("monthly") }
 
-    # Safeguard: skip if all scheduled ingesters already succeeded today
+    # Safeguard: skip if all scheduled ingesters already succeeded today.
+    # On Sundays the pending prune also blocks the exit so a missed prune
+    # is retried on the next boot that same Sunday (state-tracked).
     if (-not $Force) {
         $allDone = $true
         foreach ($name in $ScheduledIngesters) {
             if ((Get-IngesterStatus $State $name) -ne "success") { $allDone = $false; break }
         }
-        if ($allDone -and (Get-IngesterStatus $State "r2_backup") -eq "success") {
+        $IsSunday = $Now.DayOfWeek -eq [System.DayOfWeek]::Sunday
+        $pruneDone = (-not $IsSunday) -or ((Get-IngesterStatus $State "prune") -eq "success")
+        if ($allDone -and (Get-IngesterStatus $State "r2_backup") -eq "success" -and $pruneDone) {
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] All ingesters completed successfully today. Exiting."
             Remove-MyLock
             exit 0
@@ -357,6 +365,51 @@ if (-not $anyFailed -and ((Get-IngesterStatus $State "r2_backup") -ne "success" 
         }
     } else {
         Set-IngesterStatus $State "r2_backup" "failed" "timeout after ${BackupTimeoutSeconds}s"
+    }
+}
+
+# ── Weekly R2 prune (Sunday, non-blocking) ─────────────────────────────────
+# With weekly-full DB (Monday) + keep-last 5 + first-per-month, the database
+# prefix stays ~5-6 GB and the total bucket stays under 10 GB. Prune is Sunday
+# so Monday's full has room.
+if ((Get-Date).DayOfWeek -eq [System.DayOfWeek]::Sunday) {
+    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sunday prune: trimming old database snapshots (keep-last 5 + first-per-month)..."
+    try {
+        $pruneJob = Start-Job -ScriptBlock {
+            param($root)
+            Set-Location $root
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+            $env:PYTHONIOENCODING = "utf-8"
+            $EnvFile = Join-Path $root ".env"
+            if (Test-Path $EnvFile) {
+                Get-Content $EnvFile | ForEach-Object {
+                    if ($_ -match '^\s*([^#][^=]*)=(.*)$') {
+                        [System.Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim(), "Process")
+                    }
+                }
+            }
+            python "research/ops/r2_prune.py" 2>&1 | ForEach-Object { $_.ToString() }
+            "PRUNE_EXIT_CODE=$LASTEXITCODE"
+        } -ArgumentList $ProjectRoot
+        $null = Wait-Job $pruneJob -Timeout 300
+        $pruneOutput = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in @(Receive-Job $pruneJob -ErrorAction SilentlyContinue)) {
+            "$line" | Tee-Object -FilePath $LogFile -Append | Out-Null
+            $pruneOutput.Add("$line")
+        }
+        Remove-Job $pruneJob -Force -ErrorAction SilentlyContinue
+        $pruneExitLine = $pruneOutput | Where-Object { $_ -like 'PRUNE_EXIT_CODE=*' } | Select-Object -Last 1
+        $pruneExit = if ($pruneExitLine) { [int]($pruneExitLine -replace 'PRUNE_EXIT_CODE=', '') } else { 1 }
+        if ($pruneExit -eq 0) {
+            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sunday prune finished successfully."
+            Set-IngesterStatus $State "prune" "success"
+        } else {
+            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sunday prune failed (non-blocking). exitCode=$pruneExit"
+            Set-IngesterStatus $State "prune" "failed" "exitCode=$pruneExit"
+        }
+    } catch {
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sunday prune failed (non-blocking): $_"
+        Set-IngesterStatus $State "prune" "failed" "$_"
     }
 }
 
