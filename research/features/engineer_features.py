@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
@@ -179,18 +180,30 @@ class FeatureEngineer:
         ORDER BY timestamp
         """
 
-        with self.engine.connect() as conn:
-            eia_storage = pd.read_sql(
-                text(query_storage), conn, params={"start_date": self.start_date.isoformat()}
-            )
+        eia_storage = pl.read_database(
+            query_storage.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+            self.engine,
+        )
 
-        if not eia_storage.empty:
-            eia_storage["date"] = pd.to_datetime(eia_storage["date"])
-            eia_storage["storage_bcf"] = pd.to_numeric(eia_storage["storage_bcf"], errors="coerce")
-            eia_storage["eia_storage_yoy"] = eia_storage["storage_bcf"].pct_change(
-                52
-            )  # 1 year = ~52 weeks
-            eia_storage["eia_storage_change"] = eia_storage["storage_bcf"].diff()
+        if not eia_storage.is_empty():
+            eia_storage = (
+                eia_storage.lazy()
+                .with_columns(
+                    pl.col("date").str.to_datetime(strict=False),
+                    pl.col("storage_bcf").cast(pl.Float64, strict=False),
+                )
+                .sort("date")
+                .with_columns(
+                    # Same op order as pandas pct_change: (x - x.shift)/x.shift
+                    (
+                        (pl.col("storage_bcf") - pl.col("storage_bcf").shift(52))
+                        / pl.col("storage_bcf").shift(52)
+                    ).alias("eia_storage_yoy"),  # 1 year = ~52 weeks
+                    pl.col("storage_bcf").diff().alias("eia_storage_change"),
+                )
+                .collect()
+                .to_pandas()
+            )
 
             # Merge to main dataframe using forward fill (weekly data to daily)
             df = df.merge(
@@ -216,18 +229,29 @@ class FeatureEngineer:
         ORDER BY timestamp
         """
 
-        with self.engine.connect() as conn:
-            eia_prod = pd.read_sql(
-                text(query_prod), conn, params={"start_date": self.start_date.isoformat()}
-            )
+        eia_prod = pl.read_database(
+            query_prod.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+            self.engine,
+        )
 
-        if not eia_prod.empty:
-            eia_prod["date"] = pd.to_datetime(eia_prod["date"])
-            eia_prod["production_mmcf"] = pd.to_numeric(
-                eia_prod["production_mmcf"], errors="coerce"
+        if not eia_prod.is_empty():
+            eia_prod = (
+                eia_prod.lazy()
+                .with_columns(
+                    pl.col("date").str.to_datetime(strict=False),
+                    pl.col("production_mmcf").cast(pl.Float64, strict=False),
+                )
+                .sort("date")
+                .with_columns(
+                    (
+                        (pl.col("production_mmcf") - pl.col("production_mmcf").shift(52))
+                        / pl.col("production_mmcf").shift(52)
+                    ).alias("eia_production_yoy"),
+                    pl.col("production_mmcf").diff().alias("eia_production_change"),
+                )
+                .collect()
+                .to_pandas()
             )
-            eia_prod["eia_production_yoy"] = eia_prod["production_mmcf"].pct_change(52)
-            eia_prod["eia_production_change"] = eia_prod["production_mmcf"].diff()
 
             df = df.merge(
                 eia_prod[
@@ -259,29 +283,44 @@ class FeatureEngineer:
         ORDER BY timestamp
         """
 
-        with self.engine.connect() as conn:
-            fred = pd.read_sql(
-                text(query), conn, params={"start_date": self.start_date.isoformat()}
+        fred_pl = pl.read_database(
+            query.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+            self.engine,
+        )
+
+        if not fred_pl.is_empty():
+            base_cols = [c for c in fred_pl.columns if c != "date"]
+            fred = (
+                fred_pl.lazy()
+                .with_columns(
+                    pl.col("date").str.to_datetime(strict=False),
+                    *[pl.col(c).cast(pl.Float64, strict=False) for c in base_cols],
+                )
+                .sort("date")
+                # Forward fill base columns first (sparse FRED data), then back fill
+                .with_columns(
+                    *[pl.col(c).forward_fill().backward_fill() for c in base_cols]
+                )
+                # YoY / MA over 4 quarters
+                .with_columns(
+                    *[
+                        expr
+                        for c in base_cols
+                        for expr in (
+                            ((pl.col(c) - pl.col(c).shift(4)) / pl.col(c).shift(4)).alias(
+                                f"{c}_yoy"
+                            ),
+                            pl.col(c).rolling_mean(4).alias(f"{c}_ma"),
+                        )
+                    ]
+                )
+                .collect()
+                .to_pandas()
             )
-
-        if not fred.empty:
-            fred["date"] = pd.to_datetime(fred["date"])
-
-            # Convert numeric columns
-            for col in fred.columns:
-                if col != "date":
-                    fred[col] = pd.to_numeric(fred[col], errors="coerce")
-
-            # Forward fill base columns first (sparse FRED data)
-            base_cols = [col for col in fred.columns if col != "date"]
-            for col in base_cols:
-                fred[col] = fred[col].fillna(method="ffill").fillna(method="bfill")
 
             # Calculate YoY changes for each indicator (4 quarters for FRED monthly/quarterly)
             derived_cols = []
             for col in base_cols:
-                fred[f"{col}_yoy"] = fred[col].pct_change(4)  # 4 quarters
-                fred[f"{col}_ma"] = fred[col].rolling(4).mean()  # 4-period MA
                 derived_cols.extend([f"{col}_yoy", f"{col}_ma"])
 
             df = df.merge(fred, on="date", how="left")
@@ -308,6 +347,10 @@ class FeatureEngineer:
         ORDER BY date
         """
 
+        # NOTE: pandas read retained deliberately -- bls_ppi stores mixed
+        # SQLite types per column (TEXT numerics beside REALs), which breaks
+        # polars read_database schema inference. Frame is monthly-tiny; the
+        # merge_asof loop below stays pandas for the same reason.
         with self.engine.connect() as conn:
             ppi = pd.read_sql(text(query), conn, params={"start_date": self.start_date.isoformat()})
 
@@ -362,10 +405,17 @@ class FeatureEngineer:
         ORDER BY date
         """
 
-        with self.engine.connect() as conn:
-            permits = pd.read_sql(
-                text(query), conn, params={"start_date": self.start_date.isoformat()}
+        permits = (
+            pl.read_database(
+                query.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+                self.engine,
             )
+            .lazy()
+            .with_columns(pl.col("date").str.to_datetime(strict=False).dt.date())
+            .sort("date")
+            .collect()
+            .to_pandas()
+        )
 
         if not permits.empty:
             permits["date"] = pd.to_datetime(permits["date"])
@@ -396,29 +446,41 @@ class FeatureEngineer:
         ORDER BY timestamp
         """
 
-        with self.engine.connect() as conn:
-            congress = pd.read_sql(
-                text(query), conn, params={"start_date": self.start_date.isoformat()}
-            )
+        congress = pl.read_database(
+            query.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+            self.engine,
+        )
 
-        if not congress.empty:
-            congress["date"] = pd.to_datetime(
-                congress["date"], errors="coerce", utc=True
-            ).dt.tz_convert(None)
-            congress["is_energy_related"] = (
-                pd.to_numeric(congress["is_energy_related"], errors="coerce").fillna(0).astype(int)
+        if not congress.is_empty():
+            congress_agg = (
+                congress.lazy()
+                .with_columns(
+                    pl.col("date").str.to_datetime(time_zone="UTC", strict=False)
+                    .dt.replace_time_zone(None)
+                    .dt.date()
+                    .alias("day"),
+                    pl.col("is_energy_related")
+                    .cast(pl.Int64, strict=False)
+                    .fill_null(0),
+                )
+                .drop_nulls("day")
+                .group_by("day")
+                .agg(
+                    pl.len().cast(pl.Int64).alias("congress_bills_count"),
+                    pl.col("is_energy_related")
+                    .eq(1)
+                    .sum()
+                    .cast(pl.Int64)
+                    .alias("congress_bills_energy_count"),
+                )
+                .sort("day")
+                .collect()
+                .to_pandas()
             )
+            congress_agg.rename(columns={"day": "date"}, inplace=True)
+            congress_agg["date"] = pd.to_datetime(congress_agg["date"])
 
-            total_agg = congress.groupby("date").size().reset_index(name="congress_bills_count")
-            energy_agg = (
-                congress[congress["is_energy_related"] == 1]
-                .groupby("date")
-                .size()
-                .reset_index(name="congress_bills_energy_count")
-            )
-
-            df = df.merge(total_agg, on="date", how="left")
-            df = df.merge(energy_agg, on="date", how="left")
+            df = df.merge(congress_agg, on="date", how="left")
             df["congress_bills_count"] = df["congress_bills_count"].fillna(0)
             df["congress_bills_energy_count"] = df["congress_bills_energy_count"].fillna(0)
 
@@ -426,7 +488,7 @@ class FeatureEngineer:
             df["congress_bills_energy_ma"] = df["congress_bills_energy_count"].rolling(20).mean()
 
             print(
-                f"[FEATURES] Loaded Congress bills: {len(total_agg)} dates, total={total_agg['congress_bills_count'].sum():.0f}, energy={energy_agg['congress_bills_energy_count'].sum():.0f}"
+                f"[FEATURES] Loaded Congress bills: {len(congress_agg)} dates, total={congress_agg['congress_bills_count'].sum():.0f}, energy={congress_agg['congress_bills_energy_count'].sum():.0f}"
             )
         else:
             print("[FEATURES] Warning: No Congress data found")
@@ -475,86 +537,115 @@ class FeatureEngineer:
                AND region IN ('3|East North Central', '4|West North Central'))
         """
 
-        with self.engine.connect() as conn:
-            dd = pd.read_sql(
-                text(query_dd),
-                conn,
-                params={"start_date": (self.start_date - pd.Timedelta(days=400)).isoformat()},
-            )
-            normals = pd.read_sql(text(query_normals), conn)
+        lookback_start = (self.start_date - pd.Timedelta(days=400)).isoformat()
+        dd = pl.read_database(
+            query_dd.replace(":start_date", f"'{lookback_start}'"), self.engine
+        )
+        normals = pl.read_database(query_normals, self.engine)
 
-        if dd.empty:
+        if dd.is_empty():
             print("[FEATURES] Warning: no NOAA degree day data found")
             return df
 
-        # Wide frame keyed by series
-        dd["series"] = (
-            dd["weight_basis"] + "_" + dd["degree_type"] + "_" + dd["region"].str.split("|").str[0]
+        # Long frames keyed by series; normals joined on (mmdd, series) so
+        # deviation = value - climatological normal for the same month/day.
+        dev_long = (
+            dd.lazy()
+            .with_columns(
+                pl.col("date").str.to_date(strict=False),
+                (
+                    pl.col("weight_basis")
+                    + "_"
+                    + pl.col("degree_type")
+                    + "_"
+                    + pl.col("region").str.split("|").list.first()
+                ).alias("series"),
+                pl.col("value").cast(pl.Float64, strict=False),
+            )
+            .drop_nulls(["date", "series"])
+            .with_columns(pl.col("date").dt.strftime("%m%d").alias("mmdd"))
+            .join(
+                normals.lazy()
+                .with_columns(
+                    (
+                        pl.col("weight_basis")
+                        + "_"
+                        + pl.col("degree_type")
+                        + "_"
+                        + pl.col("region").str.split("|").list.first()
+                    ).alias("series"),
+                    pl.col("normal").cast(pl.Float64, strict=False),
+                )
+                .select(["mmdd", "series", "normal"]),
+                on=["mmdd", "series"],
+                how="left",
+            )
+            .with_columns((pl.col("value") - pl.col("normal")).alias("dev"))
+            .select(["date", "series", "dev"])
+            .collect()
         )
-        wide = dd.pivot_table(index="date", columns="series", values="value", aggfunc="first")
-        normals["series"] = (
-            normals["weight_basis"]
-            + "_"
-            + normals["degree_type"]
-            + "_"
-            + normals["region"].str.split("|").str[0]
+        wide = dev_long.pivot(
+            values="dev", index="date", on="series", aggregate_function="first"
+        ).sort("date")
+        series_cols = [c for c in wide.columns if c != "date"]
+
+        # Season keys: HDD anchored Jul 1, CDD anchored Jan 1
+        wide = wide.with_columns(
+            pl.when(pl.col("date").dt.month() >= 7)
+            .then(pl.col("date").dt.year())
+            .otherwise(pl.col("date").dt.year() - 1)
+            .alias("season_hdd"),
+            pl.col("date").dt.year().alias("season_cdd"),
         )
-        nrm = normals.pivot_table(index="mmdd", columns="series", values="normal", aggfunc="first")
 
-        wide.index = pd.to_datetime(wide.index)
-        wide = wide.sort_index()
-
-        # Deviation vs climatological normal (same month/day)
-        mmdd = wide.index.strftime("%m%d")
-        norm_aligned = nrm.reindex(mmdd)
-        norm_aligned.index = wide.index
-        devs = wide - norm_aligned
-
-        feats = pd.DataFrame(index=wide.index)
         conus_pop_hdd = "population_HDD_CONUS"
         conus_pop_cdd = "population_CDD_CONUS"
         gas_hdd = "utility_gas_HDD_CONUS"
 
-        if conus_pop_hdd in devs:
-            feats["hdd_conus_dev"] = devs[conus_pop_hdd]
-            # Season-to-date cumulative deviation (anchor Jul 1)
-            season = np.where(wide.index.month >= 7, wide.index.year, wide.index.year - 1)
-            feats["hdd_dev_cum_season"] = (
-                pd.Series(devs[conus_pop_hdd].fillna(0).values, index=wide.index)
-                .groupby(season)
-                .cumsum()
-            )
-        if conus_pop_cdd in devs:
-            feats["cdd_conus_dev"] = devs[conus_pop_cdd]
-            season = wide.index.year  # CDD season anchored Jan 1
-            feats["cdd_dev_cum_season"] = (
-                pd.Series(devs[conus_pop_cdd].fillna(0).values, index=wide.index)
-                .groupby(season)
-                .cumsum()
-            )
-        if gas_hdd in devs:
-            feats["hdd_gas_conus_dev"] = devs[gas_hdd]
-            season = np.where(wide.index.month >= 7, wide.index.year, wide.index.year - 1)
-            feats["hdd_gas_dev_cum_season"] = (
-                pd.Series(devs[gas_hdd].fillna(0).values, index=wide.index).groupby(season).cumsum()
-            )
+        def _dev(col: str, out: str) -> pl.Expr:
+            return pl.col(col).alias(out) if col in series_cols else pl.lit(None).alias(out)
 
-        # Top residential-gas-heating divisions
-        for div, tag in (("3|East North Central", "enc"), ("4|West North Central", "wnc")):
-            col = f"population_HDD_{div}"
-            if col in devs:
-                season = np.where(wide.index.month >= 7, wide.index.year, wide.index.year - 1)
-                feats[f"hdd_{tag}_dev_cum_season"] = (
-                    pd.Series(devs[col].fillna(0).values, index=wide.index).groupby(season).cumsum()
-                )
+        def _cum(col: str, season: str, out: str) -> pl.Expr:
+            if col not in series_cols:
+                return pl.lit(None).alias(out)
+            return pl.col(col).fill_null(0).cum_sum().over(season).alias(out)
 
-        # Short-horizon demand surprise (7d sums of daily deviations)
-        if "hdd_conus_dev" in feats:
-            feats["hdd_conus_dev_7d"] = feats["hdd_conus_dev"].rolling(7).sum()
-        if "cdd_conus_dev" in feats:
-            feats["cdd_conus_dev_7d"] = feats["cdd_conus_dev"].rolling(7).sum()
+        # Dev + season-cumsum pass (all expressions read the pivoted frame)
+        wide = wide.with_columns(
+            _dev(conus_pop_hdd, "hdd_conus_dev"),
+            _cum(conus_pop_hdd, "season_hdd", "hdd_dev_cum_season"),
+            _dev(conus_pop_cdd, "cdd_conus_dev"),
+            _cum(conus_pop_cdd, "season_cdd", "cdd_dev_cum_season"),
+            _dev(gas_hdd, "hdd_gas_conus_dev"),
+            _cum(gas_hdd, "season_hdd", "hdd_gas_dev_cum_season"),
+            *[
+                _cum(f"population_HDD_{div}", "season_hdd", f"hdd_{tag}_dev_cum_season")
+                for div, tag in (("3|East North Central", "enc"), ("4|West North Central", "wnc"))
+            ],
+        )
+        # Rolling pass (reads the dev columns created above)
+        wide = wide.with_columns(
+            pl.col("hdd_conus_dev").rolling_sum(7).alias("hdd_conus_dev_7d"),
+            pl.col("cdd_conus_dev").rolling_sum(7).alias("cdd_conus_dev_7d"),
+        )
 
-        feats = feats.reset_index().rename(columns={"index": "date"})
+        keep = [
+            "date",
+            "hdd_conus_dev",
+            "hdd_dev_cum_season",
+            "cdd_conus_dev",
+            "cdd_dev_cum_season",
+            "hdd_gas_conus_dev",
+            "hdd_gas_dev_cum_season",
+            "hdd_enc_dev_cum_season",
+            "hdd_wnc_dev_cum_season",
+            "hdd_conus_dev_7d",
+            "cdd_conus_dev_7d",
+        ]
+        # Drop all-null placeholder columns (series absent from this DB --
+        # mirrors the pandas `if col in devs` guards)
+        keep = [c for c in keep if not (c != "date" and wide[c].is_null().all())]
+        feats = wide.select(keep).to_pandas()
         feats["date"] = pd.to_datetime(feats["date"])
 
         # Hub-level observed temperatures (weather_observations, open-meteo)
@@ -591,20 +682,31 @@ class FeatureEngineer:
         ORDER BY date
         """
 
-        with self.engine.connect() as conn:
-            cme = pd.read_sql(text(query), conn, params={"start_date": self.start_date.isoformat()})
+        cme_raw = pl.read_database(
+            query.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+            self.engine,
+        )
 
-        if not cme.empty:
-            cme["date"] = pd.to_datetime(cme["date"], format="ISO8601").dt.normalize()
-
-            # NOTE: cme_futures_daily carries duplicate rows per (date, contract_type) --
-            # confirmed identical values under two different timestamp serializations,
-            # same class of bug as the bls_ppi fix above, but hitting all 5 tracked
-            # contracts rather than one series. Left unguarded, a plain merge fans out
-            # 2x per contract, compounding to 2^5=32x across the 5 sequential merges below.
-            n_before = len(cme)
-            cme = cme.drop_duplicates(subset=["date", "contract_type"], keep="first")
+        if not cme_raw.is_empty():
+            n_before = len(cme_raw)
+            cme = (
+                cme_raw.lazy()
+                .with_columns(pl.col("date").str.to_datetime(strict=False).dt.date())
+                .drop_nulls("date")
+                # NOTE: cme_futures_daily carries duplicate rows per (date, contract_type) --
+                # confirmed identical values under two different timestamp serializations,
+                # same class of bug as the bls_ppi fix above, but hitting all 5 tracked
+                # contracts rather than one series. Left unguarded, a plain merge fans out
+                # 2x per contract, compounding to 2^5=32x across the 5 sequential merges below.
+                .unique(subset=["date", "contract_type"], keep="first", maintain_order=True)
+                # Secondary key pins per-date contract order (polars sort is
+                # not stable); alphabetical matches the historical DB order.
+                .sort(["date", "contract_type"])
+                .collect()
+            )
             n_after = len(cme)
+            cme = cme.to_pandas()
+            cme["date"] = pd.to_datetime(cme["date"])
             if n_after < n_before:
                 print(f"[FEATURES] Deduped cme_futures_daily: {n_before} -> {n_after} rows")
 
@@ -665,18 +767,29 @@ class FeatureEngineer:
         ORDER BY DATE(timestamp), iso
         """
 
-        with self.engine.connect() as conn:
-            lmp = pd.read_sql(text(query), conn, params={"start_date": self.start_date.isoformat()})
+        lmp_raw = pl.read_database(
+            query.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+            self.engine,
+        )
 
-        if not lmp.empty:
-            lmp["date"] = pd.to_datetime(lmp["date"]).dt.normalize()
-
-            # Same class of duplicate-row risk as cme_futures_daily -- guard even though
-            # the GROUP BY in the query above already aggregates within a calendar day;
-            # this only protects against a second, differently-timestamped write of the
-            # same (date, iso) slipping through as a distinct group.
-            n_before = len(lmp)
-            lmp = lmp.drop_duplicates(subset=["date", "iso"], keep="first")
+        if not lmp_raw.is_empty():
+            n_before = len(lmp_raw)
+            lmp = (
+                lmp_raw.lazy()
+                .with_columns(pl.col("date").str.to_date(strict=False))
+                .drop_nulls("date")
+                # Same class of duplicate-row risk as cme_futures_daily -- guard even though
+                # the GROUP BY in the query above already aggregates within a calendar day;
+                # this only protects against a second, differently-timestamped write of the
+                # same (date, iso) slipping through as a distinct group.
+                .unique(subset=["date", "iso"], keep="first", maintain_order=True)
+                # Secondary key pins per-date ISO order (polars sort is not
+                # stable); alphabetical matches the historical DB order.
+                .sort(["date", "iso"])
+                .collect()
+                .to_pandas()
+            )
+            lmp["date"] = pd.to_datetime(lmp["date"])
             n_after = len(lmp)
             if n_after < n_before:
                 print(f"[FEATURES] Deduped grid_lmp_multi_iso: {n_before} -> {n_after} rows")
@@ -735,27 +848,33 @@ class FeatureEngineer:
         GROUP BY gas_day, point_label
         ORDER BY gas_day
         """
-        with self.engine.connect() as conn:
-            nom = pd.read_sql(
-                text(entsog_q), conn, params={"start_date": self.start_date.isoformat()}
-            )
+        nom = pl.read_database(
+            entsog_q.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+            self.engine,
+        )
 
-        if not nom.empty:
-            nom["date"] = pd.to_datetime(nom["date"]).dt.normalize()
-            nom["kwh_d"] = pd.to_numeric(nom["kwh_d"], errors="coerce").fillna(0)
-            is_ru = nom["point_label"].str.contains(
-                "Greifswald|Lubmin|Mallnow|Sudzha", case=False, na=False
+        if not nom.is_empty():
+            eu = (
+                nom.lazy()
+                .with_columns(
+                    pl.col("date").str.to_date(strict=False),
+                    pl.col("kwh_d").cast(pl.Float64, strict=False).fill_null(0),
+                    pl.col("point_label")
+                    .str.contains("(?i)Greifswald|Lubmin|Mallnow|Sudzha")
+                    .fill_null(False)
+                    .alias("is_ru"),
+                )
+                .drop_nulls("date")
+                .group_by("date")
+                .agg(
+                    pl.col("kwh_d").sum().alias("eu_entry_total_kwh"),
+                    pl.col("kwh_d").filter(pl.col("is_ru")).sum().alias("eu_entry_ru_kwh"),
+                )
+                .sort("date")
+                .collect()
+                .to_pandas()
             )
-            daily_total = nom.groupby("date")["kwh_d"].sum().reset_index(
-                name="eu_entry_total_kwh"
-            )
-            daily_ru = (
-                nom[is_ru]
-                .groupby("date")["kwh_d"]
-                .sum()
-                .reset_index(name="eu_entry_ru_kwh")
-            )
-            eu = daily_total.merge(daily_ru, on="date", how="left")
+            eu["date"] = pd.to_datetime(eu["date"])
             eu["eu_entry_ru_kwh"] = eu["eu_entry_ru_kwh"].fillna(0)
             eu["eu_entry_total_gwh"] = eu["eu_entry_total_kwh"] / 1e6
             eu["eu_russian_share"] = (
@@ -797,18 +916,33 @@ class FeatureEngineer:
         GROUP BY gas_day
         ORDER BY gas_day
         """
-        with self.engine.connect() as conn:
-            agsi = pd.read_sql(
-                text(agsi_q), conn, params={"start_date": self.start_date.isoformat()}
-            )
+        agsi = pl.read_database(
+            agsi_q.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+            self.engine,
+        )
 
-        if not agsi.empty:
-            agsi["date"] = pd.to_datetime(agsi["date"]).dt.normalize()
-            for col in ["storage_twh", "working_twh", "net_withdrawal_gwh_d"]:
-                agsi[col] = pd.to_numeric(agsi[col], errors="coerce")
-            agsi["eu_storage_full_pct"] = (
-                agsi["storage_twh"] / agsi["working_twh"].replace(0, np.nan) * 100
+        if not agsi.is_empty():
+            agsi = (
+                agsi.lazy()
+                .with_columns(
+                    pl.col("date").str.to_date(strict=False),
+                    pl.col("storage_twh").cast(pl.Float64, strict=False),
+                    pl.col("working_twh").cast(pl.Float64, strict=False),
+                    pl.col("net_withdrawal_gwh_d").cast(pl.Float64, strict=False),
+                )
+                .drop_nulls("date")
+                .with_columns(
+                    (
+                        pl.col("storage_twh")
+                        / pl.col("working_twh").replace(0, None)
+                        * 100
+                    ).alias("eu_storage_full_pct")
+                )
+                .sort("date")
+                .collect()
+                .to_pandas()
             )
+            agsi["date"] = pd.to_datetime(agsi["date"])
             agsi.rename(
                 columns={"net_withdrawal_gwh_d": "eu_net_withdrawal_gwh_d"}, inplace=True
             )
@@ -834,13 +968,21 @@ class FeatureEngineer:
         GROUP BY gas_day
         ORDER BY gas_day
         """
-        with self.engine.connect() as conn:
-            alsi = pd.read_sql(
-                text(alsi_q), conn, params={"start_date": self.start_date.isoformat()}
-            )
+        alsi = pl.read_database(
+            alsi_q.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+            self.engine,
+        )
 
-        if not alsi.empty:
-            alsi["date"] = pd.to_datetime(alsi["date"]).dt.normalize()
+        if not alsi.is_empty():
+            alsi = (
+                alsi.lazy()
+                .with_columns(pl.col("date").str.to_date(strict=False))
+                .drop_nulls("date")
+                .sort("date")
+                .collect()
+                .to_pandas()
+            )
+            alsi["date"] = pd.to_datetime(alsi["date"])
             alsi.rename(
                 columns={
                     "sendout_gwh_d": "eu_lng_sendout_gwh_d",
@@ -874,25 +1016,30 @@ class FeatureEngineer:
         FROM lobbying_filings
         ORDER BY dt_posted
         """
-        with self.engine.connect() as conn:
-            lob = pd.read_sql(text(lob_q), conn)
+        lob = pl.read_database(lob_q, self.engine)
 
-        if not lob.empty:
-            lob["date"] = pd.to_datetime(
-                lob["date"], errors="coerce", utc=True
-            ).dt.tz_convert(None).dt.normalize()
-            lob = lob.dropna(subset=["date"])
-            lob["income"] = pd.to_numeric(lob["income"], errors="coerce").fillna(0)
-            lob["expenses"] = pd.to_numeric(lob["expenses"], errors="coerce").fillna(0)
+        if not lob.is_empty():
             lob_agg = (
-                lob.groupby("date")
-                .agg(
-                    lobbying_filings_count=("income", "size"),
-                    lobbying_income=("income", "sum"),
-                    lobbying_expenses=("expenses", "sum"),
+                lob.lazy()
+                .with_columns(
+                    pl.col("date").str.to_datetime(time_zone="UTC", strict=False)
+                    .dt.replace_time_zone(None)
+                    .dt.date(),
+                    pl.col("income").cast(pl.Float64, strict=False).fill_null(0),
+                    pl.col("expenses").cast(pl.Float64, strict=False).fill_null(0),
                 )
-                .reset_index()
+                .drop_nulls("date")
+                .group_by("date")
+                .agg(
+                    pl.len().cast(pl.Int64).alias("lobbying_filings_count"),
+                    pl.col("income").sum().alias("lobbying_income"),
+                    pl.col("expenses").sum().alias("lobbying_expenses"),
+                )
+                .sort("date")
+                .collect()
+                .to_pandas()
             )
+            lob_agg["date"] = pd.to_datetime(lob_agg["date"])
             df = df.merge(lob_agg, on="date", how="left")
             print(
                 f"[FEATURES] Loaded lobbying: {len(lob_agg)} dates, "
@@ -908,19 +1055,24 @@ class FeatureEngineer:
         JOIN lobbying_filings f ON a.filing_uuid = f.filing_uuid
         WHERE a.general_issue_code = 'ENG'
         """
-        with self.engine.connect() as conn:
-            eng = pd.read_sql(text(eng_q), conn)
+        eng = pl.read_database(eng_q, self.engine)
 
-        if not eng.empty:
-            eng["date"] = pd.to_datetime(
-                eng["date"], errors="coerce", utc=True
-            ).dt.tz_convert(None).dt.normalize()
+        if not eng.is_empty():
             eng_agg = (
-                eng.dropna(subset=["date"])
-                .groupby("date")
-                .size()
-                .reset_index(name="lobbying_energy_count")
+                eng.lazy()
+                .with_columns(
+                    pl.col("date").str.to_datetime(time_zone="UTC", strict=False)
+                    .dt.replace_time_zone(None)
+                    .dt.date()
+                )
+                .drop_nulls("date")
+                .group_by("date")
+                .agg(pl.len().cast(pl.Int64).alias("lobbying_energy_count"))
+                .sort("date")
+                .collect()
+                .to_pandas()
             )
+            eng_agg["date"] = pd.to_datetime(eng_agg["date"])
             df = df.merge(eng_agg, on="date", how="left")
             print(f"[FEATURES] Loaded lobbying-ENG: {len(eng_agg)} dates")
         else:
@@ -928,17 +1080,27 @@ class FeatureEngineer:
 
         # --- House PTR filings: daily counts ---
         ptr_q = "SELECT FilingDate as date FROM house_ptr_index"
-        with self.engine.connect() as conn:
-            ptr = pd.read_sql(text(ptr_q), conn)
+        ptr = pl.read_database(ptr_q, self.engine)
 
-        if not ptr.empty:
-            ptr["date"] = pd.to_datetime(ptr["date"], errors="coerce").dt.normalize()
+        if not ptr.is_empty():
             ptr_agg = (
-                ptr.dropna(subset=["date"])
-                .groupby("date")
-                .size()
-                .reset_index(name="house_ptr_count")
+                ptr.lazy()
+                .with_columns(
+                    pl.coalesce(
+                        pl.col("date").str.to_datetime("%m/%d/%Y", strict=False),
+                        pl.col("date").str.to_datetime(strict=False),
+                    )
+                    .dt.date()
+                    .alias("date"),
+                )
+                .drop_nulls("date")
+                .group_by("date")
+                .agg(pl.len().cast(pl.Int64).alias("house_ptr_count"))
+                .sort("date")
+                .collect()
+                .to_pandas()
             )
+            ptr_agg["date"] = pd.to_datetime(ptr_agg["date"])
             df = df.merge(ptr_agg, on="date", how="left")
             print(
                 f"[FEATURES] Loaded House PTR: {len(ptr_agg)} dates, "
@@ -980,6 +1142,9 @@ class FeatureEngineer:
             "Marine Tropical Storm", "High Wind",
         )
 
+        # Polars-native scan + aggregation (reference migration: identical
+        # output columns to the pandas version; boundary back to pandas for
+        # the merge since the rest of the pipeline is pandas).
         storm_q = """
         SELECT DATE(begin_date) as date, event_type,
                COALESCE(property_damage, 0) as property_damage,
@@ -987,58 +1152,67 @@ class FeatureEngineer:
         FROM storm_events
         WHERE DATE(begin_date) >= :start_date
         """
-        with self.engine.connect() as conn:
-            storm = pd.read_sql(
-                text(storm_q), conn, params={"start_date": self.start_date.isoformat()}
-            )
+        storm = pl.read_database(
+            storm_q.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+            self.engine,
+        )
 
-        if not storm.empty:
-            storm["date"] = pd.to_datetime(storm["date"], errors="coerce").dt.normalize()
-            storm = storm.dropna(subset=["date"])
-            storm["property_damage"] = pd.to_numeric(
-                storm["property_damage"], errors="coerce"
-            ).fillna(0)
-            storm["crop_damage"] = pd.to_numeric(
-                storm["crop_damage"], errors="coerce"
-            ).fillna(0)
-            total_agg = (
-                storm.groupby("date")
-                .agg(
-                    storm_event_count=("event_type", "size"),
-                    storm_property_damage=("property_damage", "sum"),
-                    storm_crop_damage=("crop_damage", "sum"),
+        if not storm.is_empty():
+            storm_agg = (
+                storm.lazy()
+                .with_columns(
+                    pl.col("date").str.to_date(strict=False),
+                    pl.col("property_damage").cast(pl.Float64, strict=False),
+                    pl.col("crop_damage").cast(pl.Float64, strict=False),
                 )
-                .reset_index()
+                .drop_nulls("date")
+                .with_columns(
+                    pl.col("property_damage").fill_null(0),
+                    pl.col("crop_damage").fill_null(0),
+                )
+                .group_by("date")
+                .agg(
+                    pl.len().cast(pl.Int64).alias("storm_event_count"),
+                    pl.col("property_damage").sum().alias("storm_property_damage"),
+                    pl.col("crop_damage").sum().alias("storm_crop_damage"),
+                    pl.col("event_type")
+                    .is_in(SEVERE_TYPES)
+                    .sum()
+                    .cast(pl.Int64)
+                    .alias("storm_severe_count"),
+                )
+                .sort("date")
+                .collect()
             )
-            severe_agg = (
-                storm[storm["event_type"].isin(SEVERE_TYPES)]
-                .groupby("date")
-                .size()
-                .reset_index(name="storm_severe_count")
-            )
+            total_agg = storm_agg.to_pandas()
+            total_agg["date"] = pd.to_datetime(total_agg["date"])
             df = df.merge(total_agg, on="date", how="left")
-            df = df.merge(severe_agg, on="date", how="left")
             print(
                 f"[FEATURES] Loaded storms: {len(total_agg)} dates, "
                 f"events={total_agg['storm_event_count'].sum():.0f}, "
-                f"severe={severe_agg['storm_severe_count'].sum():.0f}"
+                f"severe={total_agg['storm_severe_count'].sum():.0f}"
             )
         else:
             print("[FEATURES] Warning: No storm data found")
 
         # --- FEMA declarations: daily counts ---
-        fema_q = "SELECT DATE(declaration_date) as date FROM fema_disasters"
-        with self.engine.connect() as conn:
-            fema = pd.read_sql(text(fema_q), conn)
+        fema = pl.read_database(
+            "SELECT DATE(declaration_date) as date FROM fema_disasters",
+            self.engine,
+        )
 
-        if not fema.empty:
-            fema["date"] = pd.to_datetime(fema["date"], errors="coerce").dt.normalize()
+        if not fema.is_empty():
             fema_agg = (
-                fema.dropna(subset=["date"])
-                .groupby("date")
-                .size()
-                .reset_index(name="fema_declarations")
+                fema.lazy()
+                .with_columns(pl.col("date").str.to_date(strict=False))
+                .drop_nulls("date")
+                .group_by("date")
+                .agg(pl.len().cast(pl.Int64).alias("fema_declarations"))
+                .sort("date")
+                .collect()
+                .to_pandas()
             )
+            fema_agg["date"] = pd.to_datetime(fema_agg["date"])
             df = df.merge(fema_agg, on="date", how="left")
             print(f"[FEATURES] Loaded FEMA: {len(fema_agg)} dates")
         else:
@@ -1075,27 +1249,38 @@ class FeatureEngineer:
         WHERE DATE("timestamp") >= :start_date
         GROUP BY DATE("timestamp"), "ticker"
         """
-        with self.engine.connect() as conn:
-            eq = pd.read_sql(
-                text(eq_q), conn, params={"start_date": self.start_date.isoformat()}
-            )
+        eq = pl.read_database(
+            eq_q.replace(":start_date", f"'{self.start_date.isoformat()}'"),
+            self.engine,
+        )
 
-        if not eq.empty:
-            eq["date"] = pd.to_datetime(eq["date"]).dt.normalize()
-            eq["close"] = pd.to_numeric(eq["close"], errors="coerce")
-            eq = eq.dropna(subset=["date", "close"]).sort_values(["ticker", "date"])
-            eq["log_ret"] = np.log(eq["close"] / eq.groupby("ticker")["close"].shift(1))
+        if not eq.is_empty():
             daily = (
-                eq.groupby("date")["log_ret"]
-                .agg(eq_energy_eqw_ret="mean", eq_breadth_up=lambda s: (s > 0).mean())
-                .reset_index()
+                eq.lazy()
+                .with_columns(
+                    pl.col("date").str.to_date(strict=False),
+                    pl.col("close").cast(pl.Float64, strict=False),
+                )
+                .drop_nulls(["date", "close"])
+                .sort(["ticker", "date"])
+                .with_columns(
+                    (
+                        pl.col("close").log()
+                        - pl.col("close").log().shift(1).over("ticker")
+                    ).alias("log_ret")
+                )
+                .group_by("date")
+                .agg(
+                    pl.col("log_ret").mean().alias("eq_energy_eqw_ret"),
+                    (pl.col("log_ret") > 0).mean().alias("eq_breadth_up"),
+                )
+                .sort("date")
+                .collect()
+                .to_pandas()
             )
+            daily["date"] = pd.to_datetime(daily["date"])
             df = df.merge(daily, on="date", how="left")
-            print(
-                f"[FEATURES] Loaded equities: {len(daily)} days, "
-                f"{eq['ticker'].nunique()} names, "
-                f"index latest={daily['eq_energy_eqw_ret'].iloc[-1]:+.4f}"
-            )
+            print(f"[FEATURES] Loaded equities: {len(daily)} days")
         else:
             print("[FEATURES] Warning: No equity data found")
 
