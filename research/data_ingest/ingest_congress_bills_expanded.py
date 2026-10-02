@@ -21,11 +21,18 @@ data audit:
      This gives authoritative classification where it matters (energy-adjacent
      bills) without paying the cost for every appropriations or naming bill.
 
+Incremental by default (Oct-2026): closed sessions are immutable history --
+each is coverage-gated (API count vs DB count) and skipped when complete,
+so a quiet month costs ~1 request per old session. The two most recent
+sessions always re-fetch (actions advance there). --full forces a complete
+rescan (one-shot depth repair). Poison pages (truncated chunked responses)
+retry with halved limits; a session that still fails is skipped with a
+warning instead of killing the run (upserts so far are kept).
+
 Note on congress.gov API rate limits: 5,000 requests/hour with an API key.
 This script sleeps 0.1s between list pages and 0.2s between detail calls.
-A full 107-119 backfill will take approximately 20-40 minutes depending on
-bill volume. Subsequent monthly runs only touch the current Congress and are
-fast (~2 minutes).
+A --full 107-119 backfill takes approximately 20-40 minutes depending on
+bill volume. Incremental monthly runs take ~2 minutes when idle.
 
 Run from C:\\Users\\legot\\Metis:
     python research/data_ingest/ingest_congress_bills_expanded.py
@@ -40,6 +47,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import pandas as pd
 import requests
@@ -53,6 +61,14 @@ load_dotenv()
 DB_URL = rc.get_db_url()
 CONGRESS_API_KEY = os.getenv("CONGRESS_API_KEY")
 BASE_URL = "https://api.congress.gov/v3"
+
+
+def _current_congress() -> int:
+    """Congress number for today's date (119th = 2025-2026)."""
+    return (datetime.now(timezone.utc).year + 1) // 2 - 894
+
+
+CURRENT_CONGRESS = _current_congress()
 
 # First-pass filter: bill types that can plausibly touch energy infrastructure.
 # Keeps the detail-endpoint call budget manageable -- we only fetch CRS Policy
@@ -106,39 +122,89 @@ def get_headers() -> dict:
     return {"X-API-Key": CONGRESS_API_KEY} if CONGRESS_API_KEY else {}
 
 
-def fetch_bill_list_page(url: str, params: dict, retries: int = 3) -> dict:
-    """Fetch list page with a retry loop and extended timeout."""
+def fetch_bill_list_page(
+    url: str, params: dict, retries: int = 3, label: str = ""
+) -> tuple:
+    """Fetch list page with a retry loop and extended timeout.
+
+    ChunkedEncodingError (truncated chunked response, e.g. the Oct-2026
+    Congress-109 poison page) is retried with a halved limit -- smaller
+    payloads route around server-side truncation. Returns (data,
+    effective_limit) so the caller keeps the shrunk limit for subsequent
+    pages. Raises only after all retries fail.
+    """
+    params = dict(params)
     for attempt in range(retries):
         try:
             # Increased timeout to 60 seconds
             resp = requests.get(url, headers=get_headers(), params=params, timeout=60)
             resp.raise_for_status()
-            return resp.json()
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            return resp.json(), int(params.get("limit", 250) or 250)
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+        ) as e:
+            kind = type(e).__name__
             print(
-                f"    [!] Timeout/Connection error on list fetch (attempt {attempt + 1}/{retries})."
+                f"    [!] {kind} on list fetch {label} "
+                f"(attempt {attempt + 1}/{retries}, limit={params.get('limit')})."
             )
+            if isinstance(e, requests.exceptions.ChunkedEncodingError):
+                old = int(params.get("limit", 250) or 250)
+                if old > 25:
+                    params["limit"] = max(25, old // 2)
+                    print(f"    [!] Shrinking page limit {old} -> {params['limit']}.")
             if attempt < retries - 1:
                 time.sleep(5)  # Wait 5 seconds before trying again
             else:
                 raise  # Fail completely if out of retries
 
 
-def fetch_all_bills_for_congress(congress: int) -> list:
-    """Paginate through all bills for a single Congress session."""
+def _with_limit(url: str, limit: int) -> str:
+    """Rewrite the limit query param of a (possibly cursor) page URL."""
+    parts = urlparse(url)
+    q = dict(parse_qsl(parts.query))
+    q["limit"] = str(limit)
+    return urlunparse(parts._replace(query=urlencode(q)))
+
+
+def _bill_key(bill: dict) -> tuple:
+    return (
+        str(bill.get("type", "") or ""),
+        str(bill.get("number", "") or ""),
+    )
+
+
+def fetch_all_bills_for_congress(congress: int, limit: int = 250) -> list:
+    """Paginate through all bills for a single Congress session.
+
+    Poison-page handling (Oct-2026 Congress-109): a page that keeps failing
+    with truncated chunked responses is retried with a halved limit (down to
+    25). Because a smaller limit re-fetches an overlapping window, rows are
+    deduped by (type, number) so detail-call budgeting downstream is unaffected.
+    Raises the last error only if even limit=25 fails -- the caller
+    (per-session try/except in main) then skips the session with a warning
+    instead of killing the whole run.
+    """
     url = f"{BASE_URL}/bill/{congress}"
     params = {
         "format": "json",
-        "limit": 250,
+        "limit": limit,
     }
     if CONGRESS_API_KEY:
         params["api_key"] = CONGRESS_API_KEY
 
     all_bills = []
+    seen = set()
     page = 1
     while url:
         try:
-            data = fetch_bill_list_page(url, params if page == 1 else {})
+            data, limit = fetch_bill_list_page(
+                _with_limit(url, limit) if page > 1 else url,
+                params if page == 1 else {},
+                label=f"congress={congress} page={page}",
+            )
         except requests.HTTPError as e:
             print(f"  [Congress {congress}] Page {page} fetch error: {e}")
             break
@@ -147,14 +213,19 @@ def fetch_all_bills_for_congress(congress: int) -> list:
         if not bills:
             break
 
-        all_bills.extend(bills)
+        fresh = [b for b in bills if _bill_key(b) not in seen]
+        seen.update(_bill_key(b) for b in bills)
+        all_bills.extend(fresh)
 
         pagination = data.get("pagination", {})
+        total = pagination.get("count")
         next_url = pagination.get("next")
         url = next_url if next_url else None
         params = {}  # next URL already contains all params
 
         page += 1
+        if total:
+            print(f"  [Congress {congress}] page {page - 1}: {len(all_bills):,}/{total:,} bills")
         time.sleep(0.1)
 
     return all_bills
@@ -190,17 +261,81 @@ def fetch_policy_area(
             return None
 
 
-def process_congress(congress: int, engine) -> int:
-    """Fetch, classify, and upsert all bills for one Congress. Returns row count."""
-    print(f"\n[Congress {congress}] Fetching bill list...")
+def db_session_count(engine, congress: int) -> int:
+    """Rows already stored for one Congress session (coverage gate)."""
+    with engine.connect() as conn:
+        return conn.execute(
+            text("SELECT COUNT(*) FROM congress_bills WHERE congress=:c"), {"c": congress}
+        ).fetchone()[0]
+
+
+def api_session_total(congress: int) -> Optional[int]:
+    """Bill total for one session from page 1 (cheap coverage probe)."""
+    url = f"{BASE_URL}/bill/{congress}"
+    params = {"format": "json", "limit": 10}
+    if CONGRESS_API_KEY:
+        params["api_key"] = CONGRESS_API_KEY
+    try:
+        data, _ = fetch_bill_list_page(url, params, label=f"congress={congress} probe")
+    except Exception as e:
+        print(f"  [Congress {congress}] coverage probe failed: {e}")
+        return None
+    return (data.get("pagination") or {}).get("count")
+
+
+def db_classified_keys(engine, congress: int) -> set:
+    """(type, number) already carrying a CRS policy_area -- detail gap check."""
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT bill_type, bill_number FROM congress_bills "
+                "WHERE congress=:c AND policy_area IS NOT NULL"
+            ),
+            {"c": congress},
+        ).fetchall()
+    return {(str(t or ""), str(n or "")) for t, n in rows}
+
+
+def process_congress(congress: int, engine, full: bool = False) -> int:
+    """Fetch, classify, and upsert all bills for one Congress. Returns row count.
+
+    Incremental rule: closed sessions are immutable history -- if the DB
+    already holds every bill the API reports (coverage probe), the session is
+    skipped outright, so a quiet month costs ~1 request per old session. The
+    two most recent sessions are always fully re-fetched (actions advance
+    there), unless --full forces a complete rescan of everything.
+    """
+    if not full and congress < CURRENT_CONGRESS - 1:
+        api_total = api_session_total(congress)
+        db_total = db_session_count(engine, congress)
+        if api_total is not None and db_total >= api_total and db_total > 0:
+            print(
+                f"\n[Congress {congress}] Skipping (DB {db_total:,} >= API {api_total:,})."
+            )
+            return 0
+        print(
+            f"\n[Congress {congress}] Coverage gap (DB {db_total:,} vs API {api_total}) -- fetching."
+            if api_total is not None
+            else f"\n[Congress {congress}] Probe failed -- fetching to be safe."
+        )
+    else:
+        print(f"\n[Congress {congress}] Active session -- full fetch...")
+
+    print(f"[Congress {congress}] Fetching bill list...")
     raw_bills = fetch_all_bills_for_congress(congress)
     print(f"[Congress {congress}] {len(raw_bills)} bills fetched")
 
     if not raw_bills:
         return 0
 
+    # Detail-call gap check: skip CRS fetch for bills already classified.
+    classified = db_classified_keys(engine, congress)
+    if classified:
+        print(f"[Congress {congress}] {len(classified):,} bills already classified -- skipping their detail calls.")
+
     records = []
     detail_calls = 0
+    skipped_detail = 0
 
     for bill in raw_bills:
         title = bill.get("title", "") or ""
@@ -215,9 +350,12 @@ def process_congress(congress: int, engine) -> int:
         # where it actually matters.
         policy_area = None
         if keyword_hit and CONGRESS_API_KEY:
-            policy_area = fetch_policy_area(congress, bill_type, bill_number)
-            detail_calls += 1
-            time.sleep(0.2)
+            if (bill_type, bill_number) in classified:
+                skipped_detail += 1
+            else:
+                policy_area = fetch_policy_area(congress, bill_type, bill_number)
+                detail_calls += 1
+                time.sleep(0.2)
 
         # Final energy classification: CRS Policy Area is authoritative when
         # Fallback date if actionDate is missing in legacy JSON
@@ -257,9 +395,10 @@ def process_congress(congress: int, engine) -> int:
         )
 
     df = pd.DataFrame(records)
-    energy_count = df["is_energy_related"].sum()
+    energy_count = df["is_energy_related"].sum() if not df.empty else 0
     print(
-        f"[Congress {congress}] {len(df)} bills, {energy_count} energy-related, {detail_calls} detail calls"
+        f"[Congress {congress}] {len(df)} bills, {energy_count} energy-related, "
+        f"{detail_calls} detail calls ({skipped_detail} skipped, already classified)"
     )
 
     upsert_bills(df, engine)
@@ -310,29 +449,50 @@ def upsert_bills(df: pd.DataFrame, engine):
         conn.execute(stmt, df.to_dict("records"))
 
 
-def main(start_congress: int = 107, end_congress: int = 119, single: int = None):
+def main(
+    start_congress: int = 107,
+    end_congress: int = None,
+    single: int = None,
+    full: bool = False,
+):
     rc.log_mode("Congress Bills (Rebuilt)")
     if not CONGRESS_API_KEY:
         print("CONGRESS_API_KEY not set -- aborting")
         return 0
+
+    if end_congress is None:
+        end_congress = CURRENT_CONGRESS
 
     engine = create_engine(DB_URL)
     ensure_table(engine)
 
     if single is not None:
         congresses = [single]
+        full = True  # explicit single-session request always fetches
     else:
         congresses = list(range(start_congress, end_congress + 1))
 
-    print(f"Processing Congress sessions: {congresses[0]} to {congresses[-1]}")
+    print(
+        f"Processing Congress sessions: {congresses[0]} to {congresses[-1]} "
+        f"({'FULL rescan' if full else 'incremental: active sessions + coverage gaps only'})"
+    )
     total = 0
+    failed = []
     for congress in congresses:
-        total += process_congress(congress, engine)
+        # One poisoned session (e.g. Oct-2026 Congress-109 truncated pages)
+        # must not discard the other sessions' work -- isolate and continue.
+        try:
+            total += process_congress(congress, engine, full=full)
+        except Exception as e:
+            print(f"[Congress {congress}] FAILED ({type(e).__name__}: {e}) -- continuing.")
+            failed.append(congress)
 
     print(f"\nDone. Total bills upserted: {total:,}")
+    if failed:
+        print(f"Sessions skipped by failure: {failed} (retry next run; upserts so far kept)")
 
     with engine.connect() as conn:
-        for congress in [107, 113, 119]:
+        for congress in [107, 113, end_congress]:
             row = conn.execute(
                 text(
                     "SELECT COUNT(*), SUM(is_energy_related) FROM congress_bills WHERE congress=:c"
@@ -341,6 +501,10 @@ def main(start_congress: int = 107, end_congress: int = 119, single: int = None)
             ).fetchone()
             print(f"  Congress {congress}: {row[0]:,} bills, {row[1] or 0} energy-related")
 
+    # A run that upserted nothing AND skipped sessions is a failure for the
+    # scheduler (non-zero exit); partial progress still returns success.
+    if total == 0 and failed:
+        return -1
     return total
 
 
@@ -361,12 +525,22 @@ if __name__ == "__main__":
     parser.add_argument(
         "--end-congress",
         type=int,
-        default=119,
-        help="Last Congress to fetch (default: 119, current)",
+        default=None,
+        help="Last Congress to fetch (default: current Congress)",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Force complete rescan of every session (one-shot depth repair)",
     )
     args = parser.parse_args()
-    main(
+    result = main(
         start_congress=args.start_congress,
         end_congress=args.end_congress,
         single=args.congress,
+        full=args.full,
     )
+    # Total failure (nothing upserted, sessions skipped) exits non-zero;
+    # partial progress is success -- the frequency summary, not the exit
+    # code, is what the scheduler scans for per-ingester failures.
+    raise SystemExit(1 if result == -1 else 0)

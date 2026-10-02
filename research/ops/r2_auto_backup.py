@@ -69,7 +69,7 @@ LANCE_DIR = DATA_DIR / "lance"
 RAG_DIR = DATA_DIR / "rag_context"
 
 # Transient / re-downloadable caches that must NOT be backed up (huge, ephemeral)
-R2_EXCLUDE_DIRS = {"gdelt_gkg", "lbnl", "cme_browser", ".tmp"}
+R2_EXCLUDE_DIRS = {"gdelt_gkg", "lbnl", "cme_browser", ".tmp", "state_bills_bulk"}
 
 MAX_DB_AGE_HOURS = 48
 

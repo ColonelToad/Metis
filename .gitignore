@@ -133,3 +133,4 @@ metis/src-tauri/.fastembed_cache/
 
 # GDELT raw day-files (re-downloadable; ~29MB each)
 data/cache/gdelt_gkg/
+data/cache/state_bills_bulk/

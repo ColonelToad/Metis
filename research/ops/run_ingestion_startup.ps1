@@ -218,6 +218,13 @@ if (Test-Path $EnvFile) {
 }
 
 # ── Run a single ingester with Exponential Backoff ─────────────────────────────
+# Per-frequency time-boxes (seconds per attempt): one poisoned source must not
+# hold the boot hostage (Oct-2026: monthly attempt ran 45min on Congress-109
+# truncated pages). Incremental congress normally finishes in minutes; the cap
+# only fires on poison. Congress upserts per session, so a timed-out run keeps
+# partial progress for the next attempt.
+$FrequencyTimeoutSeconds = @{ daily = 1200; weekly = 1200; monthly = 2400 }
+
 function Invoke-Ingester {
     param([string]$Name, [string]$Frequency, [int]$MaxAttempts = 3, [int]$BaseDelaySeconds = 300)
 
@@ -251,7 +258,27 @@ function Invoke-Ingester {
             [PSCustomObject]@{ output = $out -join "`n"; exitCode = $LASTEXITCODE }
         } -ArgumentList $ProjectRoot, $Frequency
 
-        Wait-Job -Job $job | Out-Null
+        $timeout = $FrequencyTimeoutSeconds[$Frequency]
+        if (-not $timeout) { $timeout = 1800 }
+        $finished = Wait-Job -Job $job -Timeout $timeout
+        if (-not $finished) {
+            Stop-Job $job
+            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Name ingester TIMED OUT after $($timeout / 60) minutes - killing (partial upserts kept)."
+            foreach ($line in @(Receive-Job $job -ErrorAction SilentlyContinue)) {
+                $out = if ($line.output) { $line.output } else { "$line" }
+                $out | Tee-Object -FilePath $LogFile -Append | Out-Null
+            }
+            Remove-Job $job -Force -ErrorAction SilentlyContinue
+            $errMsg = "timeout after ${timeout}s"
+            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Name ingester failed ($errMsg)."
+            Set-IngesterStatus $script:State $Name.ToLower() "failed" $errMsg
+            if ($attempt -lt $MaxAttempts) {
+                $sleepTime = $BaseDelaySeconds * [math]::Pow(2, $attempt - 1)
+                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Waiting $($sleepTime / 60) minutes before next retry..."
+                Start-Sleep -Seconds $sleepTime
+            }
+            continue
+        }
         $result = Receive-Job -Job $job
         $jobState = $job.State
         Remove-Job -Job $job

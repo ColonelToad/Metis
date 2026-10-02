@@ -1286,6 +1286,44 @@ class FeatureEngineer:
 
         return df
 
+    def load_state_bill_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """State-bill activity: daily counts of energy-keyword bills across
+        the 10-state shortlist + 20d moving average (congress pattern).
+
+        Bulk-loaded from OpenStates session CSVs (Oct-2026; the API path
+        never yielded rows). All stored bills are pre-filtered by the title
+        gate, so the count itself is the signal. Sparse branch.
+        """
+        bills = pl.read_database(
+            "SELECT DATE(first_action_date) as date FROM state_bills "
+            "WHERE first_action_date IS NOT NULL",
+            self.engine,
+        )
+
+        if not bills.is_empty():
+            agg = (
+                bills.lazy()
+                .with_columns(pl.col("date").str.to_date(strict=False))
+                .drop_nulls("date")
+                .group_by("date")
+                .agg(pl.len().cast(pl.Int64).alias("state_bills_count"))
+                .sort("date")
+                .collect()
+                .to_pandas()
+            )
+            agg["date"] = pd.to_datetime(agg["date"])
+            df = df.merge(agg, on="date", how="left")
+            df["state_bills_count"] = df["state_bills_count"].fillna(0)
+            df["state_bills_ma"] = df["state_bills_count"].rolling(20).mean()
+            print(
+                f"[FEATURES] Loaded state bills: {len(agg)} dates, "
+                f"total={agg['state_bills_count'].sum():.0f}"
+            )
+        else:
+            print("[FEATURES] Warning: No state-bill data found")
+
+        return df
+
     def engineer_features(self) -> pd.DataFrame:
         """Main pipeline: load all data and engineer features."""
 
@@ -1312,6 +1350,9 @@ class FeatureEngineer:
 
         # Load policy-money signals (previously ingested-but-dark)
         df = self.load_policy_money_features(df)
+
+        # Load state-bill activity (bulk-loaded Oct-2026, was 0 rows)
+        df = self.load_state_bill_features(df)
 
         # Load shock-event signals (previously ingested-but-dark)
         df = self.load_shock_features(df)
@@ -1506,6 +1547,8 @@ class FeatureEngineer:
             "storm_crop_damage",
             "storm_severe_count",
             "fema_declarations",
+            "state_bills_count",
+            "state_bills_ma",
         ]
         sparse_features = df[[col for col in sparse_cols if col in df.columns]].copy()
 
