@@ -37,8 +37,6 @@ engine = { path = "../execution/engine" }
 # (needs network once); offline after that.
 fastembed = "5"
 
-# Native llama.cpp bindings replacing the PyO3 → llama-cpp-python detour in
-# llm.rs. CPU-only build (no cuda/vulkan features); first compile builds
-# llama.cpp from source via the cmake crate (needs CMake + MSVC).
-llama-cpp-2 = "=0.1.154"
-encoding_rs = "0.8"
+# HTTP client for the vendored upstream `llama-server` sidecar (see llm.rs).
+# Plain HTTP only (127.0.0.1:8082), so no TLS features — pure Rust, no cmake.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }

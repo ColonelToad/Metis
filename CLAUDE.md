@@ -36,7 +36,7 @@ pip install -r research/requirements.txt
 
 python research/ops/ingest_wrapper.py --frequency daily   # daily | weekly | monthly | all
 python research/ops/orchestrate_daily_pipeline.py         # METIS_MODE=DEV|REAL env var selects path
-python research/ops/r2_auto_backup.py
+python research/ops/r2_auto_backup.py   # Monday-only weekly-full (Tue-Sun exits; --force-full overrides)
 python research/data_ingest/backfill_cme_direct.py
 python research/data_ingest/backfill_lmp_prod.py
 ```
@@ -78,7 +78,7 @@ Orchestrator HTTP API (:9000): `POST /api/pipeline/run {mode}`, `GET /api/pipeli
 cargo test -p rag
 cargo run --release -p rag --example llm_smoke
 ```
-Model: `rag/llm/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf` loaded natively by llama.cpp (actor thread owns the non-Send backend). `METIS_LLM_THREADS` overrides thread count (default 4).
+LLM sidecar: vendored upstream `llama-server` (b11669, `rag/llm/server/`, git-ignored) on 127.0.0.1:8082 serving `rag/llm/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf`; `rag/src/llm.rs` is a thin HTTP client + supervisor (spawns on demand, kills on drop, reuses if already up). Deterministic preset: temp 0.0, fixed seed 42, server-side stops. `METIS_LLM_THREADS` (default 6 — measured knee on i7-155U; 1 = byte-identical, ~1/4 speed), `METIS_LLM_TEMP`/`METIS_LLM_SEED` (`random` opts out), `METIS_LLM_URL` (external server, never supervised).
 
 ## Key Files
 
@@ -96,7 +96,7 @@ Model: `rag/llm/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf` loaded natively by llam
 | `research/models/config/model_config.yaml` | Model config; feature lists may drift from `models/lstm_metadata.json` (metadata wins) |
 | `research/ops/orchestrate_daily_pipeline.py` | Ingestion → features → inference orchestration (DEV synthetic vs REAL model) |
 | `research/signal_client.py` | msgpack/TCP client used by inference (port 8080) |
-| `rag/src/llm.rs` | Native llama.cpp engine (replaces the removed llama-cpp-python detour) |
+| `rag/src/llm.rs` | Sidecar HTTP client + supervisor (owns the llama-server child, kills on drop; replaces the removed in-process bindings) |
 | `.env` | API keys; `METIS_MODE=PROD` is also read by some research paths |
 
 ## Cargo Workspace Layout
@@ -111,7 +111,7 @@ The C++ HFT engine (`metis-cpp`) is maintained exclusively in WSL at `/home/tolu
 
 ## Release Profile (Rust)
 
-All Rust crates use aggressive release settings: `opt-level=3`, `lto="fat"`, `codegen-units=1`, `panic="abort"`, `strip=true`. Benchmark with `cargo bench`, not debug builds. First release builds of `rag` are slow (~15min) because llama.cpp compiles ~400 C++ TUs via cmake; iterate with `cargo check --lib` / `cargo test --lib` instead.
+All Rust crates use aggressive release settings: `opt-level=3`, `lto="fat"`, `codegen-units=1`, `panic="abort"`, `strip=true`. Benchmark with `cargo bench`, not debug builds. First release builds of `rag` are slow (lancedb/ort graphs; the old llama.cpp ~400-TU cmake compile is gone since the sidecar switch); iterate with `cargo check --lib` / `cargo test --lib` instead.
 
 ## Environment Setup
 
@@ -125,7 +125,7 @@ Copy `.env.example` → `.env` and populate API keys before running ingestion pi
 
 - **SQLite** — primary local store for time-series data; orchestrator results live in `data/orchestrator.sqlite`
 - **LanceDB** — vector DB for RAG embeddings; canonical corpus at `data/lance/` (the old `research/data/dev/lance` was removed)
-- **Cloudflare R2** — daily backup of ingested data (`research/ops/r2_auto_backup.py`)
+- **Cloudflare R2** — Monday-only weekly-full backup of ingested data (`research/ops/r2_auto_backup.py`)
 - **`research/data/`** — cached datasets and metadata JSONs (frequently-dirty metadata files are intentionally left uncommitted)
 - **`data/features/`** — train/test parquet splits matching the trained model schema (14 daily + 36 low-freq + 4 sparse features)
 - **`stooq_hist_data/`** — kept intentionally, may be needed later
