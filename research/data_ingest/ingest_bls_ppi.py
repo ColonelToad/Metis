@@ -7,16 +7,22 @@ Signal: Cost inflation → Activity levels causality
 - PPI (Energy) ↑ → Energy costs rise → Future price increases expected
 - Lead indicator: PPI typically leads economic activity by 2-3 months
 
-Data: BLS PPI for Natural Gas, Petroleum, and Mining industries
+Data: BLS PPI for crude petroleum, natural gas, petroleum refining,
+and natural gas distribution.
 API: BLS Public Data API (free, requires registration for bulk data)
+
+Series IDs verified against the live API on 2026-11-03. The previous IDs
+(PCUOMPU, PUEUUUI01, PUEMUUI) do not exist at BLS; every request returned
+"Invalid Series", and the old code silently substituted a synthetic ramp.
+REAL mode must never write invented observations: a failed fetch now raises
+and the ingester is marked failed.
 """
 
-import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List
 
 import pandas as pd
 import requests
@@ -33,38 +39,39 @@ BLS_API_KEY = os.getenv("BLS_API_KEY", "")
 
 BLS_API_URL = "https://api.bls.gov/publicAPI/v2/timeseries/data"
 
-# BLS series IDs for energy-related PPI
-# Format: PPIXXXX where XXXX varies by industry/product
+# BLS series IDs for energy-related PPI, verified live 2026-11-03.
+# WPU = commodity index (1982=100); PCU = industry-product index (2016=100).
+# Bases differ, so compare each series to itself (YoY), never levels across series.
 PPI_SERIES = {
-    # Energy (industry level)
-    "PCUOMPU": "PPI - Oil and gas extraction (NAICS 211)",
-    "PCUOMPU021": "PPI - Natural gas distribution (NAICS 2211)",
-    "PCUIUME48": "PPI - Petroleum refining (NAICS 3241)",
-    # Energy inputs
-    "PUELUUI01": "PPI - Crude petroleum",
-    "PUEUUUI01": "PPI - Natural gas",
-    "PUEMUUI": "PPI - Mining (NAICS 21)",
+    "WPU0561": "PPI - Crude petroleum (WPU0561)",
+    "WPU0531": "PPI - Natural gas (WPU0531)",
+    "PCU3241103241101": "PPI - Petroleum refining (NAICS 3241)",
+    "PCU221210221210": "PPI - Natural gas distribution (NAICS 2211)",
 }
 
 
-def fetch_ppi_data(series_ids: List[str]) -> Optional[pd.DataFrame]:
+class BLSFetchError(RuntimeError):
+    """Raised when the BLS API yields no usable data in REAL mode."""
+
+
+def fetch_ppi_data(series_ids: List[str]) -> pd.DataFrame:
     """
     Fetch PPI data from BLS API.
 
     Args:
-        series_ids: List of BLS series IDs (e.g., ["PCUOMPU", "PUEUUUI01"])
+        series_ids: List of BLS series IDs (e.g., ["WPU0561", "WPU0531"])
 
     Returns:
-        DataFrame with date, series_id, series_name, index_value, year_over_year_change
-    """
-    if not rc.require_real_mode("BLS PPI API"):
-        return generate_synthetic_ppi()
+        DataFrame with date, series_id, series_name, ppi_index
 
+    Raises:
+        BLSFetchError: no API key, or no series returned any observations.
+    """
     if not BLS_API_KEY:
-        print("[BLS] Missing BLS_API_KEY - using synthetic data")
-        return generate_synthetic_ppi()
+        raise BLSFetchError("BLS_API_KEY is not set - refusing to fabricate PPI data")
 
     all_data = []
+    errors = []
 
     for series_id in series_ids:
         try:
@@ -80,41 +87,42 @@ def fetch_ppi_data(series_ids: List[str]) -> Optional[pd.DataFrame]:
             result = response.json()
 
             if result.get("status") != "REQUEST_SUCCEEDED":
-                print(f"[BLS] API error for {series_id}: {result.get('message', 'Unknown error')}")
+                msg = result.get("message", "Unknown error")
+                print(f"[BLS] API error for {series_id}: {msg}")
+                errors.append(f"{series_id}: {msg}")
                 continue
 
-            # Extract time series data
             series_data = result.get("Results", {}).get("series", [])
             if not series_data:
                 print(f"[BLS] No data for series {series_id}")
+                errors.append(f"{series_id}: no series in response")
                 continue
 
+            # The API reports per-series problems in `message` while still
+            # returning REQUEST_SUCCEEDED; surface them instead of hiding them.
+            for msg in result.get("message") or []:
+                print(f"[BLS] {series_id}: {msg}")
+
+            series_name = PPI_SERIES.get(series_id, series_id)
             for series in series_data:
-                series_name = PPI_SERIES.get(series_id, series_id)
-                data = series.get("data", [])
-
-                for point in data:
+                for point in series.get("data", []):
                     try:
-                        # BLS returns year, month as strings
                         year = int(point.get("year", 0))
-                        month = int(point.get("month", 1))
+                        # BLS uses period M01..M12 for months, M13 for annual.
+                        period = str(point.get("period", ""))
+                        if period == "M13":
+                            continue  # annual average, not a monthly observation
+                        month = int(period.lstrip("M") or 0)
+                        if not (1 <= month <= 12):
+                            continue
                         value = float(point.get("value", 0))
-
-                        # Parse date (month = 13 means annual average)
-                        if month == 13:
-                            # Annual data: use Dec 31
-                            date = datetime(year, 12, 31)
-                        else:
-                            # Monthly data: use first day of month
-                            date = datetime(year, month, 1)
 
                         all_data.append(
                             {
-                                "date": date,
+                                "date": date(year, month, 1),
                                 "series_id": series_id,
                                 "series_name": series_name,
                                 "ppi_index": value,
-                                "timestamp": datetime.now(),
                             }
                         )
                     except (ValueError, TypeError):
@@ -122,53 +130,20 @@ def fetch_ppi_data(series_ids: List[str]) -> Optional[pd.DataFrame]:
 
         except Exception as e:
             print(f"[BLS] Fetch error for {series_id}: {e}")
-            continue
+            errors.append(f"{series_id}: {e}")
 
     if not all_data:
-        print("[BLS] No PPI data fetched, using synthetic")
-        return generate_synthetic_ppi()
+        raise BLSFetchError("BLS returned no observations for any series: " + "; ".join(errors))
 
     df = pd.DataFrame(all_data)
-    df = df.sort_values("date")
-    print(f"[BLS] Fetched {len(df)} PPI records from {len(df['series_id'].unique())} series")
+    df = df.sort_values(["series_id", "date"])
+
+    missing = set(series_ids) - set(df["series_id"].unique())
+    if missing:
+        print(f"[BLS] WARNING: no data for {sorted(missing)}")
+
+    print(f"[BLS] Fetched {len(df)} PPI records from {df['series_id'].nunique()} series")
     return df
-
-
-def generate_synthetic_ppi() -> pd.DataFrame:
-    """
-    Generate synthetic PPI data for development/testing.
-    Realistic: gradual inflation with volatility around energy shocks.
-    """
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=365 * 10)  # 10 years back
-
-    dates = pd.date_range(start=start_date, end=end_date, freq="MS")
-
-    all_data = []
-
-    for series_id in ["PCUOMPU", "PUEUUUI01", "PUEMUUI"]:
-        series_name = PPI_SERIES.get(series_id, series_id)
-
-        # Base index = 100, with gradual trend (inflation)
-        trend = pd.Series(range(len(dates))) * (0.5 / len(dates))  # 0.5% per month trend
-
-        # Volatility: energy shocks
-        noise = 0.01 * pd.Series(range(len(dates))).rolling(window=3, min_periods=1).std().fillna(0)
-
-        index_values = 100 + trend + noise
-
-        for i, date in enumerate(dates):
-            all_data.append(
-                {
-                    "date": date,
-                    "series_id": series_id,
-                    "series_name": series_name,
-                    "ppi_index": index_values.iloc[i],
-                    "timestamp": datetime.now(),
-                }
-            )
-
-    return pd.DataFrame(all_data)
 
 
 def calculate_yoy_change(df: pd.DataFrame) -> pd.DataFrame:
@@ -212,46 +187,48 @@ def ensure_table(engine) -> None:
     print("[BLS] Table ensured: bls_ppi")
 
 
-def upsert_ppi(engine, df: pd.DataFrame) -> None:
-    """Upsert PPI data into database."""
+def upsert_ppi(engine, df: pd.DataFrame) -> int:
+    """Replace each series' history with the freshly fetched observations."""
     if df.empty:
         print("[BLS] No PPI data to upsert")
-        return
+        return 0
 
     ensure_table(engine)
 
-    # Use pandas to_sql with proper types
     df_insert = df.copy()
     df_insert["timestamp"] = datetime.now().isoformat()
 
-    df_insert.to_sql("bls_ppi", engine, if_exists="append", index=False, method="multi")
+    # Replace per series rather than append: BLS revises prior months, and the
+    # old append-only path duplicated every month's observations on each run.
+    # One transaction, so a failure cannot leave a series half-deleted.
+    with engine.begin() as conn:
+        for series_id in df_insert["series_id"].unique():
+            conn.execute(text("DELETE FROM bls_ppi WHERE series_id = :sid"), {"sid": series_id})
+        df_insert.to_sql("bls_ppi", conn, if_exists="append", index=False, method="multi")
 
-    print(f"[BLS] Upserted {len(df)} PPI records")
+    print(f"[BLS] Wrote {len(df_insert)} PPI records across {df_insert['series_id'].nunique()} series")
+    return len(df_insert)
 
 
-def main():
-    """Main ingestion pipeline."""
+def main() -> int:
+    """Main ingestion pipeline. Returns rows written."""
     rc.log_mode("BLS Producer Price Index")
 
     # Skip database writes in DEV mode - DEV mode is read-only
     if not rc.require_real_mode("BLS PPI ingestion"):
         print("[BLS] Skipping ingestion in DEV mode (read-only)")
-        return
+        return 0
 
-    # Fetch PPI data for key energy series
-    series_list = list(PPI_SERIES.keys())
-    df = fetch_ppi_data(series_list)
-
-    if df is None or df.empty:
-        print("[BLS] No PPI data available")
-        return
+    # Fetch PPI data for key energy series. Raises if BLS returns nothing --
+    # REAL mode does not fall back to invented values.
+    df = fetch_ppi_data(list(PPI_SERIES.keys()))
 
     # Calculate YoY changes
     df = calculate_yoy_change(df)
 
     # Save to database
     engine = create_engine(DB_URL)
-    upsert_ppi(engine, df)
+    written = upsert_ppi(engine, df)
 
     # Log summary by series
     print("\n[BLS] Latest PPI by series:")
@@ -259,6 +236,8 @@ def main():
     for _, row in latest_by_series.iterrows():
         yoy_str = f"{row['ppi_yoy_change']:+.1f}%" if pd.notna(row["ppi_yoy_change"]) else "N/A"
         print(f"  {row['series_name']}: {row['ppi_index']:.1f} (YoY: {yoy_str})")
+
+    return written
 
 
 if __name__ == "__main__":
