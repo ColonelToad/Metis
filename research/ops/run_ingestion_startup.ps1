@@ -2,7 +2,7 @@
 # Purpose: Run data ingesters on system startup with intelligent scheduling
 # Trigger: Windows Task Scheduler (pwsh.exe at system startup)
 
-param([switch]$Force, [switch]$RedoFailed, [int]$Delay = 10)
+param([switch]$Force, [switch]$RedoFailed, [switch]$DryRun, [int]$Delay = 10)
 
 $ProjectRoot = "C:\Users\legot\Metis"
 $ResearchDir = Join-Path $ProjectRoot "research"
@@ -27,25 +27,21 @@ function Invoke-LogRotation {
 Invoke-LogRotation
 
 # ── Single-instance guard ─────────────────────────────────────────────────────
-# A previous run killed mid-backup (reboot, sleep) must not let the next boot
-# stack a duplicate full pipeline on top of it. Lock older than 6h = stale.
-$LockFile = Join-Path $LogDir "ingestion.lock"
+# A named mutex, not a file with a TTL. The kernel releases it when this
+# process dies (including a hard kill or reboot), so there is no stale-lock
+# window and no PID guessing. Local\ is per-session, which matches the
+# per-user Startup-folder trigger. An abandoned mutex (previous holder died
+# without releasing) is acquired here and treated as ours.
+$IngestMutex = [System.Threading.Mutex]::new($false, "Local\MetisIngestion")
 $script:WeHoldLock = $false
-if (Test-Path $LockFile) {
-    $lockAgeH = ((Get-Date) - (Get-Item $LockFile).LastWriteTime).TotalHours
-    if ($lockAgeH -lt 6) {
-        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Another ingestion run appears active (lock age $([math]::Round($lockAgeH,1))h < 6h). Exiting."
-        exit 0
-    }
-    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Stale ingestion lock found ($([math]::Round($lockAgeH,1))h old) - overriding."
+try {
+    $script:WeHoldLock = $IngestMutex.WaitOne(0)
+} catch [System.Threading.AbandonedMutexException] {
+    $script:WeHoldLock = $true
 }
-Set-Content -Path $LockFile -Value "pid=$PID started=$(Get-Date -Format o)"
-$script:WeHoldLock = $true
-function Remove-MyLock {
-    if ($script:WeHoldLock) {
-        Remove-Item -LiteralPath $LockFile -Force -ErrorAction SilentlyContinue
-        $script:WeHoldLock = $false
-    }
+if (-not $script:WeHoldLock) {
+    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Another ingestion run holds the mutex. Exiting."
+    exit 0
 }
 
 Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] === STARTUP INGESTION TRIGGERED ==="
@@ -65,11 +61,6 @@ function Write-State($state) {
     $state | ConvertTo-Json -Depth 5 | Set-Content $StateFile -Encoding utf8
 }
 
-function Get-IngesterStatus($state, [string]$name) {
-    $prop = $state.ingesters.PSObject.Properties[$name]
-    if ($prop) { return $prop.Value.status } else { return "not_run" }
-}
-
 function Set-IngesterStatus($state, [string]$name, [string]$status, [string]$error = "") {
     $entry = [PSCustomObject]@{
         status       = $status
@@ -84,42 +75,106 @@ function Set-IngesterStatus($state, [string]$name, [string]$status, [string]$err
     Write-State $state
 }
 
-$State = Read-State
+# ── Persistent ledger (cross-day due state) ───────────────────────────────────
+# The per-day state file answers "what happened today". This ledger answers
+# "when did each frequency last succeed", so a monthly/weekly failure is not
+# forgotten when the calendar day rolls over.
+$LedgerFile = Join-Path $LogDir "ingest_ledger.json"
 
-# ── VERY EARLY EXIT ───────────────────────────────────────────────────────────
-# User expectation: "check if it ran before running anything" -- this must
-# fire before network waits, log spam, or re-queuing. If today's daily
-# already succeeded (even if r2_backup hasn't), don't re-queue daily on
-# every logon. Failed runs get a 24h cooldown to avoid same-day restart loops.
+function Read-Ledger {
+    if (Test-Path $LedgerFile) {
+        try { return (Get-Content $LedgerFile -Raw | ConvertFrom-Json) } catch {}
+    }
+    return [PSCustomObject]@{}
+}
+
+function Get-LedgerEntry($ledger, [string]$name) {
+    $prop = $ledger.PSObject.Properties[$name]
+    if ($prop) { return $prop.Value }
+    return $null
+}
+
+function Get-LastSuccess($ledger, [string]$name) {
+    $e = Get-LedgerEntry $ledger $name
+    if ($e -and $e.last_success_at) {
+        try { return [datetime]::Parse($e.last_success_at) } catch {}
+    }
+    return $null
+}
+
+function Set-LedgerStatus($ledger, [string]$name, [string]$status, [string]$error = "") {
+    $prev = Get-LedgerEntry $ledger $name
+    $entry = [PSCustomObject]@{
+        status          = $status
+        last_attempt_at = (Get-Date -Format 'o')
+        last_success_at = $null
+        error           = $error
+    }
+    if ($prev -and $prev.last_success_at) { $entry.last_success_at = $prev.last_success_at }
+    if ($status -eq "success") { $entry.last_success_at = (Get-Date -Format 'o') }
+    if ($ledger.PSObject.Properties[$name]) {
+        $ledger.PSObject.Properties[$name].Value = $entry
+    } else {
+        $ledger | Add-Member -MemberType NoteProperty -Name $name -Value $entry
+    }
+    $tmp = "$LedgerFile.tmp"
+    $ledger | ConvertTo-Json -Depth 5 | Set-Content $tmp -Encoding utf8
+    Move-Item -LiteralPath $tmp -Destination $LedgerFile -Force
+}
+
+function Test-Due($ledger, [string]$name, [datetime]$now) {
+    $last = Get-LastSuccess $ledger $name
+    switch ($name) {
+        "daily"   { return (-not $last) -or ($last.Date -lt $now.Date) }
+        # Weekly is anchored to the start of the ISO week (Monday 00:00), not a
+        # rolling 7 days: a rolling window drifts a day later every week
+        # (Mon 10:19 success -> next Mon 08:00 is only 6.9 days -> Tue 08:00).
+        "weekly"  {
+            $weekStart = $now.Date.AddDays(-((([int]$now.DayOfWeek) + 6) % 7))
+            return (-not $last) -or ($last -lt $weekStart)
+        }
+        "monthly" { return (-not $last) -or ($last.Year -ne $now.Year) -or ($last.Month -ne $now.Month) }
+        default   { return (-not $last) }
+    }
+}
+
+function Test-DueToday($ledger, [string]$name, [datetime]$now) {
+    $last = Get-LastSuccess $ledger $name
+    return (-not $last) -or ($last.Date -ne $now.Date)
+}
+
+function Test-RetryCooldown($ledger, [string]$name, [datetime]$now, [int]$minutes = 30) {
+    $e = Get-LedgerEntry $ledger $name
+    if (-not $e -or $e.status -ne "failed" -or -not $e.last_attempt_at) { return $false }
+    try {
+        $last = [datetime]::Parse($e.last_attempt_at)
+        return (($now - $last).TotalMinutes -lt $minutes)
+    } catch { return $false }
+}
+
+$State = Read-State
+$Ledger = Read-Ledger
+
+# ── Determine what is due ──────────────────────────────────────────────────────
+# Due-ness is cross-day: a monthly failure on the 1st stays due on the 2nd.
 $EarlyNow = Get-Date
 $EarlyIsMonday = $EarlyNow.DayOfWeek -eq [System.DayOfWeek]::Monday
 $EarlyIsSunday = $EarlyNow.DayOfWeek -eq [System.DayOfWeek]::Sunday
-$EarlyIsFirstOfMonth = $EarlyNow.Day -eq 1
+
+$needsDaily   = $Force -or (Test-Due $Ledger "daily" $EarlyNow)
+$needsWeekly  = $Force -or (Test-Due $Ledger "weekly" $EarlyNow)
+$needsMonthly = $Force -or (Test-Due $Ledger "monthly" $EarlyNow)
+$needsR2      = ($EarlyIsMonday -or $Force) -and ($Force -or (Test-DueToday $Ledger "r2_backup" $EarlyNow))
+$needsPrune   = $EarlyIsSunday -and ($Force -or (Test-DueToday $Ledger "prune" $EarlyNow))
+
 if (-not $Force -and -not $RedoFailed) {
-    $lastDaily = $State.ingesters.PSObject.Properties["daily"]
-    if ($lastDaily -and $lastDaily.Value.status -eq "success") {
-        # Daily already succeeded today -- check if we still need weekly/monthly/r2/prune.
-        # needsPrune: Sunday prune is state-tracked so a missed run is retried
-        # on the next boot that same Sunday instead of waiting a week.
-        $needsWeekly = $EarlyIsMonday -and (Get-IngesterStatus $State "weekly") -ne "success"
-        $needsMonthly = $EarlyIsFirstOfMonth -and (Get-IngesterStatus $State "monthly") -ne "success"
-        $needsR2 = (Get-IngesterStatus $State "r2_backup") -ne "success"
-        $needsPrune = $EarlyIsSunday -and (Get-IngesterStatus $State "prune") -ne "success"
-        if (-not $needsWeekly -and -not $needsMonthly -and -not $needsR2 -and -not $needsPrune) {
-            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] All scheduled work already succeeded today. Exiting before network checks."
-            Remove-MyLock
-            exit 0
-        }
-    } elseif ($lastDaily -and $lastDaily.Value.status -eq "failed") {
-        try {
-            $lastTry = [datetime]::Parse($lastDaily.Value.completed_at)
-            $hrsSince = ((Get-Date) - $lastTry).TotalHours
-            if ($hrsSince -lt 24) {
-                Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Daily failed ${hrsSince:F1}h ago (<24h cooldown). Skipping retry this boot -- use -Force to override."
-                Remove-MyLock
-                exit 0
-            }
-        } catch {}
+    if ($needsDaily -and (Test-RetryCooldown $Ledger "daily" $EarlyNow 30)) {
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Daily failed within the last 30 minutes - skipping this boot."
+        $needsDaily = $false
+    }
+    if (-not $needsDaily -and -not $needsWeekly -and -not $needsMonthly -and -not $needsR2 -and -not $needsPrune) {
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] All scheduled work already succeeded (ledger). Exiting before network checks."
+        exit 0
     }
 }
 
@@ -127,43 +182,36 @@ if (-not $Force -and -not $RedoFailed) {
 $ScheduledIngesters = [System.Collections.Generic.List[string]]::new()
 
 if ($RedoFailed) {
-    # If RedoFailed is passed, only queue things marked "failed" today
-    foreach ($prop in $State.ingesters.PSObject.Properties) {
-        if ($prop.Value.status -eq "failed" -and $prop.Name -ne "r2_backup") {
-            $ScheduledIngesters.Add($prop.Name)
-        }
+    # Re-queue frequencies the ledger marks failed; R2/prune are handled below.
+    foreach ($name in @("daily", "weekly", "monthly")) {
+        $e = Get-LedgerEntry $Ledger $name
+        if ($e -and $e.status -eq "failed") { $ScheduledIngesters.Add($name) }
     }
-    if ($ScheduledIngesters.Count -eq 0) {
-        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] No failed ingesters found for today. Exiting."
-        Remove-MyLock
+    if ($ScheduledIngesters.Count -eq 0 -and -not $needsR2 -and -not $needsPrune) {
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] No failed ingesters found. Exiting."
         exit 0
     }
 } else {
-    # Normal calendar scheduling
-    $Now           = Get-Date
-    $IsMonday      = $Now.DayOfWeek -eq [System.DayOfWeek]::Monday
-    $IsFirstOfMonth = $Now.Day -eq 1
+    if ($needsDaily)   { $ScheduledIngesters.Add("daily") }
+    if ($needsWeekly)  { $ScheduledIngesters.Add("weekly") }
+    if ($needsMonthly) { $ScheduledIngesters.Add("monthly") }
 
-    $ScheduledIngesters.Add("daily")
-    if ($IsMonday)       { $ScheduledIngesters.Add("weekly") }
-    if ($IsFirstOfMonth) { $ScheduledIngesters.Add("monthly") }
-
-    # Safeguard: skip if all scheduled ingesters already succeeded today.
-    # On Sundays the pending prune also blocks the exit so a missed prune
-    # is retried on the next boot that same Sunday (state-tracked).
     if (-not $Force) {
-        $allDone = $true
+        $filtered = [System.Collections.Generic.List[string]]::new()
         foreach ($name in $ScheduledIngesters) {
-            if ((Get-IngesterStatus $State $name) -ne "success") { $allDone = $false; break }
+            if (-not (Test-RetryCooldown $Ledger $name $EarlyNow 30)) { $filtered.Add($name) }
         }
-        $IsSunday = $Now.DayOfWeek -eq [System.DayOfWeek]::Sunday
-        $pruneDone = (-not $IsSunday) -or ((Get-IngesterStatus $State "prune") -eq "success")
-        if ($allDone -and (Get-IngesterStatus $State "r2_backup") -eq "success" -and $pruneDone) {
-            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] All ingesters completed successfully today. Exiting."
-            Remove-MyLock
-            exit 0
-        }
+        $ScheduledIngesters = $filtered
     }
+    if ($ScheduledIngesters.Count -eq 0 -and -not $needsR2 -and -not $needsPrune) {
+        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] All ingesters completed successfully (ledger). Exiting."
+        exit 0
+    }
+}
+
+if ($DryRun) {
+    Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] DRY RUN: ingesters=$($ScheduledIngesters -join ', '); r2=$needsR2; prune=$needsPrune; force=$Force; redoFailed=$RedoFailed"
+    exit 0
 }
 
 # ── Network & System stabilization ─────────────────────────────────────────────
@@ -218,12 +266,13 @@ if (Test-Path $EnvFile) {
 }
 
 # ── Run a single ingester with Exponential Backoff ─────────────────────────────
-# Per-frequency time-boxes (seconds per attempt): one poisoned source must not
-# hold the boot hostage (Oct-2026: monthly attempt ran 45min on Congress-109
-# truncated pages). Incremental congress normally finishes in minutes; the cap
-# only fires on poison. Congress upserts per session, so a timed-out run keeps
-# partial progress for the next attempt.
-$FrequencyTimeoutSeconds = @{ daily = 1200; weekly = 1200; monthly = 2400 }
+# Per-frequency time-boxes (seconds per attempt): one slow source must not hold
+# the boot hostage. Measured 2026-11-03: a healthy monthly run is ~53min, of
+# which Congress is ~38min (118/119 full fetches). The old 40min cap killed it
+# during State Bills every time. 75min leaves headroom without hiding a poison
+# source. Congress upserts per session, so a timed-out run keeps partial
+# progress for the next attempt.
+$FrequencyTimeoutSeconds = @{ daily = 1200; weekly = 1200; monthly = 4500 }
 
 function Invoke-Ingester {
     param([string]$Name, [string]$Frequency, [int]$MaxAttempts = 3, [int]$BaseDelaySeconds = 300)
@@ -254,24 +303,27 @@ function Invoke-Ingester {
             }
 
             $wrapper = Join-Path $root "research/ops/ingest_wrapper.py"
-            $out = & python -u $wrapper --frequency $freq 2>&1
-            [PSCustomObject]@{ output = $out -join "`n"; exitCode = $LASTEXITCODE }
+            # Stream each line into the job's output stream so Receive-Job can
+            # retrieve partial output when the parent times the job out.
+            & python -u $wrapper --frequency $freq 2>&1 | ForEach-Object { $_.ToString() }
+            "INGEST_EXIT_CODE=$LASTEXITCODE"
         } -ArgumentList $ProjectRoot, $Frequency
 
         $timeout = $FrequencyTimeoutSeconds[$Frequency]
         if (-not $timeout) { $timeout = 1800 }
         $finished = Wait-Job -Job $job -Timeout $timeout
         if (-not $finished) {
+            # Drain what the job has already emitted *before* stopping it;
+            # Stop-Job discards the buffered stream.
+            $partial = @(Receive-Job $job -ErrorAction SilentlyContinue | Where-Object { "$_" -notlike 'INGEST_EXIT_CODE=*' })
+            foreach ($line in $partial) { "$line" | Tee-Object -FilePath $LogFile -Append | Out-Null }
             Stop-Job $job
-            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Name ingester TIMED OUT after $($timeout / 60) minutes - killing (partial upserts kept)."
-            foreach ($line in @(Receive-Job $job -ErrorAction SilentlyContinue)) {
-                $out = if ($line.output) { $line.output } else { "$line" }
-                $out | Tee-Object -FilePath $LogFile -Append | Out-Null
-            }
             Remove-Job $job -Force -ErrorAction SilentlyContinue
+            Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Name ingester TIMED OUT after $($timeout / 60) minutes - killing (partial upserts kept)."
             $errMsg = "timeout after ${timeout}s"
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Name ingester failed ($errMsg)."
             Set-IngesterStatus $script:State $Name.ToLower() "failed" $errMsg
+            Set-LedgerStatus $script:Ledger $Name.ToLower() "failed" $errMsg
             if ($attempt -lt $MaxAttempts) {
                 $sleepTime = $BaseDelaySeconds * [math]::Pow(2, $attempt - 1)
                 Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Waiting $($sleepTime / 60) minutes before next retry..."
@@ -279,17 +331,18 @@ function Invoke-Ingester {
             }
             continue
         }
-        $result = Receive-Job -Job $job
+        $result = @(Receive-Job -Job $job -ErrorAction SilentlyContinue)
         $jobState = $job.State
         Remove-Job -Job $job
 
-        if ($result -and $result.output) { $result.output | Tee-Object -FilePath $LogFile -Append }
+        $exitLine = $result | Where-Object { "$_" -like 'INGEST_EXIT_CODE=*' } | Select-Object -Last 1
+        $exitCode = if ($exitLine) { [int]("$exitLine" -replace 'INGEST_EXIT_CODE=', '') } else { 1 }
+        $outputLines = @($result | Where-Object { "$_" -notlike 'INGEST_EXIT_CODE=*' })
+        if ($outputLines.Count -gt 0) { $outputLines | Tee-Object -FilePath $LogFile -Append }
 
-        $exitCode = if ($result -and $null -ne $result.exitCode) { $result.exitCode } else { 1 }
-        
         # --- FALSE SUCCESS FIX: Scan the output for failures ---
         # If the output contains "Failed: " followed by any number 1-9, force the exit code to 1
-        if ($result.output -match 'Failed:\s*[1-9]') {
+        if (($outputLines -join "`n") -match 'Failed:\s*[1-9]') {
             $exitCode = 1
         }
 
@@ -298,12 +351,14 @@ function Invoke-Ingester {
         if ($succeeded) {
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Name ingester succeeded."
             Set-IngesterStatus $script:State $Name.ToLower() "success"
+            Set-LedgerStatus $script:Ledger $Name.ToLower() "success"
             return $true
         } else {
             $errMsg = "state=$jobState exitCode=$exitCode"
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Name ingester failed ($errMsg)."
             Set-IngesterStatus $script:State $Name.ToLower() "failed" $errMsg
-            
+            Set-LedgerStatus $script:Ledger $Name.ToLower() "failed" $errMsg
+
             if ($attempt -lt $MaxAttempts) {
                 $sleepTime = $BaseDelaySeconds * [math]::Pow(2, $attempt - 1)
                 $sleepMinutes = $sleepTime / 60
@@ -320,17 +375,15 @@ Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Ingesters queued: $($ScheduledI
 $anyFailed = $false
 
 foreach ($name in $ScheduledIngesters) {
-    if (-not $Force -and -not $RedoFailed -and (Get-IngesterStatus $State $name) -eq "success") {
-        Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $name already succeeded today - skipping."
-        continue
-    }
+    # The ledger decided this is due; don't second-guess it with today's state
+    # file (a manual run can succeed without touching the state file).
     $ok = Invoke-Ingester -Name $name.ToUpper() -Frequency $name
     if (-not $ok) { $anyFailed = $true }
 }
 
-# ── R2 backup ──────────────────────────────────────────────────────────────────
-# Allow backup if running manual redos (as long as nothing in this current batch failed)
-if (-not $anyFailed -and ((Get-IngesterStatus $State "r2_backup") -ne "success" -or $Force -or $RedoFailed)) {
+# ── R2 backup (Monday-only) ────────────────────────────────────────────────────
+# Weekly-full policy: zero R2 traffic Tue-Sun. -Force overrides for manual runs.
+if (-not $anyFailed -and $needsR2) {
     Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Ingesters succeeded. Starting R2 backup..."
 
     $BackupTimeoutSeconds = 1800   # hard cap so a stalled upload can't run forever
@@ -386,12 +439,15 @@ if (-not $anyFailed -and ((Get-IngesterStatus $State "r2_backup") -ne "success" 
         if ($backupExit -eq 0) {
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] R2 backup completed successfully."
             Set-IngesterStatus $State "r2_backup" "success"
+            Set-LedgerStatus $Ledger "r2_backup" "success"
         } else {
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] R2 backup failed (non-blocking). exitCode=$backupExit"
             Set-IngesterStatus $State "r2_backup" "failed" "exitCode=$backupExit"
+            Set-LedgerStatus $Ledger "r2_backup" "failed" "exitCode=$backupExit"
         }
     } else {
         Set-IngesterStatus $State "r2_backup" "failed" "timeout after ${BackupTimeoutSeconds}s"
+        Set-LedgerStatus $Ledger "r2_backup" "failed" "timeout after ${BackupTimeoutSeconds}s"
     }
 }
 
@@ -399,7 +455,7 @@ if (-not $anyFailed -and ((Get-IngesterStatus $State "r2_backup") -ne "success" 
 # With weekly-full DB (Monday) + keep-last 5 + first-per-month, the database
 # prefix stays ~5-6 GB and the total bucket stays under 10 GB. Prune is Sunday
 # so Monday's full has room.
-if ((Get-Date).DayOfWeek -eq [System.DayOfWeek]::Sunday) {
+if ($needsPrune) {
     Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sunday prune: trimming old database snapshots (keep-last 5 + first-per-month)..."
     try {
         $pruneJob = Start-Job -ScriptBlock {
@@ -430,17 +486,25 @@ if ((Get-Date).DayOfWeek -eq [System.DayOfWeek]::Sunday) {
         if ($pruneExit -eq 0) {
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sunday prune finished successfully."
             Set-IngesterStatus $State "prune" "success"
+            Set-LedgerStatus $Ledger "prune" "success"
         } else {
             Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sunday prune failed (non-blocking). exitCode=$pruneExit"
             Set-IngesterStatus $State "prune" "failed" "exitCode=$pruneExit"
+            Set-LedgerStatus $Ledger "prune" "failed" "exitCode=$pruneExit"
         }
     } catch {
         Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sunday prune failed (non-blocking): $_"
         Set-IngesterStatus $State "prune" "failed" "$_"
+        Set-LedgerStatus $Ledger "prune" "failed" "$_"
     }
 }
 
-Remove-MyLock
+# Release the mutex on the graceful path. If we exit any other way, the kernel
+# releases it when the process dies; the next run sees an abandoned mutex.
+if ($script:WeHoldLock) {
+    try { $IngestMutex.ReleaseMutex() } catch {}
+    $script:WeHoldLock = $false
+}
 if (-not $anyFailed) {
     Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] === STARTUP INGESTION COMPLETED SUCCESSFULLY ==="
     exit 0
