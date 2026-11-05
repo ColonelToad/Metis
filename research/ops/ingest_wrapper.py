@@ -49,11 +49,32 @@ try:
         default="all",
         help="Ingestion frequency to run (default: all)",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Rerun ingesters even if the per-ingester ledger says they succeeded",
+    )
+    parser.add_argument(
+        "--only",
+        default=None,
+        help="Run a single ingester by module name (manual recovery)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="Per-ingester timeout override in seconds (testing/manual runs)",
+    )
     args = parser.parse_args()
 
-    # Run with specified frequency
-    run_all_ingesters.run_all(args.frequency)
-    sys.exit(0)
+    # Run with specified frequency; exit code reflects per-ingester failures.
+    all_ok, results = run_all_ingesters.run_all(
+        args.frequency,
+        force=args.force,
+        only=args.only,
+        timeout_override=args.timeout,
+    )
+    sys.exit(0 if all_ok else 1)
 
 except ImportError as e:
     print(f"Import error: {e}", file=sys.stderr)

@@ -282,7 +282,7 @@ function Invoke-Ingester {
         Log "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Starting $Name ingester$label..."
 
         $job = Start-Job -ScriptBlock {
-            param($root, $freq)
+            param($root, $freq, $force)
             Set-Location $root
             
             # --- ENCODING FIX: Force PowerShell to read Python's output as UTF-8 ---
@@ -303,11 +303,13 @@ function Invoke-Ingester {
             }
 
             $wrapper = Join-Path $root "research/ops/ingest_wrapper.py"
+            $forceArgs = @()
+            if ($force) { $forceArgs = @("--force") }
             # Stream each line into the job's output stream so Receive-Job can
             # retrieve partial output when the parent times the job out.
-            & python -u $wrapper --frequency $freq 2>&1 | ForEach-Object { $_.ToString() }
+            & python -u $wrapper --frequency $freq @forceArgs 2>&1 | ForEach-Object { $_.ToString() }
             "INGEST_EXIT_CODE=$LASTEXITCODE"
-        } -ArgumentList $ProjectRoot, $Frequency
+        } -ArgumentList $ProjectRoot, $Frequency, [bool]$Force
 
         $timeout = $FrequencyTimeoutSeconds[$Frequency]
         if (-not $timeout) { $timeout = 1800 }

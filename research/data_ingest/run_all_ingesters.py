@@ -16,8 +16,10 @@ Environment:
 import argparse
 import logging
 import os
-import sqlite3
+import queue
+import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +42,7 @@ from data_ingest import (
     ingest_fred,
     ingest_fred_building_permits,
     ingest_gie_storage,
+    ingest_ledger,
     ingest_lmp,
     ingest_lmp_multi_iso,
     ingest_lobbying_disclosures,
@@ -51,48 +54,10 @@ from data_ingest import (
 )
 from features import extract_lobbying_bill_references
 
-# Import log rotation
-from log_rotation import rotate_logs
-
-
-# Import R2 uploader for post-ingestion backup
-def backup_to_r2():
-    """Upload database and cache to R2 after successful ingestion."""
-    try:
-        import subprocess
-        from pathlib import Path
-
-        # Run the comprehensive auto-backup script
-        backup_script = Path(__file__).parent.parent / "r2_auto_backup.py"
-        if not backup_script.exists():
-            logger.warning(f"R2 backup script not found: {backup_script}")
-            return
-
-        logger.info("Running R2 backup...")
-        result = subprocess.run(
-            [__import__("sys").executable, str(backup_script)],
-            cwd=Path(__file__).parent.parent.parent,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-
-        # Log the backup output
-        if result.stdout:
-            for line in result.stdout.split("\n"):
-                if line.strip():
-                    logger.info(line)
-
-        if result.returncode == 0:
-            logger.info("✓ R2 backup completed successfully")
-        else:
-            logger.warning(f"⚠ R2 backup encountered issues (non-blocking)")
-            if result.stderr:
-                logger.warning(result.stderr)
-
-    except Exception as e:
-        logger.warning(f"R2 backup failed (non-critical): {e}")
-
+# Import log rotation. ``ops`` is a namespace package under research/, so this
+# works whether the entry point is the wrapper (research/ops on sys.path) or
+# run_all_ingesters itself (research/ on sys.path).
+from ops.log_rotation import rotate_logs
 
 # Setup logging
 logging.basicConfig(
@@ -165,6 +130,147 @@ MONTHLY_INGESTERS = [
 ]
 
 
+# ── Per-ingester execution ────────────────────────────────────────────────────
+# Each ingester runs in its own process, so one hung source cannot consume the
+# whole frequency budget or take the run down with it. Caps are per attempt and
+# sit well above measured healthy runs; they only fire when a source stops
+# making progress. Congress legitimately needs ~38 min (118/119 sessions).
+INGESTER_TIMEOUTS = {
+    "data_ingest.ingest_ais_maritime": 900,  # measured 612s
+    "data_ingest.ingest_congress_bills_expanded": 2700,  # measured ~2275s
+    "data_ingest.ingest_state_bills": 1200,  # measured ~660s
+    "data_ingest.ingest_storm_events": 600,
+    "data_ingest.ingest_lobbying_disclosures": 600,
+}
+
+DEFAULT_TIMEOUTS = {"daily": 300, "weekly": 600, "monthly": 900, "all": 900}
+FALLBACK_TIMEOUT = 900
+
+CHILD_SCRIPT = Path(__file__).resolve().parent / "run_one_ingester.py"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def list_ingesters():
+    """Return every known ingester as (display name, module) pairs."""
+    return DAILY_INGESTERS + WEEKLY_INGESTERS + MONTHLY_INGESTERS
+
+
+def ingester_frequency(module) -> str:
+    """Home frequency of an ingester (the Monday daily run also carries weekly ones)."""
+    name = module.__name__
+    if any(name == m.__name__ for _, m in DAILY_INGESTERS):
+        return "daily"
+    if any(name == m.__name__ for _, m in WEEKLY_INGESTERS):
+        return "weekly"
+    return "monthly"
+
+
+def ingester_timeout(module, frequency: str, override: Optional[int] = None) -> int:
+    if override:
+        return override
+    return INGESTER_TIMEOUTS.get(module.__name__, DEFAULT_TIMEOUTS.get(frequency, FALLBACK_TIMEOUT))
+
+
+def _child_env() -> Dict[str, str]:
+    env = os.environ.copy()
+    paths = [str(PROJECT_ROOT), str(PROJECT_ROOT / "research")]
+    if env.get("PYTHONPATH"):
+        paths.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(paths)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["METIS_INGEST_CHILD"] = "1"
+    return env
+
+
+def run_ingester_child(module_name: str, timeout: int) -> Dict[str, object]:
+    """Run one ingester in a child process, streaming and timing its output.
+
+    Output is streamed as it arrives and drained after a kill, so a timeout
+    still leaves the partial log behind. Returns status, exit_code, rows and
+    duration_ms.
+    """
+    started = time.time()
+    process = subprocess.Popen(
+        [sys.executable, "-u", str(CHILD_SCRIPT), module_name],
+        cwd=str(PROJECT_ROOT),
+        env=_child_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+
+    stream: "queue.Queue[Optional[str]]" = queue.Queue()
+
+    def pump() -> None:
+        try:
+            for line in process.stdout:
+                stream.put(line)
+        finally:
+            stream.put(None)
+
+    threading.Thread(target=pump, daemon=True).start()
+
+    collected: List[str] = []
+    timed_out = False
+    deadline = started + timeout
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            timed_out = True
+            break
+        try:
+            line = stream.get(timeout=min(remaining, 0.5))
+        except queue.Empty:
+            continue
+        if line is None:
+            break
+        collected.append(line)
+        print(line, end="", flush=True)
+
+    if timed_out:
+        process.kill()
+
+    try:
+        process.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+    # Drain anything the pump buffered before the process exited or died.
+    while True:
+        try:
+            line = stream.get(timeout=0.2)
+        except queue.Empty:
+            break
+        if line is None:
+            break
+        collected.append(line)
+        print(line, end="", flush=True)
+
+    duration_ms = (time.time() - started) * 1000.0
+    rows = 0
+    for line in collected:
+        if line.startswith("INGEST_ROWS="):
+            try:
+                rows = int(line.strip().split("=", 1)[1])
+            except ValueError:
+                rows = 0
+
+    if timed_out:
+        return {"status": "timeout", "exit_code": None, "rows": rows, "duration_ms": duration_ms}
+    if process.returncode == 0:
+        return {"status": "success", "exit_code": 0, "rows": rows, "duration_ms": duration_ms}
+    return {
+        "status": "failed",
+        "exit_code": process.returncode,
+        "rows": rows,
+        "duration_ms": duration_ms,
+    }
+
+
 def get_ingesters_for_frequency(frequency: str) -> list:
     """
     Return list of (name, module) tuples based on frequency.
@@ -205,7 +311,13 @@ def get_frequency_description(frequency: str) -> str:
 
 
 def run_all(
-    frequency: str = "all", collector=None, force_weekly: bool = False
+    frequency: str = "all",
+    collector=None,
+    force_weekly: bool = False,
+    resume: bool = True,
+    force: bool = False,
+    timeout_override: Optional[int] = None,
+    only: Optional[str] = None,
 ) -> Tuple[bool, List[Dict]]:
     """
     Run ingesters filtered by frequency.
@@ -214,6 +326,10 @@ def run_all(
         frequency: 'daily', 'weekly', 'monthly', or 'all'
         collector: Optional MetricsCollector instance to log results
         force_weekly: If True, run weekly ingesters even if not Monday
+        resume: Skip ingesters the ledger marks successful in this window
+        force: Ignore the ledger and rerun every ingester
+        timeout_override: Per-ingester timeout in seconds (testing/manual runs)
+        only: Run a single ingester by module name (manual recovery)
 
     Returns:
         (overall_success: bool, results: list of dicts with ingester status)
@@ -223,128 +339,149 @@ def run_all(
         logger.info("Daily run scheduled (not Monday, skipping weekly ingesters)")
 
     ingesters = get_ingesters_for_frequency(frequency)
+    if only:
+        ingesters = [(name, module) for name, module in ingesters if module.__name__ == only]
+        if not ingesters:
+            print(f"Unknown ingester for frequency {frequency}: {only}")
+            return False, []
 
     print(f"\n{'='*70}")
     print(f"Starting {get_frequency_description(frequency)}: {datetime.now()}")
-    print(f"Mode: {METIS_MODE} | Ingesters: {len(ingesters)}")
+    print(f"Mode: {METIS_MODE} | Ingesters: {len(ingesters)} | resume={resume and not force}")
     print(f"{'='*70}\n")
 
-    results = []
+    ledger = ingest_ledger.load()
+    results: List[Dict] = []
     all_ok = True
 
     for name, module in ingesters:
-        start_time = time.time()
-        status = "success"
-        error_msg = None
-        row_count = 0
+        key = module.__name__
+        home_frequency = ingester_frequency(module)
 
-        try:
-            logger.info(f"Running {name} ingester")
-            print(f"\n>>> {name} ingester")
-            # Call the main() function for each ingester
-            # Isolate sys.argv so individual ingesters' argparse doesn't see
-            # the wrapper's --frequency flag (e.g., NOAA CPC would die on
-            # "unrecognized arguments: --frequency daily")
-            if hasattr(module, "main"):
-                old_argv = sys.argv
-                sys.argv = [old_argv[0]]
-                try:
-                    result = module.main()
-                finally:
-                    sys.argv = old_argv
-                # If ingester returns row count, use it; otherwise 0
-                if isinstance(result, int):
-                    row_count = result
-                logger.info(f"✓ {name}: {row_count} rows ingested")
-            else:
-                logger.warning(f"No main() function found in {name}")
-                status = "failed"
-                error_msg = "No main() function"
-                all_ok = False
-        except Exception as e:
-            duration_ms = (time.time() - start_time) * 1000
-            logger.error(f"✗ {name} failed: {e}", exc_info=True)
-            print(f"ERROR in {name}: {e}")
-            status = "failed"
-            error_msg = str(e)
+        # Resume: a retry after a partial failure should only redo the
+        # ingesters that did not succeed, not the whole frequency.
+        if resume and not force:
+            prior = ledger.get(key) or {}
+            if prior.get("status") == "success" and ingest_ledger.succeeded_within(
+                prior.get("last_success_at"), home_frequency
+            ):
+                print(f"SKIP {name}: succeeded {prior.get('last_success_at')} (ledger)")
+                results.append(
+                    {
+                        "name": name,
+                        "status": "skipped",
+                        "duration_ms": 0,
+                        "row_count": 0,
+                        "error": None,
+                    }
+                )
+                continue
+
+        timeout = ingester_timeout(module, home_frequency, timeout_override)
+        logger.info(f"Running {name} ingester (timeout {timeout}s)")
+        print(f"\n>>> {name} ingester")
+
+        outcome = run_ingester_child(key, timeout)
+        status = str(outcome["status"])
+        error_msg = None
+        if status == "timeout":
+            error_msg = f"timeout after {timeout}s"
+        elif status == "failed":
+            error_msg = f"exit code {outcome['exit_code']}"
+
+        # Measure freshness after every attempt: the table's age is a fact
+        # about the data, independent of whether this attempt succeeded.
+        fresh = ingest_ledger.fresh_for(key)
+        ingest_ledger.record_attempt(
+            key=key,
+            display=name,
+            frequency=home_frequency,
+            status=status,
+            duration_ms=outcome["duration_ms"],
+            row_count=int(outcome["rows"]),
+            exit_code=outcome["exit_code"],
+            error=error_msg or "",
+            fresh=fresh,
+        )
+
+        if status == "success":
+            logger.info(f"✓ {name}: {outcome['rows']} rows ingested")
+        else:
+            logger.error(f"✗ {name} {status}: {error_msg}")
             all_ok = False
 
-            # Log to metrics collector if provided
-            if collector:
-                try:
-                    collector.add_ingester_result(
-                        ingester_name=name,
-                        status=status,
-                        duration_ms=duration_ms,
-                        row_count=0,
-                        error_msg=error_msg,
-                    )
-                except Exception as collector_error:
-                    logger.warning(f"Could not log to metrics: {collector_error}")
-
-            results.append(
-                {
-                    "name": name,
-                    "status": status,
-                    "duration_ms": duration_ms,
-                    "row_count": 0,
-                    "error": error_msg,
-                }
+        if fresh.get("fresh") is False:
+            print(
+                f"STALE {name}: newest row {fresh.get('source_max_date')} "
+                f"is {fresh.get('age_days')} days old (limit {fresh.get('max_age_days')})"
             )
-            continue
-
-        duration_ms = (time.time() - start_time) * 1000
-
-        # Log to metrics collector if provided
-        if collector:
-            try:
-                collector.add_ingester_result(
-                    ingester_name=name,
-                    status=status,
-                    duration_ms=duration_ms,
-                    row_count=row_count,
-                    error_msg=error_msg,
-                )
-            except Exception as collector_error:
-                logger.warning(f"Could not log to metrics: {collector_error}")
 
         results.append(
             {
                 "name": name,
                 "status": status,
-                "duration_ms": duration_ms,
-                "row_count": row_count,
+                "duration_ms": outcome["duration_ms"],
+                "row_count": int(outcome["rows"]),
                 "error": error_msg,
+                "fresh": fresh.get("fresh"),
+                "source_max_date": fresh.get("source_max_date"),
             }
         )
+
+        if collector:
+            try:
+                collector.add_ingester_result(
+                    ingester_name=name,
+                    status=status,
+                    duration_ms=outcome["duration_ms"],
+                    row_count=int(outcome["rows"]),
+                    error_msg=error_msg,
+                )
+            except Exception as collector_error:
+                logger.warning(f"Could not log to metrics: {collector_error}")
 
     # Print summary
     print(f"\n{'='*70}")
     print("INGESTION SUMMARY")
     print(f"{'='*70}")
     success_count = sum(1 for r in results if r["status"] == "success")
-    fail_count = sum(1 for r in results if r["status"] == "failed")
-    print(f"Total: {len(results)} | Success: {success_count} | Failed: {fail_count}\n")
+    fail_count = sum(1 for r in results if r["status"] in ("failed", "timeout"))
+    stale_count = sum(1 for r in results if r.get("fresh") is False)
+    skipped_count = sum(1 for r in results if r["status"] == "skipped")
+    print(
+        f"Total: {len(results)} | Success: {success_count} | Failed: {fail_count} "
+        f"| Stale: {stale_count} | Skipped: {skipped_count}\n"
+    )
 
+    icons = {"success": "OK", "failed": "FAIL", "timeout": "TIME", "skipped": "SKIP"}
     for result in results:
-        status_icon = "OK" if result["status"] == "success" else "FAIL"
         print(
-            f"{status_icon} {result['name']:30} {result['status']:8} ({result['duration_ms']:6.0f}ms, {result['row_count']:6} rows)"
+            f"{icons.get(result['status'], '????'):<5}{result['name']:32} {result['status']:8} "
+            f"({result['duration_ms']:6.0f}ms, {result['row_count']:6} rows)"
         )
         if result["error"]:
-            print(f"  └─ Error: {result['error']}")
+            print(f"      └─ Error: {result['error']}")
+        if result.get("fresh") is False:
+            print(f"      └─ Stale: newest row {result.get('source_max_date')}")
 
     print(f"\n{'='*70}")
     if all_ok:
-        logger.info(f"All ingesters completed successfully")
+        logger.info("All ingesters completed (staleness is reported, not retried)")
     else:
-        logger.warning(f"Some ingesters failed - check logs above")
+        logger.warning("Some ingesters failed - check logs above")
 
     return all_ok, results
 
 
 def main():
     """Entry point for command-line usage."""
+    # Line buffering so the startup script sees progress (and keeps it if the
+    # outer timeout kills us).
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
     # Rotate old logs before starting ingestion
     rotate_logs()
 
@@ -362,15 +499,37 @@ def main():
         action="store_true",
         help="Force weekly ingesters to run even if not Monday",
     )
-    parser.add_argument("--no-backup", action="store_true", help="Skip R2 backup after ingestion")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Ignore the ledger and rerun every ingester in the frequency",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Do not skip ingesters that already succeeded in this window",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="Per-ingester timeout override in seconds (testing/manual runs)",
+    )
+    parser.add_argument(
+        "--only",
+        default=None,
+        help="Run a single ingester by module name (e.g. data_ingest.ingest_congress_bills_expanded)",
+    )
     args = parser.parse_args()
 
-    all_ok, results = run_all(args.frequency, force_weekly=args.force_weekly)
-
-    # Backup to R2 after successful ingestion (unless --no-backup is set)
-    if all_ok and not args.no_backup:
-        logger.info("Ingestion completed successfully, starting R2 backup...")
-        backup_to_r2()
+    all_ok, results = run_all(
+        args.frequency,
+        force_weekly=args.force_weekly,
+        resume=not args.no_resume,
+        force=args.force,
+        timeout_override=args.timeout,
+        only=args.only,
+    )
 
     sys.exit(0 if all_ok else 1)
 

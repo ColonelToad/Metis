@@ -206,7 +206,9 @@ def upsert_ppi(engine, df: pd.DataFrame) -> int:
             conn.execute(text("DELETE FROM bls_ppi WHERE series_id = :sid"), {"sid": series_id})
         df_insert.to_sql("bls_ppi", conn, if_exists="append", index=False, method="multi")
 
-    print(f"[BLS] Wrote {len(df_insert)} PPI records across {df_insert['series_id'].nunique()} series")
+    print(
+        f"[BLS] Wrote {len(df_insert)} PPI records across {df_insert['series_id'].nunique()} series"
+    )
     return len(df_insert)
 
 

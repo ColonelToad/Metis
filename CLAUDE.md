@@ -35,11 +35,18 @@ research/models/inference_pipeline.py predict_and_trade()
 pip install -r research/requirements.txt
 
 python research/ops/ingest_wrapper.py --frequency daily   # daily | weekly | monthly | all
+python research/ops/ingest_wrapper.py --frequency monthly --only data_ingest.ingest_congress_bills_expanded --force
 python research/ops/orchestrate_daily_pipeline.py         # METIS_MODE=DEV|REAL env var selects path
 python research/ops/r2_auto_backup.py   # Monday-only weekly-full (Tue-Sun exits; --force-full overrides)
 python research/data_ingest/backfill_cme_direct.py
 python research/data_ingest/backfill_lmp_prod.py
 ```
+Ingestion runs one child process per ingester with a per-source timeout, so a
+hung source is killed without taking the run down. `logs/ingest_ingesters.json`
+records each attempt (status, duration, rows, exit code, error) plus source
+freshness (`max(date)` vs. the source's publication lag); `--force` re-runs
+ingesters the ledger says already succeeded, and a retry with no flags resumes
+only what failed. Frequency-level due state is `logs/ingest_ledger.json`.
 In REAL mode the inference phase loads `models/lstm_ng_predictor.keras`, self-heals missing/stub scalers by refitting from `data/features/train_*.parquet`, reconciles feature columns against `models/lstm_metadata.json`, and sends one signal per run to the engine.
 
 ### C++ execution engine (WSL, primary)
