@@ -30,8 +30,11 @@ Invoke-LogRotation
 # A named mutex, not a file with a TTL. The kernel releases it when this
 # process dies (including a hard kill or reboot), so there is no stale-lock
 # window and no PID guessing. Local\ is per-session, which matches the
-# per-user Startup-folder trigger. An abandoned mutex (previous holder died
-# without releasing) is acquired here and treated as ours.
+# interactive user task (logon + daily 02:00) that triggers this script.
+# Do not switch the task to "run whether user is logged on or not": that runs
+# in session 0, where Local\ would not guard the interactive session and the
+# user-profile caches would not be present. An abandoned mutex (previous holder
+# died without releasing) is acquired here and treated as ours.
 $IngestMutex = [System.Threading.Mutex]::new($false, "Local\MetisIngestion")
 $script:WeHoldLock = $false
 try {
