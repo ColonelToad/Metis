@@ -33,7 +33,6 @@ from data_ingest import (
     ingest_ais_maritime,
     ingest_bls_ppi,
     ingest_cme_futures,
-    ingest_cme_settlements,
     ingest_congress_bills_expanded,
     ingest_drought,
     ingest_eia,
@@ -104,7 +103,10 @@ DAILY_INGESTERS = [
     ("ENTSOG Entry Nominations", ingest_entsog_flows),
     ("Maritime AIS", ingest_ais_maritime),
     ("Stock Prices", ingest_stooq),
-    ("CME Settlements (direct)", ingest_cme_settlements),
+    # CME settlements is parked: CME blocks this IP for scraping (HTTP 403,
+    # "blocked due to suspected web scraping activity") and the Playwright path
+    # now fails with ERR_HTTP2_PROTOCOL_ERROR. The module is kept for when a
+    # licensed/alternate route is chosen; see docs/data_issues.md.
 ]
 
 WEEKLY_INGESTERS = [
@@ -138,6 +140,7 @@ MONTHLY_INGESTERS = [
 INGESTER_TIMEOUTS = {
     "data_ingest.ingest_ais_maritime": 900,  # measured 612s
     "data_ingest.ingest_congress_bills_expanded": 2700,  # measured ~2275s
+    "data_ingest.ingest_lmp_multi_iso": 900,  # multi-ISO catch-up; ISO-NE ~15s/day
     "data_ingest.ingest_state_bills": 1200,  # measured ~660s
     "data_ingest.ingest_storm_events": 600,
     "data_ingest.ingest_lobbying_disclosures": 600,

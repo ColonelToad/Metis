@@ -35,17 +35,41 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 ISO_CONFIGS = [
     (gridstatus.CAISO(), "CAISO", {"market": "REAL_TIME_5_MIN"}),
     (gridstatus.NYISO(), "NYISO", {"market": "REAL_TIME_5_MIN"}),
-    (gridstatus.ISONE(), "ISO-NE", {"market": "REAL_TIME_5_MIN"}),
+    (
+        gridstatus.ISONE(),
+        "ISO-NE",
+        {
+            "market": "REAL_TIME_5_MIN",
+            # The default is every node (~1,200 locations, ~350k rows/day).
+            # Zones + the internal hub are the price signal the model needs and
+            # keep a 10-day window to ~26k rows instead of ~3.5M.
+            "locations": [
+                ".H.INTERNAL_HUB",
+                ".Z.CONNECTICUT",
+                ".Z.MAINE",
+                ".Z.NEMASSBOST",
+                ".Z.NEWHAMPSHIRE",
+                ".Z.RHODEISLAND",
+                ".Z.SEMASS",
+                ".Z.VERMONT",
+                ".Z.WCMASS",
+            ],
+        },
+    ),
 ]
 
 # PJM requires an API key - only include if available
 pjm_key = os.getenv("PJM_API_KEY")
 if pjm_key:
-    ISO_CONFIGS.append((gridstatus.PJM(api_key=pjm_key), "PJM", {}))
+    ISO_CONFIGS.append((gridstatus.PJM(api_key=pjm_key), "PJM", {"market": "REAL_TIME_5_MIN"}))
 else:
     logger.warning("PJM_API_KEY not set - skipping PJM data fetch")
 
 # ERCOT: Will be added separately since it has different API signature
+
+# A stale table must not turn one run into a multi-month download. Fourteen
+# days covers a normal outage; older gaps are a deliberate backfill task.
+MAX_FETCH_DAYS = 14
 
 
 def get_cache_key(iso_name, start_date, end_date):
@@ -78,7 +102,10 @@ def _fetch_iso_lmp_from_api(
         return pd.DataFrame()
 
     try:
-        df = iso_obj.get_lmp(date=start_date, **fetch_params)
+        # ``date`` is the first day; without ``end`` gridstatus returns only
+        # that single day, which is how a "last 30 days" request turned into a
+        # permanent 30-day lag.
+        df = iso_obj.get_lmp(date=start_date, end=end_date, **fetch_params)
         if not df.empty:
             df["iso"] = iso_name
             # Standardize timestamp column
@@ -177,8 +204,15 @@ def normalize_lmp_data(df: pd.DataFrame, iso_name: str) -> pd.DataFrame:
 
     if not normalized.empty:
         normalized["iso"] = iso_name
-        # Ensure timestamp is datetime
-        normalized["timestamp"] = pd.to_datetime(normalized["timestamp"])
+        # Ensure timestamp is datetime and store local wall time without an
+        # offset: the table's unique key is (timestamp, iso, node_id), so an
+        # offset change (EDT/EST) would otherwise duplicate the same interval.
+        ts = pd.to_datetime(normalized["timestamp"])
+        try:
+            ts = ts.dt.tz_localize(None)
+        except TypeError:
+            pass
+        normalized["timestamp"] = ts
         # Clean LMP values
         normalized["lmp"] = pd.to_numeric(normalized["lmp"], errors="coerce")
         # Optional component columns
@@ -194,66 +228,52 @@ def save_lmp_to_database(df: pd.DataFrame, engine) -> int:
     """
     Save normalized LMP data to grid_lmp_multi_iso table.
 
+    Uses a staging table and ``INSERT OR REPLACE``: a plain append fails on any
+    overlap (the ingester deliberately re-fetches a lookback window), and the
+    old row-by-row fallback ignored every conflicting row while still reporting
+    them as inserted.
+
     Returns:
-        Number of rows inserted
+        Number of rows offered to the table (inserted or replaced)
     """
     if df.empty:
         logger.warning("No LMP data to save")
         return 0
 
+    columns = [
+        "timestamp",
+        "iso",
+        "node_id",
+        "node_type",
+        "location_name",
+        "market",
+        "lmp",
+        "energy_component",
+        "congestion_component",
+        "loss_component",
+    ]
+    work = df.reindex(columns=columns).drop_duplicates(subset=["timestamp", "iso", "node_id"])
+    if work.empty:
+        logger.warning("No unique LMP rows to save")
+        return 0
+
+    stage = "_grid_lmp_multi_iso_stage"
     try:
-        # Use INSERT OR IGNORE to handle duplicates
-        df.to_sql("grid_lmp_multi_iso", engine, if_exists="append", index=False)
-        logger.info(f"Saved {len(df)} LMP records to database")
-        return len(df)
+        with engine.begin() as conn:
+            work.to_sql(stage, conn, if_exists="replace", index=False)
+            result = conn.exec_driver_sql(
+                f"INSERT OR REPLACE INTO grid_lmp_multi_iso ({', '.join(columns)}) "
+                f"SELECT {', '.join(columns)} FROM {stage}"
+            )
+            written = result.rowcount
+            conn.exec_driver_sql(f"DROP TABLE {stage}")
+        if written is None or written < 0:
+            written = len(work)
+        logger.info(f"Saved {written} LMP records to database")
+        return int(written)
     except Exception as e:
         logger.error(f"Error saving LMP to database: {e}")
-        # Fallback: row-by-row INSERT OR IGNORE via DBAPI (SQLAlchemy 2.0
-        # Connection.execute with '?' placeholders expects exec_driver_sql)
-        try:
-            with engine.connect() as conn:
-                insert_sql = """
-                    INSERT OR IGNORE INTO grid_lmp_multi_iso
-                    (timestamp, iso, node_id, node_type, location_name, market, lmp,
-                     energy_component, congestion_component, loss_component)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                rows_inserted = 0
-                for _, row in df.iterrows():
-                    ts = pd.to_datetime(row["timestamp"])
-                    try:
-                        if ts.tzinfo is not None:
-                            # Keep wall time (02:00 PDT), not UTC (09:00) — must match df.to_sql's string
-                            ts = ts.tz_localize(None)  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
-                    # Match df.to_sql's timestamp string format (with microseconds) for PK consistency
-                    try:
-                        ts_str = ts.strftime("%Y-%m-%d %H:%M:%S.%f")  # e.g. 2026-08-02 02:00:00.000000
-                    except Exception:
-                        ts_str = str(ts)
-                    conn.exec_driver_sql(
-                        insert_sql,
-                        (
-                            ts_str,
-                            row["iso"],
-                            row["node_id"],
-                            row.get("node_type"),
-                            row.get("location_name"),
-                            row.get("market"),
-                            row.get("lmp"),
-                            row.get("energy_component"),
-                            row.get("congestion_component"),
-                            row.get("loss_component"),
-                        ),
-                    )
-                    rows_inserted += 1
-                conn.commit()
-                logger.info(f"Inserted {rows_inserted} LMP records (with conflict handling)")
-                return rows_inserted
-        except Exception as e2:
-            logger.error(f"Conflict handling also failed: {e2}")
-            return 0
+        return 0
 
 
 def main():
@@ -269,6 +289,15 @@ def main():
 
     # Calculate fetch range based on incremental strategy with 7-day lookback
     start_date, end_date = incremental_utils.calculate_fetch_range("lmp_multi_iso", engine=engine)
+
+    # Bounded catch-up: never let one stale table trigger a multi-month
+    # download (ISO-NE alone is ~2,600 rows/day per zone set).
+    if (end_date - start_date).days > MAX_FETCH_DAYS:
+        logger.warning(
+            f"Range {start_date.date()}..{end_date.date()} exceeds {MAX_FETCH_DAYS} days; "
+            f"clamping start to {end_date.date() - timedelta(days=MAX_FETCH_DAYS)}"
+        )
+        start_date = end_date - timedelta(days=MAX_FETCH_DAYS)
 
     logger.info(
         f"Fetching multi-ISO LMP data ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')})"
@@ -307,10 +336,13 @@ def main():
         incremental_utils.update_fetch_metadata("lmp_multi_iso", start_date, end_date, success=True)
         logger.info(f"Multi-ISO LMP ingestion complete. Total records: {total_rows}")
     else:
-        logger.warning("No LMP data ingested successfully")
         incremental_utils.update_fetch_metadata(
             "lmp_multi_iso", start_date, end_date, success=False
         )
+        # Every ISO returning nothing is a source failure, not a "success with
+        # zero rows". Raise so the runner marks it failed instead of fresh-but-
+        # quietly-behind.
+        raise RuntimeError("multi-ISO LMP: no rows ingested from any configured ISO")
 
     return total_rows
 

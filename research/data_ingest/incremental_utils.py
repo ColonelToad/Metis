@@ -36,6 +36,11 @@ INGESTER_CONFIG = {
         "lookback_days": 7,  # but always check last 7 days for corrections
         "db_table": "grid_lmp",
     },
+    "lmp_multi_iso": {
+        "mode": "incremental",
+        "lookback_days": 3,
+        "db_table": "grid_lmp_multi_iso",
+    },
     "ingest_fred": {
         "mode": "sliding_window",
         "window_years": 2,

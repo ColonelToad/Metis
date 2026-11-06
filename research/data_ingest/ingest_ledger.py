@@ -35,7 +35,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Limits reflect publication lag, not data quality. A daily market series
 # should be current; BLS/permits/NOAA lag their reference month by weeks.
 FRESHNESS: Dict[str, tuple[str, str, int]] = {
-    "data_ingest.ingest_eia": ("eia_storage", "timestamp", 10),
+    # Weekly storage is published Thursday for the prior week-ending Friday.
+    # On a Wednesday before release the newest row is 12 days old by
+    # construction, so a 10-day limit flags normal publication lag.
+    "data_ingest.ingest_eia": ("eia_storage", "timestamp", 14),
     "data_ingest.ingest_lmp": ("grid_lmp", "timestamp", 3),
     "data_ingest.ingest_lmp_multi_iso": ("grid_lmp_multi_iso", "timestamp", 5),
     "data_ingest.ingest_fred": ("fred_macro", "timestamp", 10),

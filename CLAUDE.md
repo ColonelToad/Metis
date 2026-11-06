@@ -47,6 +47,9 @@ records each attempt (status, duration, rows, exit code, error) plus source
 freshness (`max(date)` vs. the source's publication lag); `--force` re-runs
 ingesters the ledger says already succeeded, and a retry with no flags resumes
 only what failed. Frequency-level due state is `logs/ingest_ledger.json`.
+Source bans, API changes, and reported-vs-actual gaps are tracked in
+`docs/data_issues.md`. CME settlements is currently parked there (the host is
+IP-blocked for scraping); do not attempt workarounds.
 In REAL mode the inference phase loads `models/lstm_ng_predictor.keras`, self-heals missing/stub scalers by refitting from `data/features/train_*.parquet`, reconciles feature columns against `models/lstm_metadata.json`, and sends one signal per run to the engine.
 
 ### C++ execution engine (WSL, primary)
