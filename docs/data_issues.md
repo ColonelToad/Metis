@@ -103,8 +103,10 @@ Last updated: 2026-11-05
 
 ### `grid_lmp_multi_iso` history gap 2026-10-07 .. 2026-10-24
 - NYISO/ISO-NE rows before 2026-10-25 were purged as mislabeled CAISO data.
-  CAISO history was kept. The current window (2026-10-25 onward) is real for
-  all three ISOs. Backfill the gap only if a study needs it.
+  CAISO history was kept, but it is real-yet-sparse: the old single-date fetch
+  covered roughly 167 of the ~240 days since 2026-02-04. The current window
+  (2026-10-25 onward) is real and dense for all three ISOs. Backfill the gap
+  only if a study needs it.
 
 ---
 
