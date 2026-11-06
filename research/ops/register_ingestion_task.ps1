@@ -28,8 +28,10 @@
     Remove the task instead of creating it.
 
 .PARAMETER DisableLegacyStartup
-    Rename the old Startup-folder launch_metis.vbs to .disabled so the task is
-    the only trigger. Reversible by renaming it back.
+    Move the old Startup-folder launch_metis.vbs (and any leftover .disabled
+    rename) out of Startup and into research/ops/archive. The Startup folder
+    opens every file at logon, so renaming in place leaves an unassociated
+    file that triggers a "How do you want to open this file?" prompt.
 
 .PARAMETER DryRun
     Print the intended configuration without changing anything.
@@ -47,7 +49,9 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $StartupScript = Join-Path $ProjectRoot "research\ops\run_ingestion_startup.ps1"
 $UserId = "$env:USERDOMAIN\$env:USERNAME"
-$LegacyVbs = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\launch_metis.vbs"
+$StartupDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
+$LegacyVbs = Join-Path $StartupDir "launch_metis.vbs"
+$ArchiveDir = Join-Path $ProjectRoot "research\ops\archive"
 
 if ($Unregister) {
     if ($DryRun) {
@@ -105,7 +109,7 @@ Write-Host "User:        $UserId (interactive, limited)"
 Write-Host "Action:      `"$Pwsh`" -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$StartupScript`""
 Write-Host "Triggers:    at logon (+2 min), daily at $At"
 Write-Host "Settings:    StartWhenAvailable, WakeToRun, IgnoreNew, 6h limit"
-Write-Host "Legacy VBS:  $LegacyVbs"
+Write-Host "Legacy VBS:  $LegacyVbs (moved to $ArchiveDir when -DisableLegacyStartup is used)"
 
 if ($DryRun) {
     Write-Host "DRY RUN: nothing registered."
@@ -123,10 +127,26 @@ Register-ScheduledTask `
 
 Write-Host "Registered scheduled task '$TaskName'."
 
-if ($DisableLegacyStartup -and (Test-Path -LiteralPath $LegacyVbs)) {
-    $disabled = "$LegacyVbs.disabled"
-    Move-Item -LiteralPath $LegacyVbs -Destination $disabled -Force
-    Write-Host "Disabled legacy Startup entry: $disabled"
+if ($DisableLegacyStartup) {
+    # Do NOT leave anything behind in Startup. Explorer opens every file in
+    # that folder at logon; a renamed .vbs.disabled has no handler and shows a
+    # "How do you want to open this file?" dialog. Move it to the repo archive
+    # so the task is the only trigger.
+    # Process the stale .disabled rename first, then the canonical .vbs, so the
+    # real script wins if both exist (they share one archive destination).
+    $leftovers = @("$LegacyVbs.disabled", $LegacyVbs)
+    $moved = $false
+    foreach ($candidate in $leftovers) {
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        New-Item -ItemType Directory -Path $ArchiveDir -Force | Out-Null
+        $destination = Join-Path $ArchiveDir "launch_metis.vbs"
+        Move-Item -LiteralPath $candidate -Destination $destination -Force
+        Write-Host "Moved legacy Startup entry out of Startup: $candidate -> $destination"
+        $moved = $true
+    }
+    if (-not $moved) {
+        Write-Host "No legacy Startup entry found; nothing to move."
+    }
 }
 
 $task = Get-ScheduledTask -TaskName $TaskName

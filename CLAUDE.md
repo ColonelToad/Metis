@@ -54,8 +54,11 @@ IP-blocked for scraping); do not attempt workarounds.
 
 Ingestion is triggered by Scheduled Task `MetisIngestion` (interactive user;
 logon +2 min and daily 02:00; `StartWhenAvailable`, `WakeToRun`, `IgnoreNew`,
-6h limit). The old Startup-folder `launch_metis.vbs` is renamed `.disabled` —
-do not re-enable both. The `Local\MetisIngestion` mutex is the hard
+6h limit). The old Startup-folder `launch_metis.vbs` is moved out to
+`research/ops/archive/launch_metis.vbs` — never rename it in place, because
+Explorer opens every file in Startup at logon and `.disabled` has no handler
+(it pops "How do you want to open this file?"). Do not re-enable both. The
+`Local\MetisIngestion` mutex is the hard
 single-instance guard; do not switch the task to "run whether user is logged
 on or not" (session 0 breaks the `Local\` mutex and profile caches).
 In REAL mode the inference phase loads `models/lstm_ng_predictor.keras`, self-heals missing/stub scalers by refitting from `data/features/train_*.parquet`, reconciles feature columns against `models/lstm_metadata.json`, and sends one signal per run to the engine.
