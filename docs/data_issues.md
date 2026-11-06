@@ -70,9 +70,9 @@ Last updated: 2026-11-05
 - **Behavior:** `to_sql("eia_storage", if_exists="replace")` drops and
   recreates the table on every run. A partial API response would silently
   replace complete history with a short series.
-- **Observed 2026-11-05:** 625 national rows through 2026-10-23 (the newest
-  published week; Thursday release for prior Friday). The data is correct;
-  the write pattern is the risk.
+- **Observed 2026-11-05:** 625 national rows through 2026-10-30 after the
+  Thursday release (the prior run, on 11/4, correctly showed 10/23). The data
+  is current; the write pattern is the risk.
 
 ### Ledger `row_count` is mostly zero
 - **Observed 2026-11-04/05:** only `ingest_bls_ppi.main()` returns an int.
